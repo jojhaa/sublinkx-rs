@@ -13,6 +13,20 @@ docker.io/jojhaa/sublinkx-rs-frontend:latest
 
 ## 快速启动
 
+先从 GitHub 拉取部署配置到本地文件夹：
+
+```bash
+git clone https://github.com/jojhaa/sublinkx-rs.git
+cd sublinkx-rs
+```
+
+这一步会获取 `docker-compose.yml`、`.env.example`、部署文档和默认目录结构。默认部署不会在本机编译源码，而是通过 `docker-compose.yml` 拉取 Docker Hub 镜像：
+
+```text
+docker.io/jojhaa/sublinkx-rs-backend:latest
+docker.io/jojhaa/sublinkx-rs-frontend:latest
+```
+
 ```bash
 cp .env.example .env
 docker compose up -d

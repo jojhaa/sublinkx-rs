@@ -13,6 +13,20 @@ Origin note: `sublinkx-rs` is a modified and rewritten version based on [gooaclo
 
 ## Quick Start
 
+Clone the deployment configuration from GitHub first:
+
+```bash
+git clone https://github.com/jojhaa/sublinkx-rs.git
+cd sublinkx-rs
+```
+
+This provides `docker-compose.yml`, `.env.example`, deployment docs, and the default local directory layout. The default deployment does not build from source locally; `docker-compose.yml` pulls the Docker Hub images:
+
+```text
+docker.io/jojhaa/sublinkx-rs-backend:latest
+docker.io/jojhaa/sublinkx-rs-frontend:latest
+```
+
 ```bash
 cp .env.example .env
 docker compose up -d

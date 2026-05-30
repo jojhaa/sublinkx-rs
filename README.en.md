@@ -55,6 +55,15 @@ docker.io/jojhaa/sublinkx-rs-frontend:latest
 
 Prepare config:
 
+Clone the deployment configuration from GitHub first:
+
+```bash
+git clone https://github.com/jojhaa/sublinkx-rs.git
+cd sublinkx-rs
+```
+
+This provides `docker-compose.yml`, `.env.example`, and the deployment docs. Docker still pulls the published Docker Hub images by default.
+
 ```bash
 cp .env.example .env
 ```

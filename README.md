@@ -55,6 +55,15 @@ docker.io/jojhaa/sublinkx-rs-frontend:latest
 
 ### 1. 准备配置
 
+先从 GitHub 拉取部署配置到本地文件夹：
+
+```bash
+git clone https://github.com/jojhaa/sublinkx-rs.git
+cd sublinkx-rs
+```
+
+这一步会获取 `docker-compose.yml`、`.env.example` 和相关部署文档。Docker 启动时仍会默认拉取 Docker Hub 上已发布的镜像。
+
 ```bash
 cp .env.example .env
 ```
