@@ -1,13 +1,10 @@
+use crate::db::DbPool;
 use argon2::{Argon2, PasswordHasher, password_hash::SaltString};
-use sqlx::SqlitePool;
 use tracing::warn;
 
 use crate::{config::SecurityConfig, domain::user::User};
 
-pub async fn bootstrap_admin(
-    pool: &SqlitePool,
-    security: &SecurityConfig,
-) -> Result<(), sqlx::Error> {
+pub async fn bootstrap_admin(pool: &DbPool, security: &SecurityConfig) -> Result<(), sqlx::Error> {
     let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM users")
         .fetch_one(pool)
         .await?;
@@ -32,7 +29,7 @@ pub async fn bootstrap_admin(
     sqlx::query(
         r#"
         INSERT INTO users (username, password_hash, nickname, role, status, must_change_credentials, created_at, updated_at)
-        VALUES (?1, ?2, ?3, 'admin', 'active', 1, ?4, ?5)
+        VALUES (?, ?, ?, 'admin', 'active', 1, ?, ?)
         "#,
     )
     .bind(&security.bootstrap_admin_username)
@@ -51,15 +48,12 @@ pub async fn bootstrap_admin(
     Ok(())
 }
 
-pub async fn find_by_username(
-    pool: &SqlitePool,
-    username: &str,
-) -> Result<Option<User>, sqlx::Error> {
+pub async fn find_by_username(pool: &DbPool, username: &str) -> Result<Option<User>, sqlx::Error> {
     sqlx::query_as::<_, User>(
         r#"
         SELECT id, username, password_hash, nickname, role, status, must_change_credentials, created_at, updated_at
         FROM users
-        WHERE username = ?1
+        WHERE username = ?
         "#,
     )
     .bind(username)
@@ -67,12 +61,12 @@ pub async fn find_by_username(
     .await
 }
 
-pub async fn find_by_id(pool: &SqlitePool, id: i64) -> Result<Option<User>, sqlx::Error> {
+pub async fn find_by_id(pool: &DbPool, id: i64) -> Result<Option<User>, sqlx::Error> {
     sqlx::query_as::<_, User>(
         r#"
         SELECT id, username, password_hash, nickname, role, status, must_change_credentials, created_at, updated_at
         FROM users
-        WHERE id = ?1
+        WHERE id = ?
         "#,
     )
     .bind(id)
@@ -81,7 +75,7 @@ pub async fn find_by_id(pool: &SqlitePool, id: i64) -> Result<Option<User>, sqlx
 }
 
 pub async fn username_exists_for_other_user(
-    pool: &SqlitePool,
+    pool: &DbPool,
     username: &str,
     user_id: i64,
 ) -> Result<bool, sqlx::Error> {
@@ -89,7 +83,7 @@ pub async fn username_exists_for_other_user(
         r#"
         SELECT COUNT(*)
         FROM users
-        WHERE username = ?1 AND id <> ?2
+        WHERE username = ? AND id <> ?
         "#,
     )
     .bind(username)
@@ -101,7 +95,7 @@ pub async fn username_exists_for_other_user(
 }
 
 pub async fn update_credentials(
-    pool: &SqlitePool,
+    pool: &DbPool,
     user_id: i64,
     username: &str,
     password_hash: &str,
@@ -111,16 +105,17 @@ pub async fn update_credentials(
     sqlx::query(
         r#"
         UPDATE users
-        SET username = ?1,
-            password_hash = ?2,
-            nickname = ?1,
+        SET username = ?,
+            password_hash = ?,
+            nickname = ?,
             must_change_credentials = 0,
-            updated_at = ?3
-        WHERE id = ?4
+            updated_at = ?
+        WHERE id = ?
         "#,
     )
     .bind(username)
     .bind(password_hash)
+    .bind(username)
     .bind(now)
     .bind(user_id)
     .execute(pool)
@@ -130,7 +125,7 @@ pub async fn update_credentials(
 }
 
 async fn reset_bootstrap_admin_password(
-    pool: &SqlitePool,
+    pool: &DbPool,
     user_id: i64,
     password_hash: &str,
 ) -> Result<(), sqlx::Error> {
@@ -139,10 +134,10 @@ async fn reset_bootstrap_admin_password(
     sqlx::query(
         r#"
         UPDATE users
-        SET password_hash = ?1,
+        SET password_hash = ?,
             must_change_credentials = 1,
-            updated_at = ?2
-        WHERE id = ?3
+            updated_at = ?
+        WHERE id = ?
         "#,
     )
     .bind(password_hash)

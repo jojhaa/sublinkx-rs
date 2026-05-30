@@ -43,6 +43,7 @@
 - 真实链路测速：通过 Mihomo 内核测试真实代理链路延迟，并保存历史延迟、最后测速时间和不可用状态。
 - 首次登录安全：默认账号 `admin / admin123456`，首次登录后必须修改用户名和密码，密码使用 Argon2 哈希保存。
 - Docker 部署：提供单一 `docker-compose.yml`，默认拉取 Docker Hub 镜像运行，数据映射到本地文件夹。
+- 数据库：默认使用 SQLite，也支持切换到 MySQL 8.x。
 
 ## Docker 部署
 
@@ -102,7 +103,7 @@ admin / admin123456
 
 ### 4. 数据映射
 
-运行数据默认映射到本地：
+默认使用 SQLite，运行数据映射到本地：
 
 ```text
 docker-data/
@@ -110,6 +111,31 @@ docker-data/
     app.db
   mihomo/
     mihomo
+```
+
+如果 Linux 服务器上 SQLite bind mount 很慢，建议切换 MySQL：
+
+使用 Compose 内置 MySQL 容器：
+
+```env
+COMPOSE_PROFILES=mysql
+DATABASE_URL=mysql://sublinkx:sublinkx_password@mysql:3306/sublinkx
+MYSQL_PASSWORD=请改成强密码
+MYSQL_ROOT_PASSWORD=请改成强密码
+```
+
+使用宿主机或外部已有 MySQL：
+
+```env
+DATABASE_URL=mysql://sublinkx:请改成强密码@host.docker.internal:3306/sublinkx
+```
+
+更完整的 MySQL 容器、本机 MySQL、外部 MySQL 配置见 [Docker 部署文档](docs/docker.md)。
+
+然后启动：
+
+```bash
+docker compose up -d
 ```
 
 可以在 `.env` 中改成绝对路径：

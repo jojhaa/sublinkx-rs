@@ -31,6 +31,12 @@ pub struct NodeLatencyBatchRequest {
     pub ids: Vec<i64>,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct MoveNodesRequest {
+    pub ids: Vec<i64>,
+    pub group_id: Option<i64>,
+}
+
 #[derive(Debug, Serialize)]
 pub struct NodeLatencyResult {
     pub id: i64,

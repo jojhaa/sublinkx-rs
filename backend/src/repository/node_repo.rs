@@ -1,5 +1,6 @@
-use sqlx::SqlitePool;
+use sqlx::{Any, QueryBuilder};
 
+use crate::db::DbPool;
 use crate::domain::node::NodeRecord;
 
 const NODE_SELECT_FIELDS: &str = r#"
@@ -39,7 +40,7 @@ pub struct UpdateNodeRecord<'a> {
     pub updated_at: &'a str,
 }
 
-pub async fn list(pool: &SqlitePool) -> Result<Vec<NodeRecord>, sqlx::Error> {
+pub async fn list(pool: &DbPool) -> Result<Vec<NodeRecord>, sqlx::Error> {
     sqlx::query_as::<_, NodeRecord>(
         r#"
         SELECT
@@ -54,7 +55,7 @@ pub async fn list(pool: &SqlitePool) -> Result<Vec<NodeRecord>, sqlx::Error> {
     .await
 }
 
-pub async fn find_by_id(pool: &SqlitePool, id: i64) -> Result<Option<NodeRecord>, sqlx::Error> {
+pub async fn find_by_id(pool: &DbPool, id: i64) -> Result<Option<NodeRecord>, sqlx::Error> {
     sqlx::query_as::<_, NodeRecord>(
         r#"
         SELECT
@@ -62,7 +63,7 @@ pub async fn find_by_id(pool: &SqlitePool, id: i64) -> Result<Option<NodeRecord>
                fingerprint, settings_json, remark, last_latency_ms, last_latency_status,
                last_latency_message, last_latency_tested_at, created_at, updated_at
         FROM nodes
-        WHERE id = ?1
+        WHERE id = ?
         "#,
     )
     .bind(id)
@@ -71,7 +72,7 @@ pub async fn find_by_id(pool: &SqlitePool, id: i64) -> Result<Option<NodeRecord>
 }
 
 pub async fn find_by_fingerprint(
-    pool: &SqlitePool,
+    pool: &DbPool,
     fingerprint: &str,
 ) -> Result<Option<NodeRecord>, sqlx::Error> {
     sqlx::query_as::<_, NodeRecord>(
@@ -81,7 +82,7 @@ pub async fn find_by_fingerprint(
                fingerprint, settings_json, remark, last_latency_ms, last_latency_status,
                last_latency_message, last_latency_tested_at, created_at, updated_at
         FROM nodes
-        WHERE fingerprint = ?1
+        WHERE fingerprint = ?
         "#,
     )
     .bind(fingerprint)
@@ -89,16 +90,13 @@ pub async fn find_by_fingerprint(
     .await
 }
 
-pub async fn insert(
-    pool: &SqlitePool,
-    node: &NewNodeRecord<'_>,
-) -> Result<NodeRecord, sqlx::Error> {
-    let result = sqlx::query(
+pub async fn insert(pool: &DbPool, node: &NewNodeRecord<'_>) -> Result<NodeRecord, sqlx::Error> {
+    sqlx::query(
         r#"
         INSERT INTO nodes (
             name, protocol, raw_link, server, port, enabled, group_id, source_type, source_ref,
             fingerprint, settings_json, remark, created_at, updated_at
-        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         "#,
     )
     .bind(node.name)
@@ -118,31 +116,31 @@ pub async fn insert(
     .execute(pool)
     .await?;
 
-    find_by_id(pool, result.last_insert_rowid())
+    find_by_fingerprint(pool, node.fingerprint)
         .await?
         .ok_or(sqlx::Error::RowNotFound)
 }
 
 pub async fn update(
-    pool: &SqlitePool,
+    pool: &DbPool,
     id: i64,
     node: &UpdateNodeRecord<'_>,
 ) -> Result<NodeRecord, sqlx::Error> {
     sqlx::query(
         r#"
         UPDATE nodes
-        SET name = ?1,
-            protocol = ?2,
-            raw_link = ?3,
-            server = ?4,
-            port = ?5,
-            enabled = ?6,
-            group_id = ?7,
-            fingerprint = ?8,
-            settings_json = ?9,
-            remark = ?10,
-            updated_at = ?11
-        WHERE id = ?12
+        SET name = ?,
+            protocol = ?,
+            raw_link = ?,
+            server = ?,
+            port = ?,
+            enabled = ?,
+            group_id = ?,
+            fingerprint = ?,
+            settings_json = ?,
+            remark = ?,
+            updated_at = ?
+        WHERE id = ?
         "#,
     )
     .bind(node.name)
@@ -163,15 +161,15 @@ pub async fn update(
     find_by_id(pool, id).await?.ok_or(sqlx::Error::RowNotFound)
 }
 
-pub async fn delete(pool: &SqlitePool, id: i64) -> Result<(), sqlx::Error> {
-    sqlx::query("DELETE FROM nodes WHERE id = ?1")
+pub async fn delete(pool: &DbPool, id: i64) -> Result<(), sqlx::Error> {
+    sqlx::query("DELETE FROM nodes WHERE id = ?")
         .bind(id)
         .execute(pool)
         .await?;
     Ok(())
 }
 
-pub async fn list_enabled(pool: &SqlitePool) -> Result<Vec<NodeRecord>, sqlx::Error> {
+pub async fn list_enabled(pool: &DbPool) -> Result<Vec<NodeRecord>, sqlx::Error> {
     let query = format!(
         r#"
         SELECT {NODE_SELECT_FIELDS}
@@ -186,7 +184,7 @@ pub async fn list_enabled(pool: &SqlitePool) -> Result<Vec<NodeRecord>, sqlx::Er
 }
 
 pub async fn update_latency(
-    pool: &SqlitePool,
+    pool: &DbPool,
     id: i64,
     latency_ms: Option<i64>,
     status: &str,
@@ -196,11 +194,11 @@ pub async fn update_latency(
     sqlx::query(
         r#"
         UPDATE nodes
-        SET last_latency_ms = ?1,
-            last_latency_status = ?2,
-            last_latency_message = ?3,
-            last_latency_tested_at = ?4
-        WHERE id = ?5
+        SET last_latency_ms = ?,
+            last_latency_status = ?,
+            last_latency_message = ?,
+            last_latency_tested_at = ?
+        WHERE id = ?
         "#,
     )
     .bind(latency_ms)
@@ -211,4 +209,41 @@ pub async fn update_latency(
     .execute(pool)
     .await?;
     Ok(())
+}
+
+pub async fn update_group_for_ids(
+    pool: &DbPool,
+    ids: &[i64],
+    group_id: Option<i64>,
+    updated_at: &str,
+) -> Result<Vec<NodeRecord>, sqlx::Error> {
+    if ids.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let mut update = QueryBuilder::<Any>::new("UPDATE nodes SET group_id = ");
+    update.push_bind(group_id);
+    update.push(", updated_at = ");
+    update.push_bind(updated_at);
+    update.push(" WHERE id IN (");
+    {
+        let mut separated = update.separated(", ");
+        for id in ids {
+            separated.push_bind(id);
+        }
+    }
+    update.push(")");
+    update.build().execute(pool).await?;
+
+    let mut select = QueryBuilder::<Any>::new("SELECT ");
+    select.push(NODE_SELECT_FIELDS);
+    select.push(" FROM nodes WHERE id IN (");
+    {
+        let mut separated = select.separated(", ");
+        for id in ids {
+            separated.push_bind(id);
+        }
+    }
+    select.push(") ORDER BY id DESC");
+    select.build_query_as::<NodeRecord>().fetch_all(pool).await
 }

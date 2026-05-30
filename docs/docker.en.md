@@ -63,6 +63,7 @@ BACKEND_IMAGE=docker.io/jojhaa/sublinkx-rs-backend:latest
 FRONTEND_IMAGE=docker.io/jojhaa/sublinkx-rs-frontend:latest
 BACKEND_DATA_DIR=./docker-data/backend
 MIHOMO_CORE_DIR=./docker-data/mihomo
+DATABASE_URL=sqlite:///app/data/app.db
 JWT_SECRET=change-me-in-production
 JWT_EXP_HOURS=24
 BOOTSTRAP_ADMIN_USERNAME=admin
@@ -123,6 +124,59 @@ MIHOMO_CORE_DIR/
 ```
 
 You can also download the Mihomo core from the Settings page after login.
+
+## Use MySQL
+
+SQLite is the default database. If Docker bind-mount writes are slow on your Linux server, or if you manage many nodes, switch to MySQL.
+
+### Option 1: Use the built-in Compose MySQL container
+
+This starts MySQL from the same `docker-compose.yml` and bind-mounts its data to `MYSQL_DATA_DIR`.
+
+Edit `.env`:
+
+```env
+COMPOSE_PROFILES=mysql
+DATABASE_URL=mysql://sublinkx:sublinkx_password@mysql:3306/sublinkx
+MYSQL_IMAGE=mysql:8.4
+MYSQL_DATABASE=sublinkx
+MYSQL_USER=sublinkx
+MYSQL_PASSWORD=change-this-password
+MYSQL_ROOT_PASSWORD=change-this-password
+MYSQL_DATA_DIR=./docker-data/mysql
+```
+
+Start or restart:
+
+```bash
+docker compose up -d
+```
+
+MySQL data is bind-mounted to:
+
+```text
+docker-data/mysql/
+```
+
+### Option 2: Connect to an existing local or external MySQL
+
+If MySQL already runs on the host or another server, do not enable `COMPOSE_PROFILES=mysql`. Point the backend container to that MySQL with `DATABASE_URL`.
+
+Host MySQL example:
+
+```env
+DATABASE_URL=mysql://sublinkx:change-this-password@host.docker.internal:3306/sublinkx
+```
+
+External MySQL example:
+
+```env
+DATABASE_URL=mysql://sublinkx:change-this-password@192.168.1.10:3306/sublinkx
+```
+
+This Compose file maps `host.docker.internal` to `host-gateway` for Linux Docker. Docker Desktop already provides the same hostname. Make sure the MySQL user can connect from the Docker subnet and that the target database exists.
+
+Note: SQLite and MySQL are separate databases. Back up `docker-data/backend/app.db` before switching. This version does not automatically migrate SQLite data to MySQL.
 
 ## Fixed Docker Subnet
 

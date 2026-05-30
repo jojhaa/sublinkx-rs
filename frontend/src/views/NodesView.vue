@@ -7,6 +7,7 @@ import {
   deleteNode,
   importNodesFromSubscription,
   listNodes,
+  moveNodes,
   testNodeLatency,
   testNodeLatencyBatch,
   updateNode,
@@ -504,18 +505,11 @@ async function moveSelectedNodes() {
   successMessage.value = ''
 
   try {
-    const updatedNodes = await Promise.all(
-      selectedNodes.value.map((item) =>
-        updateNode(item.id, {
-          name: item.name,
-          raw_link: item.raw_link,
-          group_id: batchGroupId.value,
-          remark: item.remark || undefined,
-          enabled: item.enabled,
-        }),
-      ),
-    )
-    upsertNodes(updatedNodes.map((item) => item.data))
+    const response = await moveNodes({
+      ids: selectedNodes.value.map((item) => item.id),
+      group_id: batchGroupId.value,
+    })
+    upsertNodes(response.data)
     successMessage.value = t('nodesMoved', { count: selectedNodes.value.length, group: groupName(batchGroupId.value) })
     clearSelection()
   } catch (error) {

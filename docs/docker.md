@@ -63,6 +63,7 @@ BACKEND_IMAGE=docker.io/jojhaa/sublinkx-rs-backend:latest
 FRONTEND_IMAGE=docker.io/jojhaa/sublinkx-rs-frontend:latest
 BACKEND_DATA_DIR=./docker-data/backend
 MIHOMO_CORE_DIR=./docker-data/mihomo
+DATABASE_URL=sqlite:///app/data/app.db
 JWT_SECRET=change-me-in-production
 JWT_EXP_HOURS=24
 BOOTSTRAP_ADMIN_USERNAME=admin
@@ -123,6 +124,59 @@ MIHOMO_CORE_DIR/
 ```
 
 也可以登录后台后，在“系统设置”页面下载 Mihomo 内核。
+
+## 使用 MySQL
+
+默认使用 SQLite。如果你的 Linux 服务器 Docker bind mount 写入很慢，或者节点数量比较多，建议切换 MySQL。
+
+### 方式一：使用 Compose 内置 MySQL 容器
+
+这种方式会由当前 `docker-compose.yml` 一起启动 MySQL，并把数据映射到 `MYSQL_DATA_DIR`。
+
+编辑 `.env`：
+
+```env
+COMPOSE_PROFILES=mysql
+DATABASE_URL=mysql://sublinkx:sublinkx_password@mysql:3306/sublinkx
+MYSQL_IMAGE=mysql:8.4
+MYSQL_DATABASE=sublinkx
+MYSQL_USER=sublinkx
+MYSQL_PASSWORD=请改成强密码
+MYSQL_ROOT_PASSWORD=请改成强密码
+MYSQL_DATA_DIR=./docker-data/mysql
+```
+
+启动或重启：
+
+```bash
+docker compose up -d
+```
+
+MySQL 数据会映射到：
+
+```text
+docker-data/mysql/
+```
+
+### 方式二：连接本机或外部已有 MySQL
+
+如果服务器上已经有 MySQL，不需要启用 `COMPOSE_PROFILES=mysql`。只需要把后端容器的 `DATABASE_URL` 指向已有 MySQL。
+
+宿主机 MySQL 示例：
+
+```env
+DATABASE_URL=mysql://sublinkx:请改成强密码@host.docker.internal:3306/sublinkx
+```
+
+外部 MySQL 示例：
+
+```env
+DATABASE_URL=mysql://sublinkx:请改成强密码@192.168.1.10:3306/sublinkx
+```
+
+当前 Compose 已为 Linux Docker 添加 `host.docker.internal:host-gateway` 映射；Docker Desktop 上该域名默认可用。请确保 MySQL 用户允许来自 Docker 网段访问，并且目标数据库已创建。
+
+注意：SQLite 和 MySQL 是两套独立数据库。切换前请先备份 `docker-data/backend/app.db`，当前版本不会自动迁移 SQLite 数据到 MySQL。
 
 ## 固定 Docker 网段
 

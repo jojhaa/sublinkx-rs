@@ -1,4 +1,4 @@
-use sqlx::SqlitePool;
+use crate::db::DbPool;
 
 use crate::domain::subscription::{SubscriptionNodeRecord, SubscriptionRecord};
 
@@ -27,7 +27,7 @@ pub struct UpdateSubscriptionRecord<'a> {
     pub updated_at: &'a str,
 }
 
-pub async fn list(pool: &SqlitePool) -> Result<Vec<SubscriptionRecord>, sqlx::Error> {
+pub async fn list(pool: &DbPool) -> Result<Vec<SubscriptionRecord>, sqlx::Error> {
     sqlx::query_as::<_, SubscriptionRecord>(
         r#"
         SELECT id, name, token, description, default_client, template_id, group_id, enabled, expires_at, created_at, updated_at
@@ -39,15 +39,12 @@ pub async fn list(pool: &SqlitePool) -> Result<Vec<SubscriptionRecord>, sqlx::Er
     .await
 }
 
-pub async fn find_by_id(
-    pool: &SqlitePool,
-    id: i64,
-) -> Result<Option<SubscriptionRecord>, sqlx::Error> {
+pub async fn find_by_id(pool: &DbPool, id: i64) -> Result<Option<SubscriptionRecord>, sqlx::Error> {
     sqlx::query_as::<_, SubscriptionRecord>(
         r#"
         SELECT id, name, token, description, default_client, template_id, group_id, enabled, expires_at, created_at, updated_at
         FROM subscriptions
-        WHERE id = ?1
+        WHERE id = ?
         "#,
     )
     .bind(id)
@@ -56,14 +53,14 @@ pub async fn find_by_id(
 }
 
 pub async fn find_by_name(
-    pool: &SqlitePool,
+    pool: &DbPool,
     name: &str,
 ) -> Result<Option<SubscriptionRecord>, sqlx::Error> {
     sqlx::query_as::<_, SubscriptionRecord>(
         r#"
         SELECT id, name, token, description, default_client, template_id, group_id, enabled, expires_at, created_at, updated_at
         FROM subscriptions
-        WHERE name = ?1
+        WHERE name = ?
         "#,
     )
     .bind(name)
@@ -72,14 +69,14 @@ pub async fn find_by_name(
 }
 
 pub async fn find_by_token(
-    pool: &SqlitePool,
+    pool: &DbPool,
     token: &str,
 ) -> Result<Option<SubscriptionRecord>, sqlx::Error> {
     sqlx::query_as::<_, SubscriptionRecord>(
         r#"
         SELECT id, name, token, description, default_client, template_id, group_id, enabled, expires_at, created_at, updated_at
         FROM subscriptions
-        WHERE token = ?1
+        WHERE token = ?
         "#,
     )
     .bind(token)
@@ -88,14 +85,14 @@ pub async fn find_by_token(
 }
 
 pub async fn insert(
-    pool: &SqlitePool,
+    pool: &DbPool,
     item: &NewSubscriptionRecord<'_>,
 ) -> Result<SubscriptionRecord, sqlx::Error> {
-    let result = sqlx::query(
+    sqlx::query(
         r#"
         INSERT INTO subscriptions (
             name, token, description, default_client, template_id, group_id, enabled, expires_at, created_at, updated_at
-        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         "#,
     )
     .bind(item.name)
@@ -111,29 +108,29 @@ pub async fn insert(
     .execute(pool)
     .await?;
 
-    find_by_id(pool, result.last_insert_rowid())
+    find_by_token(pool, item.token)
         .await?
         .ok_or(sqlx::Error::RowNotFound)
 }
 
 pub async fn update(
-    pool: &SqlitePool,
+    pool: &DbPool,
     id: i64,
     item: &UpdateSubscriptionRecord<'_>,
 ) -> Result<SubscriptionRecord, sqlx::Error> {
     sqlx::query(
         r#"
         UPDATE subscriptions
-        SET name = ?1,
-            token = ?2,
-            description = ?3,
-            default_client = ?4,
-            template_id = ?5,
-            group_id = ?6,
-            enabled = ?7,
-            expires_at = ?8,
-            updated_at = ?9
-        WHERE id = ?10
+        SET name = ?,
+            token = ?,
+            description = ?,
+            default_client = ?,
+            template_id = ?,
+            group_id = ?,
+            enabled = ?,
+            expires_at = ?,
+            updated_at = ?
+        WHERE id = ?
         "#,
     )
     .bind(item.name)
@@ -152,8 +149,8 @@ pub async fn update(
     find_by_id(pool, id).await?.ok_or(sqlx::Error::RowNotFound)
 }
 
-pub async fn delete(pool: &SqlitePool, id: i64) -> Result<(), sqlx::Error> {
-    sqlx::query("DELETE FROM subscriptions WHERE id = ?1")
+pub async fn delete(pool: &DbPool, id: i64) -> Result<(), sqlx::Error> {
+    sqlx::query("DELETE FROM subscriptions WHERE id = ?")
         .bind(id)
         .execute(pool)
         .await?;
@@ -161,14 +158,14 @@ pub async fn delete(pool: &SqlitePool, id: i64) -> Result<(), sqlx::Error> {
 }
 
 pub async fn list_subscription_nodes(
-    pool: &SqlitePool,
+    pool: &DbPool,
     subscription_id: i64,
 ) -> Result<Vec<SubscriptionNodeRecord>, sqlx::Error> {
     sqlx::query_as::<_, SubscriptionNodeRecord>(
         r#"
         SELECT subscription_id, node_id, sort_order
         FROM subscription_nodes
-        WHERE subscription_id = ?1
+        WHERE subscription_id = ?
         ORDER BY sort_order ASC, node_id ASC
         "#,
     )
@@ -178,13 +175,13 @@ pub async fn list_subscription_nodes(
 }
 
 pub async fn replace_subscription_nodes(
-    pool: &SqlitePool,
+    pool: &DbPool,
     subscription_id: i64,
     node_ids: &[i64],
 ) -> Result<(), sqlx::Error> {
     let mut tx = pool.begin().await?;
 
-    sqlx::query("DELETE FROM subscription_nodes WHERE subscription_id = ?1")
+    sqlx::query("DELETE FROM subscription_nodes WHERE subscription_id = ?")
         .bind(subscription_id)
         .execute(&mut *tx)
         .await?;
@@ -193,7 +190,7 @@ pub async fn replace_subscription_nodes(
         sqlx::query(
             r#"
             INSERT INTO subscription_nodes (subscription_id, node_id, sort_order)
-            VALUES (?1, ?2, ?3)
+            VALUES (?, ?, ?)
             "#,
         )
         .bind(subscription_id)
@@ -207,12 +204,12 @@ pub async fn replace_subscription_nodes(
     Ok(())
 }
 
-pub async fn count_by_template_id(pool: &SqlitePool, template_id: i64) -> Result<i64, sqlx::Error> {
+pub async fn count_by_template_id(pool: &DbPool, template_id: i64) -> Result<i64, sqlx::Error> {
     sqlx::query_scalar::<_, i64>(
         r#"
         SELECT COUNT(1)
         FROM subscriptions
-        WHERE template_id = ?1
+        WHERE template_id = ?
         "#,
     )
     .bind(template_id)

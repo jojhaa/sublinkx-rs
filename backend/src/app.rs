@@ -55,6 +55,10 @@ pub fn build_app(state: AppState) -> Router {
             axum::routing::post(api::nodes::import_from_subscription),
         )
         .route(
+            "/api/v1/nodes/move",
+            axum::routing::post(api::nodes::move_batch),
+        )
+        .route(
             "/api/v1/nodes/test-latency",
             axum::routing::post(api::nodes::test_latency_batch),
         )

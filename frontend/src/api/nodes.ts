@@ -92,6 +92,11 @@ export interface UpdateNodePayload extends CreateNodePayload {
   enabled?: boolean
 }
 
+export interface MoveNodesPayload {
+  ids: number[]
+  group_id?: number | null
+}
+
 export async function listNodes() {
   const { data } = await apiClient.get<NodeListResponse>('/api/v1/nodes')
   return data
@@ -109,6 +114,11 @@ export async function importNodesFromSubscription(payload: ImportNodesFromSubscr
 
 export async function updateNode(id: number, payload: UpdateNodePayload) {
   const { data } = await apiClient.put<NodeResponse>(`/api/v1/nodes/${id}`, payload)
+  return data
+}
+
+export async function moveNodes(payload: MoveNodesPayload) {
+  const { data } = await apiClient.post<NodeListResponse>('/api/v1/nodes/move', payload)
   return data
 }
 

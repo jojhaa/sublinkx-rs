@@ -6,9 +6,9 @@ use axum::{
 
 use crate::{
     dto::nodes::{
-        CreateNodeRequest, ImportNodesFromSubscriptionRequest, NodeImportResponse,
-        NodeLatencyBatchRequest, NodeLatencyBatchResponse, NodeLatencyResponse, NodeListResponse,
-        NodeResponse, UpdateNodeRequest,
+        CreateNodeRequest, ImportNodesFromSubscriptionRequest, MoveNodesRequest,
+        NodeImportResponse, NodeLatencyBatchRequest, NodeLatencyBatchResponse, NodeLatencyResponse,
+        NodeListResponse, NodeResponse, UpdateNodeRequest,
     },
     errors::AppError,
     services::node_service,
@@ -61,6 +61,16 @@ pub async fn test_latency(
 ) -> Result<Json<NodeLatencyResponse>, AppError> {
     node_service::require_auth(&state, &headers).await?;
     let response = node_service::test_node_latency(&state, id).await?;
+    Ok(Json(response))
+}
+
+pub async fn move_batch(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<MoveNodesRequest>,
+) -> Result<Json<NodeListResponse>, AppError> {
+    node_service::require_auth(&state, &headers).await?;
+    let response = node_service::move_nodes(&state, payload).await?;
     Ok(Json(response))
 }
 

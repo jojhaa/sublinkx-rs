@@ -17,7 +17,7 @@ use std::net::SocketAddr;
 use tokio::net::TcpListener;
 use tracing::info;
 
-use crate::{app::build_app, config::AppConfig, db::new_sqlite_pool, state::AppState};
+use crate::{app::build_app, config::AppConfig, db::new_database_pool, state::AppState};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -25,7 +25,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let _ = dotenvy::dotenv();
 
     let config = AppConfig::from_env()?;
-    let pool = new_sqlite_pool(&config.database.url).await?;
+    let pool = new_database_pool(&config.database.url).await?;
     repository::user_repo::bootstrap_admin(&pool, &config.security).await?;
     services::template_seed_service::seed_default_templates(&pool).await?;
     let state = AppState::new(config.clone(), pool);

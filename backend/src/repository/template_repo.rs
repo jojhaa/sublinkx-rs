@@ -1,4 +1,4 @@
-use sqlx::SqlitePool;
+use crate::db::DbPool;
 
 use crate::domain::template::TemplateRecord;
 
@@ -17,7 +17,7 @@ pub struct UpdateTemplateRecord<'a> {
     pub updated_at: &'a str,
 }
 
-pub async fn list(pool: &SqlitePool) -> Result<Vec<TemplateRecord>, sqlx::Error> {
+pub async fn list(pool: &DbPool) -> Result<Vec<TemplateRecord>, sqlx::Error> {
     sqlx::query_as::<_, TemplateRecord>(
         r#"
         SELECT id, name, kind, content, created_at, updated_at
@@ -29,12 +29,12 @@ pub async fn list(pool: &SqlitePool) -> Result<Vec<TemplateRecord>, sqlx::Error>
     .await
 }
 
-pub async fn find_by_id(pool: &SqlitePool, id: i64) -> Result<Option<TemplateRecord>, sqlx::Error> {
+pub async fn find_by_id(pool: &DbPool, id: i64) -> Result<Option<TemplateRecord>, sqlx::Error> {
     sqlx::query_as::<_, TemplateRecord>(
         r#"
         SELECT id, name, kind, content, created_at, updated_at
         FROM templates
-        WHERE id = ?1
+        WHERE id = ?
         "#,
     )
     .bind(id)
@@ -43,14 +43,14 @@ pub async fn find_by_id(pool: &SqlitePool, id: i64) -> Result<Option<TemplateRec
 }
 
 pub async fn find_by_name(
-    pool: &SqlitePool,
+    pool: &DbPool,
     name: &str,
 ) -> Result<Option<TemplateRecord>, sqlx::Error> {
     sqlx::query_as::<_, TemplateRecord>(
         r#"
         SELECT id, name, kind, content, created_at, updated_at
         FROM templates
-        WHERE name = ?1
+        WHERE name = ?
         "#,
     )
     .bind(name)
@@ -59,13 +59,13 @@ pub async fn find_by_name(
 }
 
 pub async fn insert(
-    pool: &SqlitePool,
+    pool: &DbPool,
     item: &NewTemplateRecord<'_>,
 ) -> Result<TemplateRecord, sqlx::Error> {
-    let result = sqlx::query(
+    sqlx::query(
         r#"
         INSERT INTO templates (name, kind, content, created_at, updated_at)
-        VALUES (?1, ?2, ?3, ?4, ?5)
+        VALUES (?, ?, ?, ?, ?)
         "#,
     )
     .bind(item.name)
@@ -76,24 +76,24 @@ pub async fn insert(
     .execute(pool)
     .await?;
 
-    find_by_id(pool, result.last_insert_rowid())
+    find_by_name(pool, item.name)
         .await?
         .ok_or(sqlx::Error::RowNotFound)
 }
 
 pub async fn update(
-    pool: &SqlitePool,
+    pool: &DbPool,
     id: i64,
     item: &UpdateTemplateRecord<'_>,
 ) -> Result<TemplateRecord, sqlx::Error> {
     sqlx::query(
         r#"
         UPDATE templates
-        SET name = ?1,
-            kind = ?2,
-            content = ?3,
-            updated_at = ?4
-        WHERE id = ?5
+        SET name = ?,
+            kind = ?,
+            content = ?,
+            updated_at = ?
+        WHERE id = ?
         "#,
     )
     .bind(item.name)
@@ -107,8 +107,8 @@ pub async fn update(
     find_by_id(pool, id).await?.ok_or(sqlx::Error::RowNotFound)
 }
 
-pub async fn delete(pool: &SqlitePool, id: i64) -> Result<(), sqlx::Error> {
-    sqlx::query("DELETE FROM templates WHERE id = ?1")
+pub async fn delete(pool: &DbPool, id: i64) -> Result<(), sqlx::Error> {
+    sqlx::query("DELETE FROM templates WHERE id = ?")
         .bind(id)
         .execute(pool)
         .await?;

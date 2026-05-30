@@ -43,6 +43,7 @@ Thanks to [gooaclok819/sublinkX](https://github.com/gooaclok819/sublinkX) for th
 - Real-link latency checks through a Mihomo core.
 - First-login security flow with Argon2 password hashing.
 - Docker deployment with local data bind mounts.
+- SQLite by default, with optional MySQL 8.x support.
 
 ## Docker Deployment
 
@@ -102,6 +103,31 @@ docker-data/
     app.db
   mihomo/
     mihomo
+```
+
+SQLite is the default database. If SQLite on a Linux bind mount is slow, switch to MySQL:
+
+Use the built-in Compose MySQL container:
+
+```env
+COMPOSE_PROFILES=mysql
+DATABASE_URL=mysql://sublinkx:sublinkx_password@mysql:3306/sublinkx
+MYSQL_PASSWORD=change-this-password
+MYSQL_ROOT_PASSWORD=change-this-password
+```
+
+Use an existing host or external MySQL:
+
+```env
+DATABASE_URL=mysql://sublinkx:change-this-password@host.docker.internal:3306/sublinkx
+```
+
+For full MySQL container, host MySQL, and external MySQL examples, see [Docker Deployment](docs/docker.en.md).
+
+Then start:
+
+```bash
+docker compose up -d
 ```
 
 Default fixed Docker subnet:

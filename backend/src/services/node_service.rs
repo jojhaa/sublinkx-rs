@@ -14,9 +14,10 @@ use tokio::{process::Command, task::JoinSet, time::sleep};
 use crate::{
     domain::node::NodeView,
     dto::nodes::{
-        CreateNodeRequest, ImportNodesFromSubscriptionRequest, NodeFidelityWarning,
-        NodeImportFailure, NodeImportResponse, NodeLatencyBatchRequest, NodeLatencyBatchResponse,
-        NodeLatencyResponse, NodeLatencyResult, NodeListResponse, NodeResponse, UpdateNodeRequest,
+        CreateNodeRequest, ImportNodesFromSubscriptionRequest, MoveNodesRequest,
+        NodeFidelityWarning, NodeImportFailure, NodeImportResponse, NodeLatencyBatchRequest,
+        NodeLatencyBatchResponse, NodeLatencyResponse, NodeLatencyResult, NodeListResponse,
+        NodeResponse, UpdateNodeRequest,
     },
     errors::AppError,
     repository::{
@@ -271,6 +272,41 @@ pub async fn test_node_latency(state: &AppState, id: i64) -> Result<NodeLatencyR
     })
 }
 
+pub async fn move_nodes(
+    state: &AppState,
+    payload: MoveNodesRequest,
+) -> Result<NodeListResponse, AppError> {
+    if payload.ids.is_empty() {
+        return Ok(NodeListResponse {
+            code: "00000",
+            data: Vec::new(),
+        });
+    }
+    if payload.ids.len() > 500 {
+        return Err(AppError::BadRequest(
+            "at most 500 nodes can be moved at once".to_string(),
+        ));
+    }
+
+    ensure_group_exists(state, payload.group_id).await?;
+    let mut ids = payload.ids;
+    ids.sort_unstable();
+    ids.dedup();
+
+    let records =
+        node_repo::update_group_for_ids(&state.db, &ids, payload.group_id, &now_rfc3339()).await?;
+    let data = records
+        .into_iter()
+        .map(NodeView::try_from)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|_| AppError::Internal)?;
+
+    Ok(NodeListResponse {
+        code: "00000",
+        data,
+    })
+}
+
 pub async fn test_node_latency_batch(
     state: &AppState,
     payload: NodeLatencyBatchRequest,
@@ -363,13 +399,13 @@ async fn ensure_mihomo_core_ready(
     .await
     .map_err(|_| {
         AppError::BadRequest(format!(
-            "Mihomo 内核检测超时：{}。请到系统设置重新下载或配置 Mihomo 内核。",
+            "Mihomo core check timed out: {}. Please download or configure the Mihomo core in Settings.",
             binary.display()
         ))
     })?
     .map_err(|error| {
         AppError::BadRequest(format!(
-            "Mihomo 内核不可用：{} ({})。请到系统设置下载或重新配置 Mihomo 内核。",
+            "Mihomo core is unavailable: {} ({}). Please download or reconfigure the Mihomo core in Settings.",
             binary.display(),
             error
         ))
@@ -377,7 +413,7 @@ async fn ensure_mihomo_core_ready(
 
     if !output.status.success() {
         return Err(AppError::BadRequest(format!(
-            "Mihomo 内核执行失败：{}。请到系统设置下载或重新配置 Mihomo 内核。",
+            "Mihomo core execution failed: {}. Please download or reconfigure the Mihomo core in Settings.",
             binary.display()
         )));
     }
@@ -386,7 +422,7 @@ async fn ensure_mihomo_core_ready(
 
 fn mihomo_core_missing_error() -> AppError {
     AppError::BadRequest(
-        "Mihomo 内核未检测到，无法进行真实链路测速。请到系统设置点击“下载内核”，或手动配置 backend/mihomo/mihomo 路径。".to_string(),
+        "Mihomo core was not found, so real-link latency testing cannot run. Download the core in Settings or configure backend/mihomo/mihomo manually.".to_string(),
     )
 }
 
@@ -462,7 +498,7 @@ async fn mihomo_real_latency_for_node(
         .spawn()
         .map_err(|error| {
             format!(
-                "failed to start Mihomo core '{}': {}. 请在系统设置中配置 mihomo.exe 路径",
+                "failed to start Mihomo core '{}': {}. 请在系统设置中配�?mihomo.exe 路径",
                 binary.display(),
                 error
             )

@@ -5,7 +5,7 @@ services:
     environment:
       APP_ENV: production
       APP_PORT: 8080
-      DATABASE_URL: sqlite:///app/data/app.db
+      DATABASE_URL: ${DATABASE_URL:-sqlite:///app/data/app.db}
       JWT_SECRET: ${JWT_SECRET:-change-me-in-production}
       JWT_EXP_HOURS: ${JWT_EXP_HOURS:-24}
       BOOTSTRAP_ADMIN_USERNAME: ${BOOTSTRAP_ADMIN_USERNAME:-admin}
@@ -15,6 +15,26 @@ services:
       - ${MIHOMO_CORE_DIR:-./docker-data/mihomo}:/app/mihomo
     expose:
       - "8080"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    networks:
+      - sublinkx_net
+
+  mysql:
+    image: ${MYSQL_IMAGE:-mysql:8.4}
+    restart: unless-stopped
+    profiles:
+      - mysql
+    environment:
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-sublinkx}
+      MYSQL_USER: ${MYSQL_USER:-sublinkx}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-sublinkx_password}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-sublinkx_root_password}
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+    volumes:
+      - ${MYSQL_DATA_DIR:-./docker-data/mysql}:/var/lib/mysql
     networks:
       - sublinkx_net
 

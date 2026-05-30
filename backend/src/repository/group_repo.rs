@@ -1,4 +1,4 @@
-use sqlx::SqlitePool;
+use crate::db::DbPool;
 
 use crate::domain::group::GroupRecord;
 
@@ -37,7 +37,7 @@ pub struct UpdateGroupRecord<'a> {
     pub updated_at: &'a str,
 }
 
-pub async fn list(pool: &SqlitePool, table: GroupTable) -> Result<Vec<GroupRecord>, sqlx::Error> {
+pub async fn list(pool: &DbPool, table: GroupTable) -> Result<Vec<GroupRecord>, sqlx::Error> {
     sqlx::query_as::<_, GroupRecord>(&format!(
         "SELECT id, name, sort_order, created_at, updated_at FROM {} ORDER BY sort_order ASC, id ASC",
         table.table_name()
@@ -47,12 +47,12 @@ pub async fn list(pool: &SqlitePool, table: GroupTable) -> Result<Vec<GroupRecor
 }
 
 pub async fn find_by_id(
-    pool: &SqlitePool,
+    pool: &DbPool,
     table: GroupTable,
     id: i64,
 ) -> Result<Option<GroupRecord>, sqlx::Error> {
     sqlx::query_as::<_, GroupRecord>(&format!(
-        "SELECT id, name, sort_order, created_at, updated_at FROM {} WHERE id = ?1",
+        "SELECT id, name, sort_order, created_at, updated_at FROM {} WHERE id = ?",
         table.table_name()
     ))
     .bind(id)
@@ -61,12 +61,12 @@ pub async fn find_by_id(
 }
 
 pub async fn find_by_name(
-    pool: &SqlitePool,
+    pool: &DbPool,
     table: GroupTable,
     name: &str,
 ) -> Result<Option<GroupRecord>, sqlx::Error> {
     sqlx::query_as::<_, GroupRecord>(&format!(
-        "SELECT id, name, sort_order, created_at, updated_at FROM {} WHERE name = ?1",
+        "SELECT id, name, sort_order, created_at, updated_at FROM {} WHERE name = ?",
         table.table_name()
     ))
     .bind(name)
@@ -75,12 +75,12 @@ pub async fn find_by_name(
 }
 
 pub async fn insert(
-    pool: &SqlitePool,
+    pool: &DbPool,
     table: GroupTable,
     item: &NewGroupRecord<'_>,
 ) -> Result<GroupRecord, sqlx::Error> {
-    let result = sqlx::query(&format!(
-        "INSERT INTO {} (name, sort_order, created_at, updated_at) VALUES (?1, ?2, ?3, ?4)",
+    sqlx::query(&format!(
+        "INSERT INTO {} (name, sort_order, created_at, updated_at) VALUES (?, ?, ?, ?)",
         table.table_name()
     ))
     .bind(item.name)
@@ -90,19 +90,19 @@ pub async fn insert(
     .execute(pool)
     .await?;
 
-    find_by_id(pool, table, result.last_insert_rowid())
+    find_by_name(pool, table, item.name)
         .await?
         .ok_or(sqlx::Error::RowNotFound)
 }
 
 pub async fn update(
-    pool: &SqlitePool,
+    pool: &DbPool,
     table: GroupTable,
     id: i64,
     item: &UpdateGroupRecord<'_>,
 ) -> Result<GroupRecord, sqlx::Error> {
     sqlx::query(&format!(
-        "UPDATE {} SET name = ?1, sort_order = ?2, updated_at = ?3 WHERE id = ?4",
+        "UPDATE {} SET name = ?, sort_order = ?, updated_at = ? WHERE id = ?",
         table.table_name()
     ))
     .bind(item.name)
@@ -117,21 +117,17 @@ pub async fn update(
         .ok_or(sqlx::Error::RowNotFound)
 }
 
-pub async fn delete(pool: &SqlitePool, table: GroupTable, id: i64) -> Result<(), sqlx::Error> {
-    sqlx::query(&format!("DELETE FROM {} WHERE id = ?1", table.table_name()))
+pub async fn delete(pool: &DbPool, table: GroupTable, id: i64) -> Result<(), sqlx::Error> {
+    sqlx::query(&format!("DELETE FROM {} WHERE id = ?", table.table_name()))
         .bind(id)
         .execute(pool)
         .await?;
     Ok(())
 }
 
-pub async fn count_usage(
-    pool: &SqlitePool,
-    table: GroupTable,
-    id: i64,
-) -> Result<i64, sqlx::Error> {
+pub async fn count_usage(pool: &DbPool, table: GroupTable, id: i64) -> Result<i64, sqlx::Error> {
     sqlx::query_scalar::<_, i64>(&format!(
-        "SELECT COUNT(1) FROM {} WHERE group_id = ?1",
+        "SELECT COUNT(1) FROM {} WHERE group_id = ?",
         table.owner_table_name()
     ))
     .bind(id)

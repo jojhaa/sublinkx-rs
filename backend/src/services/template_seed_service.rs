@@ -1,4 +1,4 @@
-use sqlx::SqlitePool;
+use crate::db::DbPool;
 
 use crate::{
     repository::template_repo::{self, NewTemplateRecord},
@@ -370,7 +370,7 @@ const DEFAULT_TEMPLATES: &[DefaultTemplate] = &[
     },
 ];
 
-pub async fn seed_default_templates(pool: &SqlitePool) -> Result<(), sqlx::Error> {
+pub async fn seed_default_templates(pool: &DbPool) -> Result<(), sqlx::Error> {
     let now = now_rfc3339();
 
     for template in DEFAULT_TEMPLATES {
