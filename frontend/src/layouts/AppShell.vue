@@ -1,20 +1,23 @@
 <script setup lang="ts">
 import { computed, onMounted } from 'vue'
 import { RouterLink, RouterView, useRouter } from 'vue-router'
+import LanguageSwitch from '../components/LanguageSwitch.vue'
+import { useI18n, type MessageKey } from '../i18n'
 import { useAuthStore } from '../store/auth'
 
 const router = useRouter()
 const auth = useAuthStore()
+const { t } = useI18n()
 
 const navItems = [
-  { name: 'dashboard', label: '总览', to: '/' },
-  { name: 'nodes', label: '节点管理', to: '/nodes' },
-  { name: 'subscriptions', label: '订阅管理', to: '/subscriptions' },
-  { name: 'templates', label: '模板管理', to: '/templates' },
-  { name: 'settings', label: '系统设置', to: '/settings' },
-]
+  { name: 'dashboard', labelKey: 'dashboard', to: '/' },
+  { name: 'nodes', labelKey: 'nodes', to: '/nodes' },
+  { name: 'subscriptions', labelKey: 'subscriptions', to: '/subscriptions' },
+  { name: 'templates', labelKey: 'templates', to: '/templates' },
+  { name: 'settings', labelKey: 'settings', to: '/settings' },
+] satisfies Array<{ name: string; labelKey: MessageKey; to: string }>
 
-const userLabel = computed(() => auth.user?.nickname || auth.user?.username || '管理员')
+const userLabel = computed(() => auth.user?.nickname || auth.user?.username || t('admin'))
 
 async function logout() {
   auth.clearAuth()
@@ -38,30 +41,31 @@ onMounted(async () => {
     <aside class="sidebar">
       <div class="brand-block">
         <span class="eyebrow">SublinkX RS</span>
-        <h1 class="brand-title">订阅控制台</h1>
+        <h1 class="brand-title">{{ t('brandTitle') }}</h1>
         <p class="brand-copy">
-          面向多协议节点、客户端模板和订阅分发的运维工作台。
+          {{ t('brandCopy') }}
         </p>
       </div>
 
-      <nav class="nav-list" aria-label="主导航">
+      <nav class="nav-list" :aria-label="t('mainNavigation')">
         <RouterLink
           v-for="item in navItems"
           :key="item.name"
           :to="item.to"
           class="nav-link"
         >
-          <span>{{ item.label }}</span>
+          <span>{{ t(item.labelKey) }}</span>
         </RouterLink>
       </nav>
 
       <div class="sidebar-footer">
+        <LanguageSwitch />
         <div class="user-card">
-          <div class="hint">当前登录</div>
+          <div class="hint">{{ t('currentLogin') }}</div>
           <strong>{{ userLabel }}</strong>
           <div class="muted">{{ auth.user?.role ?? 'admin' }}</div>
         </div>
-        <button class="button button-ghost" type="button" @click="logout">退出登录</button>
+        <button class="button button-ghost" type="button" @click="logout">{{ t('logout') }}</button>
       </div>
     </aside>
 

@@ -1,0 +1,9 @@
+target/
+data/
+mihomo/*
+!mihomo/.gitkeep
+.env
+.env.*
+*.log
+backend.out.log
+backend.err.log

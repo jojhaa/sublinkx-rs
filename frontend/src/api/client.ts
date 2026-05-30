@@ -29,7 +29,7 @@ export function extractApiError(error: unknown): string {
     return error.message
   }
 
-  return '请求失败，请稍后重试。'
+  return 'Request failed. Please try again later.'
 }
 
 export default apiClient

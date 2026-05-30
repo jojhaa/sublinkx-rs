@@ -98,6 +98,13 @@ button {
   backdrop-filter: blur(14px);
 }
 
+.auth-topbar {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
 .eyebrow {
   display: inline-flex;
   padding: 4px 8px;
@@ -298,6 +305,34 @@ button {
   margin-top: auto;
   display: grid;
   gap: 10px;
+}
+
+.language-switch {
+  display: grid;
+  gap: 5px;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: rgba(255, 255, 255, 0.58);
+}
+
+.language-switch span {
+  color: var(--muted);
+  font-size: var(--fs-xs);
+}
+
+.language-switch select {
+  width: 100%;
+  padding: 6px 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.82);
+}
+
+.auth-topbar .language-switch {
+  min-width: 118px;
+  padding: 6px;
 }
 
 .user-card {

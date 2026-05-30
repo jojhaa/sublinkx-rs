@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
 import { extractApiError } from '../api/client'
+import { useI18n, type MessageKey } from '../i18n'
 import {
   createTemplate,
   deleteTemplate,
@@ -8,6 +9,8 @@ import {
   updateTemplate,
   type TemplateItem,
 } from '../api/templates'
+
+const { t } = useI18n()
 
 type TemplateKind =
   | 'common'
@@ -34,31 +37,30 @@ type TemplateKind =
 interface TemplateKindOption {
   value: TemplateKind
   label: string
-  note: string
-  status: '已可导出'
+  noteKey: MessageKey
 }
 
 const TEMPLATE_KIND_OPTIONS: TemplateKindOption[] = [
-  { value: 'common', label: 'Common', note: '通用片段，适合跨客户端复用。', status: '已可导出' },
-  { value: 'clash', label: 'Clash', note: 'Clash 原生 YAML 模板，默认走 Mihomo 渲染器。', status: '已可导出' },
-  { value: 'mihomo', label: 'Mihomo', note: 'Mihomo / Clash Verge Rev / Stash 方向。', status: '已可导出' },
-  { value: 'xray', label: 'Xray / V2Ray', note: 'URI bundle 类型，适合 v2rayN / v2rayNG。', status: '已可导出' },
-  { value: 'surge', label: 'Surge 4/5', note: 'Surge INI 模板。', status: '已可导出' },
-  { value: 'sing-box', label: 'sing-box', note: 'sing-box JSON 模板，适合 NekoBox / Hiddify。', status: '已可导出' },
-  { value: 'surge3', label: 'Surge 3', note: '旧版 Surge 兼容模板，复用 Surge 渲染器。', status: '已可导出' },
-  { value: 'surge2', label: 'Surge 2', note: '老版 Surge 兼容模板，复用 Surge 渲染器。', status: '已可导出' },
-  { value: 'quanx', label: 'Quantumult X', note: 'QuanX 配置文本导出。', status: '已可导出' },
-  { value: 'quan', label: 'Quantumult', note: 'Quantumult 兼容配置文本导出。', status: '已可导出' },
-  { value: 'loon', label: 'Loon', note: 'Loon 兼容配置文本导出。', status: '已可导出' },
-  { value: 'surfboard', label: 'Surfboard', note: 'Surfboard 兼容配置文本导出。', status: '已可导出' },
-  { value: 'mellow', label: 'Mellow', note: 'Mellow 使用 Clash/Mihomo YAML 兼容导出。', status: '已可导出' },
-  { value: 'clashr', label: 'ClashR', note: 'ClashR 使用 Clash/Mihomo YAML 兼容导出。', status: '已可导出' },
-  { value: 'ss', label: 'SS SIP002', note: 'Shadowsocks SIP002 URI bundle 导出。', status: '已可导出' },
-  { value: 'sssub', label: 'SS SIP008', note: 'Shadowsocks Android SIP008 JSON 导出。', status: '已可导出' },
-  { value: 'ssr', label: 'ShadowsocksR', note: 'SSR URI bundle 导出。', status: '已可导出' },
-  { value: 'ssd', label: 'ShadowsocksD', note: 'SSD JSON 订阅导出。', status: '已可导出' },
-  { value: 'trojan', label: 'Trojan URI', note: 'Trojan URI bundle 导出。', status: '已可导出' },
-  { value: 'mixed', label: 'Mixed', note: '混合 URI bundle 导出。', status: '已可导出' },
+  { value: 'common', label: 'Common', noteKey: 'templateKindCommonNote' },
+  { value: 'clash', label: 'Clash', noteKey: 'templateKindClashNote' },
+  { value: 'mihomo', label: 'Mihomo', noteKey: 'templateKindMihomoNote' },
+  { value: 'xray', label: 'Xray / V2Ray', noteKey: 'templateKindXrayNote' },
+  { value: 'surge', label: 'Surge 4/5', noteKey: 'templateKindSurgeNote' },
+  { value: 'sing-box', label: 'sing-box', noteKey: 'templateKindSingBoxNote' },
+  { value: 'surge3', label: 'Surge 3', noteKey: 'templateKindSurge3Note' },
+  { value: 'surge2', label: 'Surge 2', noteKey: 'templateKindSurge2Note' },
+  { value: 'quanx', label: 'Quantumult X', noteKey: 'templateKindQuanxNote' },
+  { value: 'quan', label: 'Quantumult', noteKey: 'templateKindQuanNote' },
+  { value: 'loon', label: 'Loon', noteKey: 'templateKindLoonNote' },
+  { value: 'surfboard', label: 'Surfboard', noteKey: 'templateKindSurfboardNote' },
+  { value: 'mellow', label: 'Mellow', noteKey: 'templateKindMellowNote' },
+  { value: 'clashr', label: 'ClashR', noteKey: 'templateKindClashrNote' },
+  { value: 'ss', label: 'SS SIP002', noteKey: 'templateKindSsNote' },
+  { value: 'sssub', label: 'SS SIP008', noteKey: 'templateKindSssubNote' },
+  { value: 'ssr', label: 'ShadowsocksR', noteKey: 'templateKindSsrNote' },
+  { value: 'ssd', label: 'ShadowsocksD', noteKey: 'templateKindSsdNote' },
+  { value: 'trojan', label: 'Trojan URI', noteKey: 'templateKindTrojanNote' },
+  { value: 'mixed', label: 'Mixed', noteKey: 'templateKindMixedNote' },
 ]
 
 const templates = ref<TemplateItem[]>([])
@@ -76,18 +78,15 @@ const form = reactive({
 })
 
 const isEditing = computed(() => editingId.value !== null)
-const templateCount = computed(() => templates.value.length)
-const createdKindCount = computed(() => new Set(templates.value.map((item) => item.kind)).size)
-const supportedKindCount = computed(() => TEMPLATE_KIND_OPTIONS.length)
 const selectedKindNote = computed(
-  () => TEMPLATE_KIND_OPTIONS.find((item) => item.value === form.kind)?.note ?? '',
+  () => t(TEMPLATE_KIND_OPTIONS.find((item) => item.value === form.kind)?.noteKey ?? 'templateKindCommonNote'),
 )
 const submitLabel = computed(() => {
   if (saving.value) {
-    return isEditing.value ? '保存中...' : '创建中...'
+    return isEditing.value ? t('saving') : t('creating')
   }
 
-  return isEditing.value ? '保存模板' : '创建模板'
+  return isEditing.value ? t('saveTemplate') : t('createTemplate')
 })
 
 function normalizeKind(kind: string): TemplateKind {
@@ -162,10 +161,10 @@ async function submit() {
 
     if (editingId.value !== null) {
       await updateTemplate(editingId.value, payload)
-      successMessage.value = '模板已更新。'
+      successMessage.value = t('templateUpdated')
     } else {
       await createTemplate(payload)
-      successMessage.value = '模板已创建。'
+      successMessage.value = t('templateCreated')
     }
 
     closeEditor()
@@ -178,7 +177,7 @@ async function submit() {
 }
 
 async function removeTemplate(id: number) {
-  if (!window.confirm('确定删除这个模板吗？')) {
+  if (!window.confirm(t('confirmDeleteTemplate'))) {
     return
   }
 
@@ -189,7 +188,7 @@ async function removeTemplate(id: number) {
       closeEditor()
     }
 
-    successMessage.value = '模板已删除。'
+    successMessage.value = t('templateDeleted')
     await load()
   } catch (error) {
     errorMessage.value = extractApiError(error)
@@ -204,17 +203,14 @@ onMounted(load)
     <header class="page-header">
       <div>
         <span class="eyebrow">Templates</span>
-        <h2 class="page-title">模板管理</h2>
-        <p class="page-copy">
-          已创建 {{ templateCount }} 个模板，覆盖 {{ createdKindCount }} 种类型。系统已支持
-          {{ supportedKindCount }} 种模板类型。
-        </p>
+        <h2 class="page-title">{{ t('templates') }}</h2>
+        <p class="page-copy">{{ t('templatesCopy') }}</p>
       </div>
       <div class="inline-actions">
         <button class="button button-ghost" type="button" :disabled="loading" @click="load">
-          {{ loading ? '刷新中...' : '刷新' }}
+          {{ loading ? t('refreshing') : t('refresh') }}
         </button>
-        <button class="button button-accent" type="button" @click="openCreate()">新建模板</button>
+        <button class="button button-accent" type="button" @click="openCreate()">{{ t('createTemplate') }}</button>
       </div>
     </header>
 
@@ -224,8 +220,8 @@ onMounted(load)
     <article class="card stack template-type-panel">
       <div class="section-bar">
         <div>
-          <div class="hint">支持的模板类型</div>
-          <p class="card-copy">这里展示系统支持的客户端模板类型；下面列表才是数据库里已创建的模板。</p>
+          <div class="hint">{{ t('supportedTemplateTypes') }}</div>
+          <p class="card-copy">{{ t('supportedTemplateTypesCopy') }}</p>
         </div>
       </div>
 
@@ -246,20 +242,20 @@ onMounted(load)
     <article class="card stack management-card">
       <div class="section-bar">
         <div>
-          <div class="hint">模板列表</div>
-          <p class="card-copy">模板内容只保留短预览，编辑放到弹窗里处理。</p>
+          <div class="hint">{{ t('templateList') }}</div>
+          <p class="card-copy">{{ t('templateListCopy') }}</p>
         </div>
       </div>
 
-      <div v-if="templates.length === 0" class="empty-state">还没有模板，先新建一个作为基线。</div>
+      <div v-if="templates.length === 0" class="empty-state">{{ t('emptyTemplates') }}</div>
 
       <div v-else class="table-wrap">
         <table class="table dense-table template-table">
           <thead>
             <tr>
-              <th>模板</th>
-              <th>内容</th>
-              <th>操作</th>
+              <th>{{ t('template') }}</th>
+              <th>{{ t('content') }}</th>
+              <th>{{ t('actions') }}</th>
             </tr>
           </thead>
           <tbody>
@@ -277,10 +273,10 @@ onMounted(load)
               <td>
                 <div class="inline-actions row-actions">
                   <button class="button button-ghost button-compact" type="button" @click="startEdit(item)">
-                    编辑
+                    {{ t('edit') }}
                   </button>
                   <button class="button button-danger button-compact" type="button" @click="removeTemplate(item.id)">
-                    删除
+                    {{ t('delete') }}
                   </button>
                 </div>
               </td>
@@ -296,39 +292,39 @@ onMounted(load)
           <header class="modal-header">
             <div>
               <span class="eyebrow">{{ isEditing ? 'Edit Template' : 'New Template' }}</span>
-              <h3>{{ isEditing ? '编辑模板' : '新建模板' }}</h3>
+              <h3>{{ isEditing ? t('editTemplate') : t('createTemplate') }}</h3>
             </div>
-            <button class="icon-button" type="button" aria-label="关闭" @click="closeEditor">x</button>
+            <button class="icon-button" type="button" :aria-label="t('close')" @click="closeEditor">x</button>
           </header>
 
           <form class="form-grid" @submit.prevent="submit">
             <div>
-              <label class="field-label" for="template-name">模板名称</label>
-              <input id="template-name" v-model.trim="form.name" class="input" placeholder="例如：Mihomo Mobile Base" />
+              <label class="field-label" for="template-name">{{ t('templateName') }}</label>
+              <input id="template-name" v-model.trim="form.name" class="input" :placeholder="t('templateNamePlaceholder')" />
             </div>
 
             <div>
-              <label class="field-label" for="template-kind">模板类型</label>
+              <label class="field-label" for="template-kind">{{ t('templateType') }}</label>
               <select id="template-kind" v-model="form.kind" class="select">
                 <option v-for="option in TEMPLATE_KIND_OPTIONS" :key="option.value" :value="option.value">
-                  {{ option.label }} - {{ option.status }}
+                  {{ option.label }} - {{ t('templateReady') }}
                 </option>
               </select>
               <div class="hint template-kind-hint">{{ selectedKindNote }}</div>
             </div>
 
             <div>
-              <label class="field-label" for="template-content">模板内容</label>
+              <label class="field-label" for="template-content">{{ t('templateContent') }}</label>
               <textarea
                 id="template-content"
                 v-model.trim="form.content"
                 class="textarea code-textarea"
-                placeholder="写入 YAML、JSON、INI 或对应客户端配置片段"
+                :placeholder="t('templateContentPlaceholder')"
               />
             </div>
 
             <div class="modal-actions">
-              <button class="button button-ghost" type="button" :disabled="saving" @click="closeEditor">取消</button>
+              <button class="button button-ghost" type="button" :disabled="saving" @click="closeEditor">{{ t('cancel') }}</button>
               <button class="button button-accent" type="submit" :disabled="saving || !form.name || !form.content">
                 {{ submitLabel }}
               </button>

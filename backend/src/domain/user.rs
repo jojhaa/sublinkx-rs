@@ -9,6 +9,7 @@ pub struct User {
     pub nickname: String,
     pub role: String,
     pub status: String,
+    pub must_change_credentials: i64,
     pub created_at: String,
     pub updated_at: String,
 }

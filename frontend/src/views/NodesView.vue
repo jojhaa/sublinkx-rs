@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { extractApiError } from '../api/client'
+import { useI18n } from '../i18n'
 import {
   createNode,
   deleteNode,
@@ -19,6 +20,8 @@ import {
   updateNodeGroup,
   type GroupItem,
 } from '../api/groups'
+
+const { t } = useI18n()
 
 type ExportTarget = 'mihomo' | 'xray' | 'surge' | 'sing-box'
 
@@ -97,17 +100,16 @@ const currentPageSelected = computed(
   () => currentPageIds.value.length > 0 && currentPageIds.value.every((id) => selectedIds.value.includes(id)),
 )
 const selectedCount = computed(() => selectedIds.value.length)
-const protocolCount = computed(() => new Set(nodes.value.map((item) => item.protocol)).size)
 const compatibilityTargets = computed(() => Object.keys(TARGET_LABELS) as ExportTarget[])
 const isEditing = computed(() => editingId.value !== null)
 const isEditingGroup = computed(() => editingGroupId.value !== null)
 const submitLabel = computed(() => {
   if (saving.value) {
-    return isEditing.value ? '保存中...' : '导入中...'
+    return isEditing.value ? t('savingNode') : t('importingNode')
   }
-  return isEditing.value ? '保存节点' : '导入节点'
+  return isEditing.value ? t('saveNode') : t('importNode')
 })
-const groupSubmitLabel = computed(() => (isEditingGroup.value ? '保存分组' : '创建分组'))
+const groupSubmitLabel = computed(() => (isEditingGroup.value ? t('saveGroup') : t('createGroup')))
 
 watch([filteredNodes, pageSize], () => {
   page.value = Math.min(page.value, pageCount.value)
@@ -164,16 +166,16 @@ function currentLatencyResult(item: NodeItem) {
 
 function latencyText(item: NodeItem) {
   if (isTestingLatency(item.id)) {
-    return '测速中'
+    return t('testing')
   }
   const result = currentLatencyResult(item)
   if (!result) {
-    return '未测速'
+    return t('untested')
   }
   if (result.status === 'ok') {
     return `${result.latency_ms} ms`
   }
-  return result.status === 'timeout' ? '超时' : '失败'
+  return result.status === 'timeout' ? t('timeout') : t('failed')
 }
 
 function latencyClass(item: NodeItem) {
@@ -206,9 +208,9 @@ function nodeRowClass(item: NodeItem) {
 
 function groupName(groupId: number | null) {
   if (groupId === null) {
-    return '未分组'
+    return t('ungrouped')
   }
-  return groups.value.find((item) => item.id === groupId)?.name ?? `分组 #${groupId}`
+  return groups.value.find((item) => item.id === groupId)?.name ?? t('groupFallback', { id: groupId })
 }
 
 function resetForm() {
@@ -307,7 +309,7 @@ async function testLatency(item: NodeItem) {
     const response = await testNodeLatency(item.id)
     setLatencyResult(response.data)
     if (response.data.status !== 'ok') {
-      errorMessage.value = `${item.name} 延迟测试失败：${response.data.message ?? response.data.status}`
+      errorMessage.value = t('latencyFailed', { name: item.name, message: response.data.message ?? response.data.status })
     }
   } catch (error) {
     errorMessage.value = formatLatencyApiError(error)
@@ -332,7 +334,7 @@ async function testSelectedLatencies() {
     }
     const okCount = response.data.filter((item) => item.status === 'ok').length
     const failedCount = response.data.length - okCount
-    successMessage.value = `延迟测试完成：${okCount} 个成功，${failedCount} 个失败。`
+    successMessage.value = t('latencyBatchDone', { ok: okCount, failed: failedCount })
   } catch (error) {
     errorMessage.value = formatLatencyApiError(error)
   } finally {
@@ -342,8 +344,9 @@ async function testSelectedLatencies() {
 
 function formatLatencyApiError(error: unknown) {
   const message = extractApiError(error)
-  if (message.includes('Mihomo 内核') || message.toLowerCase().includes('mihomo')) {
-    return `${message} 请进入“系统设置”页面检测并下载内核后再测速。`
+  const mihomoCoreText = 'Mihomo \u5185\u6838'
+  if (message.includes(mihomoCoreText) || message.toLowerCase().includes('mihomo')) {
+    return `${message} ${t('latencyCoreRequired')}`
   }
   return message
 }
@@ -378,11 +381,11 @@ async function submit() {
         remark: form.remark || undefined,
         enabled: form.enabled,
       })
-      successMessage.value = '节点已更新。'
+      successMessage.value = t('nodeUpdated')
     } else {
       const rawLinks = splitRawLinks(form.raw_link)
       if (rawLinks.length === 0) {
-        throw new Error('请至少输入一条节点链接。')
+        throw new Error(t('nodeLinkRequired'))
       }
 
       const results = await Promise.allSettled(
@@ -401,17 +404,17 @@ async function submit() {
         .filter((entry): entry is { item: PromiseRejectedResult; rawLink: string } => entry.item.status === 'rejected')
 
       if (successCount === 0) {
-        throw failures[0]?.item.reason ?? new Error('导入失败。')
+        throw failures[0]?.item.reason ?? new Error(t('importFailed'))
       }
 
       if (failures.length === 0) {
-        successMessage.value = successCount === 1 ? '节点已导入。' : `已成功导入 ${successCount} 个节点。`
+        successMessage.value = successCount === 1 ? t('nodeImported') : t('nodesImported', { count: successCount })
       } else {
         errorMessage.value = failures
           .slice(0, 3)
           .map((entry) => `${entry.rawLink.slice(0, 42)}: ${extractApiError(entry.item.reason)}`)
           .join('；')
-        successMessage.value = `已导入 ${successCount} 个节点，失败 ${failures.length} 个。`
+        successMessage.value = t('nodesImportPartial', { success: successCount, failed: failures.length })
       }
     }
 
@@ -445,7 +448,7 @@ async function moveSelectedNodes() {
         }),
       ),
     )
-    successMessage.value = `已移动 ${selectedNodes.value.length} 个节点到「${groupName(batchGroupId.value)}」。`
+    successMessage.value = t('nodesMoved', { count: selectedNodes.value.length, group: groupName(batchGroupId.value) })
     clearSelection()
     await load()
   } catch (error) {
@@ -466,16 +469,21 @@ async function importFromUpstreamSubscription() {
       group_id: upstreamForm.group_id,
       remark: upstreamForm.remark || undefined,
     })
-    const templateMessage = response.template_name ? `，并保存上游模板：${response.template_name}` : ''
-    successMessage.value = `已导入 ${response.imported} 个节点，跳过 ${response.skipped} 个重复节点${templateMessage}。`
+    const templateMessage = response.template_name ? t('upstreamTemplateSaved', { name: response.template_name }) : ''
+    successMessage.value = t('upstreamImported', { imported: response.imported, skipped: response.skipped, template: templateMessage })
     if (response.fidelity_warnings.length > 0) {
       const warning = response.fidelity_warnings[0]
-      const missing = warning.missing_fields.length > 0 ? `丢失 ${warning.missing_fields.join(', ')}` : ''
-      const changed = warning.changed_fields.length > 0 ? `变化 ${warning.changed_fields.join(', ')}` : ''
-      errorMessage.value = `转换保真检查发现 ${response.fidelity_warnings.length} 个节点有字段差异。首个：${warning.name} (${warning.protocol}) ${[missing, changed].filter(Boolean).join('；')}`
+      const missing = warning.missing_fields.length > 0 ? t('fidelityMissing', { fields: warning.missing_fields.join(', ') }) : ''
+      const changed = warning.changed_fields.length > 0 ? t('fidelityChanged', { fields: warning.changed_fields.join(', ') }) : ''
+      errorMessage.value = t('fidelityWarning', {
+        count: response.fidelity_warnings.length,
+        name: warning.name,
+        protocol: warning.protocol,
+        detail: [missing, changed].filter(Boolean).join('；'),
+      })
     }
     if (response.failed > 0) {
-      errorMessage.value = `有 ${response.failed} 个节点导入失败：${response.failures[0]?.reason ?? '未知错误'}`
+      errorMessage.value = t('nodeImportFailures', { count: response.failed, reason: response.failures[0]?.reason ?? t('unknown') })
     }
     closeUpstreamImporter()
     await load()
@@ -495,10 +503,10 @@ async function submitGroup() {
     const payload = { name: groupForm.name, sort_order: groupForm.sort_order }
     if (editingGroupId.value !== null) {
       await updateNodeGroup(editingGroupId.value, payload)
-      successMessage.value = '节点分组已更新。'
+      successMessage.value = t('nodeGroupUpdated')
     } else {
       await createNodeGroup(payload)
-      successMessage.value = '节点分组已创建。'
+      successMessage.value = t('nodeGroupCreated')
     }
     resetGroupForm()
     await load()
@@ -510,7 +518,7 @@ async function submitGroup() {
 }
 
 async function removeNode(id: number) {
-  if (!window.confirm('确定删除这个节点吗？')) {
+  if (!window.confirm(t('confirmDeleteNode'))) {
     return
   }
 
@@ -520,7 +528,7 @@ async function removeNode(id: number) {
       closeEditor()
     }
     selectedIds.value = selectedIds.value.filter((item) => item !== id)
-    successMessage.value = '节点已删除。'
+    successMessage.value = t('nodeDeleted')
     await load()
   } catch (error) {
     errorMessage.value = extractApiError(error)
@@ -533,7 +541,7 @@ async function removeSelectedNodes() {
   }
 
   const count = selectedNodes.value.length
-  if (!window.confirm(`确定删除已选择的 ${count} 个节点吗？此操作不可恢复。`)) {
+  if (!window.confirm(t('confirmDeleteSelectedNodes', { count }))) {
     return
   }
 
@@ -548,7 +556,7 @@ async function removeSelectedNodes() {
     const failures = results.filter((item): item is PromiseRejectedResult => item.status === 'rejected')
 
     if (successCount === 0) {
-      throw failures[0]?.reason ?? new Error('批量删除失败。')
+      throw failures[0]?.reason ?? new Error(t('batchDeleteFailed'))
     }
 
     if (editingId.value !== null && ids.includes(editingId.value)) {
@@ -556,9 +564,9 @@ async function removeSelectedNodes() {
     }
 
     selectedIds.value = []
-    successMessage.value = `已删除 ${successCount} 个节点。`
+    successMessage.value = t('nodesDeleted', { count: successCount })
     if (failures.length > 0) {
-      errorMessage.value = `有 ${failures.length} 个节点删除失败：${extractApiError(failures[0].reason)}`
+      errorMessage.value = t('nodeDeleteFailures', { count: failures.length, reason: extractApiError(failures[0].reason) })
     }
     await load()
   } catch (error) {
@@ -569,7 +577,7 @@ async function removeSelectedNodes() {
 }
 
 async function removeGroup(id: number) {
-  if (!window.confirm('确定删除这个分组吗？')) {
+  if (!window.confirm(t('confirmDeleteGroup'))) {
     return
   }
 
@@ -581,7 +589,7 @@ async function removeGroup(id: number) {
     if (batchGroupId.value === id) {
       batchGroupId.value = null
     }
-    successMessage.value = '节点分组已删除。'
+    successMessage.value = t('nodeGroupDeleted')
     await load()
   } catch (error) {
     errorMessage.value = extractApiError(error)
@@ -596,21 +604,21 @@ onMounted(load)
     <header class="page-header">
       <div>
         <span class="eyebrow">Nodes</span>
-        <h2 class="page-title">节点管理</h2>
-        <p class="page-copy">共 {{ nodes.length }} 个节点，覆盖 {{ protocolCount }} 种协议，{{ groups.length }} 个分组。</p>
+        <h2 class="page-title">{{ t('nodes') }}</h2>
+        <p class="page-copy">{{ t('nodesCopy') }}</p>
       </div>
       <div class="inline-actions">
-        <select v-model="groupFilter" class="select toolbar-select" aria-label="节点分组筛选">
-          <option value="all">全部分组</option>
-          <option value="none">未分组</option>
+        <select v-model="groupFilter" class="select toolbar-select" :aria-label="t('nodeGroup')">
+          <option value="all">{{ t('allGroups') }}</option>
+          <option value="none">{{ t('ungrouped') }}</option>
           <option v-for="group in groups" :key="group.id" :value="group.id">{{ group.name }}</option>
         </select>
         <button class="button button-ghost" type="button" :disabled="loading" @click="load">
-          {{ loading ? '刷新中...' : '刷新' }}
+          {{ loading ? t('refreshing') : t('refresh') }}
         </button>
-        <button class="button button-ghost" type="button" @click="openGroupEditor">分组管理</button>
-        <button class="button button-ghost" type="button" @click="openUpstreamImporter">上游订阅导入</button>
-        <button class="button button-accent" type="button" @click="openCreate">导入节点</button>
+        <button class="button button-ghost" type="button" @click="openGroupEditor">{{ t('groupManagement') }}</button>
+        <button class="button button-ghost" type="button" @click="openUpstreamImporter">{{ t('upstreamImport') }}</button>
+        <button class="button button-accent" type="button" @click="openCreate">{{ t('importNode') }}</button>
       </div>
     </header>
 
@@ -620,28 +628,28 @@ onMounted(load)
     <article class="card stack management-card">
       <div class="section-bar">
         <div>
-          <div class="hint">节点列表</div>
-          <p class="card-copy">当前筛选 {{ filteredNodes.length }} 个，已选择 {{ selectedCount }} 个。</p>
+          <div class="hint">{{ t('nodeList') }}</div>
+          <p class="card-copy">{{ t('nodeListSummary', { filtered: filteredNodes.length, selected: selectedCount }) }}</p>
         </div>
         <div class="inline-actions bulk-actions">
-          <select v-model="batchGroupId" class="select toolbar-select" aria-label="批量移动到分组">
-            <option :value="null">移动到未分组</option>
+          <select v-model="batchGroupId" class="select toolbar-select" :aria-label="t('moveGroup')">
+            <option :value="null">{{ t('moveToUngrouped') }}</option>
             <option v-for="group in groups" :key="group.id" :value="group.id">{{ group.name }}</option>
           </select>
-          <button class="button button-ghost" type="button" :disabled="selectedCount === 0" @click="clearSelection">清空选择</button>
+          <button class="button button-ghost" type="button" :disabled="selectedCount === 0" @click="clearSelection">{{ t('clearSelection') }}</button>
           <button class="button button-accent" type="button" :disabled="saving || selectedCount === 0" @click="moveSelectedNodes">
-            移动分组
+            {{ t('moveGroup') }}
           </button>
           <button class="button button-ghost" type="button" :disabled="selectedCount === 0" @click="testSelectedLatencies">
-            测试延迟
+            {{ t('testLatency') }}
           </button>
           <button class="button button-danger" type="button" :disabled="saving || selectedCount === 0" @click="removeSelectedNodes">
-            删除所选
+            {{ t('deleteSelected') }}
           </button>
         </div>
       </div>
 
-      <div v-if="filteredNodes.length === 0" class="empty-state">这个分组下还没有节点。</div>
+      <div v-if="filteredNodes.length === 0" class="empty-state">{{ t('emptyGroupNodes') }}</div>
 
       <div v-else class="table-wrap">
         <table class="table dense-table selectable-table node-table">
@@ -651,25 +659,25 @@ onMounted(load)
                 <input
                   type="checkbox"
                   :checked="currentPageSelected"
-                  :aria-label="currentPageSelected ? '取消全选当前页' : '全选当前页'"
+                  :aria-label="currentPageSelected ? t('unselectCurrentPage') : t('selectCurrentPage')"
                   @change="toggleCurrentPage(($event.target as HTMLInputElement).checked)"
                 />
               </th>
-              <th>节点</th>
-              <th>连接</th>
-              <th>兼容</th>
-              <th>操作</th>
+              <th>{{ t('node') }}</th>
+              <th>{{ t('connection') }}</th>
+              <th>{{ t('compatibility') }}</th>
+              <th>{{ t('actions') }}</th>
             </tr>
           </thead>
           <tbody>
             <tr v-for="item in pagedNodes" :key="item.id" :class="nodeRowClass(item)">
               <td class="selection-cell">
-                <input v-model="selectedIds" :value="item.id" type="checkbox" :aria-label="`选择 ${item.name}`" />
+                <input v-model="selectedIds" :value="item.id" type="checkbox" :aria-label="t('selectNode', { name: item.name })" />
               </td>
               <td class="node-name-cell">
                 <div class="subscription-title-row">
                   <strong class="row-title">{{ item.name }}</strong>
-                  <span class="status-badge status-badge-neutral">{{ item.enabled ? '启用' : '停用' }}</span>
+                  <span class="status-badge status-badge-neutral">{{ item.enabled ? t('enabled') : t('disabled') }}</span>
                 </div>
                 <div class="row-meta">
                   #{{ item.id }} · {{ groupName(item.group_id) }}
@@ -695,16 +703,16 @@ onMounted(load)
                   </span>
                 </div>
                 <div class="muted compat-summary">
-                  {{ supportedTargets(item).length }}/{{ compatibilityTargets.length }} supported
+                  {{ supportedTargets(item).length }}/{{ compatibilityTargets.length }} {{ t('supported') }}
                 </div>
               </td>
               <td>
                 <div class="inline-actions row-actions">
                   <button class="button button-ghost button-compact" type="button" :disabled="isTestingLatency(item.id)" @click="testLatency(item)">
-                    {{ isTestingLatency(item.id) ? '测速中' : '测速' }}
+                    {{ isTestingLatency(item.id) ? t('testing') : t('test') }}
                   </button>
-                  <button class="button button-ghost button-compact" type="button" @click="startEdit(item)">编辑</button>
-                  <button class="button button-danger button-compact" type="button" @click="removeNode(item.id)">删除</button>
+                  <button class="button button-ghost button-compact" type="button" @click="startEdit(item)">{{ t('edit') }}</button>
+                  <button class="button button-danger button-compact" type="button" @click="removeNode(item.id)">{{ t('delete') }}</button>
                 </div>
               </td>
             </tr>
@@ -713,13 +721,13 @@ onMounted(load)
       </div>
 
       <footer class="pagination-bar">
-        <span class="hint">第 {{ page }} / {{ pageCount }} 页</span>
-        <select v-model.number="pageSize" class="select page-size-select" aria-label="每页数量">
-          <option v-for="size in PAGE_SIZE_OPTIONS" :key="size" :value="size">每页 {{ size }}</option>
+        <span class="hint">{{ t('pageLabel', { page, count: pageCount }) }}</span>
+        <select v-model.number="pageSize" class="select page-size-select" :aria-label="t('pageSize', { size: pageSize })">
+          <option v-for="size in PAGE_SIZE_OPTIONS" :key="size" :value="size">{{ t('pageSize', { size }) }}</option>
         </select>
         <div class="inline-actions">
-          <button class="button button-ghost button-compact" type="button" :disabled="page <= 1" @click="page -= 1">上一页</button>
-          <button class="button button-ghost button-compact" type="button" :disabled="page >= pageCount" @click="page += 1">下一页</button>
+          <button class="button button-ghost button-compact" type="button" :disabled="page <= 1" @click="page -= 1">{{ t('previousPage') }}</button>
+          <button class="button button-ghost button-compact" type="button" :disabled="page >= pageCount" @click="page += 1">{{ t('nextPage') }}</button>
         </div>
       </footer>
     </article>
@@ -730,46 +738,46 @@ onMounted(load)
           <header class="modal-header">
             <div>
               <span class="eyebrow">{{ isEditing ? 'Edit Node' : 'Import Nodes' }}</span>
-              <h3>{{ isEditing ? '编辑节点' : '导入节点' }}</h3>
+              <h3>{{ isEditing ? t('editNode') : t('importNodes') }}</h3>
             </div>
-            <button class="icon-button" type="button" aria-label="关闭" @click="closeEditor">×</button>
+            <button class="icon-button" type="button" :aria-label="t('close')" @click="closeEditor">×</button>
           </header>
 
           <form class="form-grid" @submit.prevent="submit">
             <div>
-              <label class="field-label" for="node-name">显示名称</label>
-              <input id="node-name" v-model.trim="form.name" class="input" placeholder="可选，批量导入时自动使用链接名称" />
+              <label class="field-label" for="node-name">{{ t('displayName') }}</label>
+              <input id="node-name" v-model.trim="form.name" class="input" :placeholder="t('nodeNamePlaceholder')" />
             </div>
 
             <div>
-              <label class="field-label" for="node-group">节点分组</label>
+              <label class="field-label" for="node-group">{{ t('nodeGroup') }}</label>
               <select id="node-group" v-model="form.group_id" class="select">
-                <option :value="null">未分组</option>
+                <option :value="null">{{ t('ungrouped') }}</option>
                 <option v-for="group in groups" :key="group.id" :value="group.id">{{ group.name }}</option>
               </select>
             </div>
 
             <div>
-              <label class="field-label" for="node-link">原始链接</label>
-              <textarea id="node-link" v-model.trim="form.raw_link" class="textarea code-textarea" placeholder="一行一条节点链接" />
-              <div class="hint template-kind-hint">新增支持多行批量导入；编辑模式按单条节点处理。</div>
+              <label class="field-label" for="node-link">{{ t('rawLink') }}</label>
+              <textarea id="node-link" v-model.trim="form.raw_link" class="textarea code-textarea" :placeholder="t('rawLinkPlaceholder')" />
+              <div class="hint template-kind-hint">{{ t('rawLinkHint') }}</div>
             </div>
 
             <div>
-              <label class="field-label" for="node-remark">备注</label>
-              <input id="node-remark" v-model.trim="form.remark" class="input" placeholder="可选" />
+              <label class="field-label" for="node-remark">{{ t('remark') }}</label>
+              <input id="node-remark" v-model.trim="form.remark" class="input" :placeholder="t('optional')" />
             </div>
 
             <label v-if="isEditing" class="checkbox-item">
               <input v-model="form.enabled" type="checkbox" />
               <span>
-                <strong>启用节点</strong>
-                <div class="muted">关闭后保留记录，但不会作为可用节点对外分发。</div>
+                <strong>{{ t('enableNode') }}</strong>
+                <div class="muted">{{ t('enableNodeHint') }}</div>
               </span>
             </label>
 
             <div class="modal-actions">
-              <button class="button button-ghost" type="button" :disabled="saving" @click="closeEditor">取消</button>
+              <button class="button button-ghost" type="button" :disabled="saving" @click="closeEditor">{{ t('cancel') }}</button>
               <button class="button button-accent" type="submit" :disabled="saving || !form.raw_link">{{ submitLabel }}</button>
             </div>
           </form>
@@ -783,40 +791,40 @@ onMounted(load)
           <header class="modal-header">
             <div>
               <span class="eyebrow">Upstream</span>
-              <h3>从上游订阅导入</h3>
+              <h3>{{ t('upstreamImportTitle') }}</h3>
             </div>
-            <button class="icon-button" type="button" aria-label="关闭" @click="closeUpstreamImporter">x</button>
+            <button class="icon-button" type="button" :aria-label="t('close')" @click="closeUpstreamImporter">x</button>
           </header>
 
           <form class="form-grid" @submit.prevent="importFromUpstreamSubscription">
             <div>
-              <label class="field-label" for="upstream-url">上游订阅链接</label>
+              <label class="field-label" for="upstream-url">{{ t('upstreamUrl') }}</label>
               <input
                 id="upstream-url"
                 v-model.trim="upstreamForm.url"
                 class="input"
                 placeholder="https://example.com/sub..."
               />
-              <div class="hint template-kind-hint">支持 URI/Base64 订阅，也支持 Mihomo YAML 的 proxies 列表。</div>
+              <div class="hint template-kind-hint">{{ t('upstreamHint') }}</div>
             </div>
 
             <div>
-              <label class="field-label" for="upstream-group">导入到节点分组</label>
+              <label class="field-label" for="upstream-group">{{ t('importToNodeGroup') }}</label>
               <select id="upstream-group" v-model="upstreamForm.group_id" class="select">
-                <option :value="null">未分组</option>
+                <option :value="null">{{ t('ungrouped') }}</option>
                 <option v-for="group in groups" :key="group.id" :value="group.id">{{ group.name }}</option>
               </select>
             </div>
 
             <div>
-              <label class="field-label" for="upstream-remark">备注</label>
-              <input id="upstream-remark" v-model.trim="upstreamForm.remark" class="input" placeholder="可选，例如：机场 A" />
+              <label class="field-label" for="upstream-remark">{{ t('remark') }}</label>
+              <input id="upstream-remark" v-model.trim="upstreamForm.remark" class="input" :placeholder="t('remarkPlaceholder')" />
             </div>
 
             <div class="modal-actions">
-              <button class="button button-ghost" type="button" :disabled="saving" @click="closeUpstreamImporter">取消</button>
+              <button class="button button-ghost" type="button" :disabled="saving" @click="closeUpstreamImporter">{{ t('cancel') }}</button>
               <button class="button button-accent" type="submit" :disabled="saving || !upstreamForm.url">
-                {{ saving ? '导入中...' : '开始导入' }}
+                {{ saving ? t('importingNode') : t('startImport') }}
               </button>
             </div>
           </form>
@@ -830,22 +838,22 @@ onMounted(load)
           <header class="modal-header">
             <div>
               <span class="eyebrow">Node Groups</span>
-              <h3>节点分组</h3>
+              <h3>{{ t('nodeGroups') }}</h3>
             </div>
-            <button class="icon-button" type="button" aria-label="关闭" @click="closeGroupEditor">×</button>
+            <button class="icon-button" type="button" :aria-label="t('close')" @click="closeGroupEditor">×</button>
           </header>
 
           <form class="form-grid" @submit.prevent="submitGroup">
             <div>
-              <label class="field-label" for="node-group-name">分组名称</label>
-              <input id="node-group-name" v-model.trim="groupForm.name" class="input" placeholder="例如：香港线路" />
+              <label class="field-label" for="node-group-name">{{ t('groupName') }}</label>
+              <input id="node-group-name" v-model.trim="groupForm.name" class="input" :placeholder="t('groupNamePlaceholder')" />
             </div>
             <div>
-              <label class="field-label" for="node-group-order">排序</label>
+              <label class="field-label" for="node-group-order">{{ t('sortOrder') }}</label>
               <input id="node-group-order" v-model.number="groupForm.sort_order" class="input" type="number" />
             </div>
             <div class="modal-actions">
-              <button class="button button-ghost" type="button" @click="resetGroupForm">清空</button>
+              <button class="button button-ghost" type="button" @click="resetGroupForm">{{ t('clear') }}</button>
               <button class="button button-accent" type="submit" :disabled="saving || !groupForm.name">{{ groupSubmitLabel }}</button>
             </div>
           </form>
@@ -855,8 +863,8 @@ onMounted(load)
               <span>{{ group.name }}</span>
               <span class="muted">sort {{ group.sort_order }}</span>
               <div class="inline-actions">
-                <button class="button button-ghost button-compact" type="button" @click="startEditGroup(group)">编辑</button>
-                <button class="button button-danger button-compact" type="button" @click="removeGroup(group.id)">删除</button>
+                <button class="button button-ghost button-compact" type="button" @click="startEditGroup(group)">{{ t('edit') }}</button>
+                <button class="button button-danger button-compact" type="button" @click="removeGroup(group.id)">{{ t('delete') }}</button>
               </div>
             </div>
           </div>

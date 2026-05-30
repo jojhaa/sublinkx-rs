@@ -2,15 +2,18 @@
 import { reactive, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { extractApiError } from '../api/client'
+import LanguageSwitch from '../components/LanguageSwitch.vue'
+import { useI18n } from '../i18n'
 import { useAuthStore } from '../store/auth'
 
 const router = useRouter()
 const route = useRoute()
 const auth = useAuthStore()
+const { t } = useI18n()
 
 const form = reactive({
   username: 'admin',
-  password: 'change-me-now',
+  password: 'admin123456',
 })
 
 const loading = ref(false)
@@ -22,6 +25,10 @@ async function submit() {
 
   try {
     await auth.login(form)
+    if (auth.user?.must_change_credentials) {
+      await router.replace('/change-credentials')
+      return
+    }
     const redirect = typeof route.query.redirect === 'string' ? route.query.redirect : '/'
     await router.replace(redirect)
   } catch (error) {
@@ -35,22 +42,25 @@ async function submit() {
 <template>
   <div class="auth-page">
     <section class="auth-card">
-      <span class="eyebrow">Secure Console</span>
-      <h1 class="hero-title">登录控制台</h1>
+      <div class="auth-topbar">
+        <span class="eyebrow">{{ t('secureConsole') }}</span>
+        <LanguageSwitch />
+      </div>
+      <h1 class="hero-title">{{ t('loginTitle') }}</h1>
       <p class="hero-copy">
-        使用管理员账号进入多协议订阅工作台。登录后可以管理节点、订阅、模板和客户端导出。
+        {{ t('loginCopy') }}
       </p>
 
       <form class="form-grid" @submit.prevent="submit">
         <div v-if="errorMessage" class="error-banner">{{ errorMessage }}</div>
 
         <div>
-          <label class="field-label" for="username">用户名</label>
+          <label class="field-label" for="username">{{ t('username') }}</label>
           <input id="username" v-model.trim="form.username" class="input" autocomplete="username" />
         </div>
 
         <div>
-          <label class="field-label" for="password">密码</label>
+          <label class="field-label" for="password">{{ t('password') }}</label>
           <input
             id="password"
             v-model="form.password"
@@ -61,12 +71,11 @@ async function submit() {
         </div>
 
         <button class="button button-accent" type="submit" :disabled="loading">
-          {{ loading ? '正在登录...' : '进入后台' }}
+          {{ loading ? t('loggingIn') : t('enterAdmin') }}
         </button>
 
         <div class="hint">
-          默认账号来自后端环境变量 <code>BOOTSTRAP_ADMIN_USERNAME</code> 和
-          <code>BOOTSTRAP_ADMIN_PASSWORD</code>。
+          {{ t('loginHintDefault') }}
         </div>
       </form>
     </section>

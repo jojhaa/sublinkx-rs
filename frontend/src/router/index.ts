@@ -11,6 +11,11 @@ const router = createRouter({
       meta: { public: true },
     },
     {
+      path: '/change-credentials',
+      name: 'changeCredentials',
+      component: () => import('../views/ChangeCredentialsView.vue'),
+    },
+    {
       path: '/',
       component: () => import('../layouts/AppShell.vue'),
       children: [
@@ -60,8 +65,16 @@ router.beforeEach(async (to) => {
     }
   }
 
-  if (to.name === 'login' && auth.token) {
+  if (auth.token && auth.user?.must_change_credentials && to.name !== 'changeCredentials') {
+    return { name: 'changeCredentials' }
+  }
+
+  if (auth.token && !auth.user?.must_change_credentials && to.name === 'changeCredentials') {
     return { name: 'dashboard' }
+  }
+
+  if (to.name === 'login' && auth.token) {
+    return { name: auth.user?.must_change_credentials ? 'changeCredentials' : 'dashboard' }
   }
 
   return true

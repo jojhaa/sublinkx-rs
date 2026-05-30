@@ -6,6 +6,14 @@ pub struct LoginRequest {
     pub password: String,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct ChangeCredentialsRequest {
+    pub username: String,
+    pub current_password: String,
+    pub new_password: String,
+    pub confirm_password: String,
+}
+
 #[derive(Debug, Serialize)]
 pub struct LoginResponse {
     pub code: &'static str,
@@ -17,6 +25,7 @@ pub struct LoginTokenData {
     pub access_token: String,
     pub token_type: &'static str,
     pub expires_in_hours: i64,
+    pub user: MeData,
 }
 
 #[derive(Debug, Serialize)]
@@ -32,4 +41,5 @@ pub struct MeData {
     pub nickname: String,
     pub role: String,
     pub status: String,
+    pub must_change_credentials: bool,
 }

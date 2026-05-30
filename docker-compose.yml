@@ -1,0 +1,36 @@
+services:
+  backend:
+    image: ${BACKEND_IMAGE:-docker.io/jojhaa/sublinkx-rs-backend:latest}
+    restart: unless-stopped
+    environment:
+      APP_ENV: production
+      APP_PORT: 8080
+      DATABASE_URL: sqlite:///app/data/app.db
+      JWT_SECRET: ${JWT_SECRET:-change-me-in-production}
+      JWT_EXP_HOURS: ${JWT_EXP_HOURS:-24}
+      BOOTSTRAP_ADMIN_USERNAME: ${BOOTSTRAP_ADMIN_USERNAME:-admin}
+      BOOTSTRAP_ADMIN_PASSWORD: ${BOOTSTRAP_ADMIN_PASSWORD:-admin123456}
+    volumes:
+      - ${BACKEND_DATA_DIR:-./docker-data/backend}:/app/data
+      - ${MIHOMO_CORE_DIR:-./docker-data/mihomo}:/app/mihomo
+    expose:
+      - "8080"
+    networks:
+      - sublinkx_net
+
+  frontend:
+    image: ${FRONTEND_IMAGE:-docker.io/jojhaa/sublinkx-rs-frontend:latest}
+    restart: unless-stopped
+    depends_on:
+      - backend
+    ports:
+      - "${FRONTEND_PORT:-3000}:80"
+    networks:
+      - sublinkx_net
+
+networks:
+  sublinkx_net:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: ${SUBLINKX_DOCKER_SUBNET:-172.31.88.0/24}

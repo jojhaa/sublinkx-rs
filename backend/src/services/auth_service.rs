@@ -6,7 +6,9 @@ use time::{Duration, OffsetDateTime};
 
 use crate::{
     domain::user::User,
-    dto::auth::{LoginRequest, LoginResponse, LoginTokenData, MeData, MeResponse},
+    dto::auth::{
+        ChangeCredentialsRequest, LoginRequest, LoginResponse, LoginTokenData, MeData, MeResponse,
+    },
     errors::AppError,
     repository::user_repo,
     state::AppState,
@@ -45,31 +47,115 @@ pub async fn login(state: &AppState, payload: LoginRequest) -> Result<LoginRespo
             access_token,
             token_type: "Bearer",
             expires_in_hours: state.config.security.jwt_exp_hours,
+            user: user_to_me_data(user),
         },
     })
 }
 
 pub async fn current_user(state: &AppState, headers: &HeaderMap) -> Result<MeResponse, AppError> {
-    let user = require_user(state, headers).await?;
+    let user = require_user_for_credentials_change(state, headers).await?;
 
     Ok(MeResponse {
         code: "00000",
-        data: MeData {
-            user_id: user.id,
-            username: user.username,
-            nickname: user.nickname,
-            role: user.role,
-            status: user.status,
-        },
+        data: user_to_me_data(user),
+    })
+}
+
+pub async fn change_credentials(
+    state: &AppState,
+    headers: &HeaderMap,
+    payload: ChangeCredentialsRequest,
+) -> Result<MeResponse, AppError> {
+    let user = require_user_for_credentials_change(state, headers).await?;
+    let username = payload.username.trim();
+
+    if username.is_empty() || payload.current_password.is_empty() || payload.new_password.is_empty()
+    {
+        return Err(AppError::BadRequest(
+            "username, current password and new password are required".to_string(),
+        ));
+    }
+    if payload.new_password != payload.confirm_password {
+        return Err(AppError::BadRequest(
+            "new password confirmation does not match".to_string(),
+        ));
+    }
+    if payload.new_password.len() < 8 {
+        return Err(AppError::BadRequest(
+            "new password must be at least 8 characters".to_string(),
+        ));
+    }
+    if username == user.username {
+        return Err(AppError::BadRequest(
+            "new username must be different from the current username".to_string(),
+        ));
+    }
+    if payload.new_password == payload.current_password {
+        return Err(AppError::BadRequest(
+            "new password must be different from the current password".to_string(),
+        ));
+    }
+    if username == "admin" || payload.new_password == "admin123456" {
+        return Err(AppError::BadRequest(
+            "default username and password must be changed".to_string(),
+        ));
+    }
+
+    verify_password(&payload.current_password, &user.password_hash)?;
+
+    if user_repo::username_exists_for_other_user(&state.db, username, user.id).await? {
+        return Err(AppError::BadRequest("username already exists".to_string()));
+    }
+
+    let password_hash = user_repo::hash_password(&payload.new_password)?;
+    user_repo::update_credentials(&state.db, user.id, username, &password_hash).await?;
+
+    let user = user_repo::find_by_id(&state.db, user.id)
+        .await?
+        .ok_or(AppError::Unauthorized)?;
+
+    Ok(MeResponse {
+        code: "00000",
+        data: user_to_me_data(user),
     })
 }
 
 pub async fn require_user(state: &AppState, headers: &HeaderMap) -> Result<User, AppError> {
+    let user = require_user_for_credentials_change(state, headers).await?;
+    if user.must_change_credentials != 0 {
+        return Err(AppError::Forbidden(
+            "credentials change required before continuing".to_string(),
+        ));
+    }
+
+    Ok(user)
+}
+
+pub async fn require_user_for_credentials_change(
+    state: &AppState,
+    headers: &HeaderMap,
+) -> Result<User, AppError> {
     let claims = decode_bearer_token(headers, &state.config.security.jwt_secret)?;
 
-    user_repo::find_by_id(&state.db, claims.sub)
+    let user = user_repo::find_by_id(&state.db, claims.sub)
         .await?
-        .ok_or(AppError::Unauthorized)
+        .ok_or(AppError::Unauthorized)?;
+    if user.status != "active" {
+        return Err(AppError::Unauthorized);
+    }
+
+    Ok(user)
+}
+
+fn user_to_me_data(user: User) -> MeData {
+    MeData {
+        user_id: user.id,
+        username: user.username,
+        nickname: user.nickname,
+        role: user.role,
+        status: user.status,
+        must_change_credentials: user.must_change_credentials != 0,
+    }
 }
 
 fn verify_password(password: &str, password_hash: &str) -> Result<(), AppError> {

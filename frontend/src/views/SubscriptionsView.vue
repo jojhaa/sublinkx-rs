@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { extractApiError } from '../api/client'
+import { useI18n } from '../i18n'
 import { listNodes, type NodeItem } from '../api/nodes'
 import { listTemplates, type TemplateItem } from '../api/templates'
 import {
@@ -20,6 +21,8 @@ import {
   updateSubscriptionGroup,
   type GroupItem,
 } from '../api/groups'
+
+const { t } = useI18n()
 
 type ExportTarget =
   | 'clash'
@@ -236,24 +239,24 @@ const canSubmitSubscription = computed(
 )
 const selectedTemplateMessage = computed(() => {
   if (!selectedTemplate.value) {
-    return '当前订阅按默认导出器生成，不套用模板。'
+    return t('defaultExporterTemplateMessage')
   }
 
   if (usesUpstreamRawTemplate.value) {
-    return '这是上游原始模板，可不选择节点，Clash/Mihomo 导出时会原样透传。'
+    return t('upstreamRawTemplateMessage')
   }
 
   return templateAppliesToTarget(selectedTemplate.value, form.default_client)
-    ? `${selectedTemplate.value.kind} 模板会参与 ${currentTargetLabel.value} 导出。`
-    : `${selectedTemplate.value.kind} 模板当前不会参与 ${currentTargetLabel.value} 导出。`
+    ? t('templateApplies', { kind: selectedTemplate.value.kind, target: currentTargetLabel.value })
+    : t('templateNotApplies', { kind: selectedTemplate.value.kind, target: currentTargetLabel.value })
 })
 const submitLabel = computed(() => {
   if (saving.value) {
-    return isEditing.value ? '保存中...' : '创建中...'
+    return isEditing.value ? t('saving') : t('creating')
   }
-  return isEditing.value ? '保存订阅' : '创建订阅'
+  return isEditing.value ? t('saveSubscription') : t('createSubscription')
 })
-const groupSubmitLabel = computed(() => (isEditingGroup.value ? '保存分组' : '创建分组'))
+const groupSubmitLabel = computed(() => (isEditingGroup.value ? t('saveGroup') : t('createGroup')))
 
 watch([filteredSubscriptions, pageSize], () => {
   page.value = Math.min(page.value, pageCount.value)
@@ -289,13 +292,13 @@ function compatibilityWarning(item: SubscriptionItem, target: ExportTarget) {
   if (count === 0) {
     return ''
   }
-  return exportMode.value === 'strict' ? `${count} 个节点不兼容，strict 会失败` : `${count} 个节点不兼容，best_effort 会跳过`
+  return exportMode.value === 'strict' ? t('incompatibleStrict', { count }) : t('incompatibleBestEffort', { count })
 }
 
 function openCompatibilityDetail(item: SubscriptionItem, target: ExportTarget) {
   const summary = subscriptionCompatibility(item, target)
   compatibilityDetail.value = {
-    title: `${TARGET_LABELS[target]} 兼容详情`,
+    title: t('compatibilityDetail', { target: TARGET_LABELS[target] }),
     message: compatibilityWarning(item, target),
     nodes: summary.unsupportedNodes,
   }
@@ -344,9 +347,9 @@ function subscriptionStatus(item: SubscriptionItem) {
 
 function subscriptionStatusLabel(item: SubscriptionItem) {
   const status = subscriptionStatus(item)
-  if (status === 'expired') return '过期'
-  if (status === 'disabled') return '停用'
-  return '启用'
+  if (status === 'expired') return t('expired')
+  if (status === 'disabled') return t('disabled')
+  return t('active')
 }
 
 function subscriptionStatusClass(item: SubscriptionItem) {
@@ -358,7 +361,7 @@ function subscriptionStatusClass(item: SubscriptionItem) {
 
 function formatExpiry(value: string | null) {
   if (!value) {
-    return '长期有效'
+    return t('longTerm')
   }
   const date = new Date(value)
   if (Number.isNaN(date.getTime())) {
@@ -405,7 +408,7 @@ async function copyText(text: string, message: string) {
     await navigator.clipboard.writeText(text)
     successMessage.value = message
   } catch {
-    errorMessage.value = '复制失败，请手动选中链接复制。'
+    errorMessage.value = t('copyFailed')
   }
 }
 
@@ -418,16 +421,16 @@ function normalizeTarget(target: string | null | undefined): ExportTarget {
 
 function groupName(groupId: number | null) {
   if (groupId === null) {
-    return '未分组'
+    return t('ungrouped')
   }
-  return groups.value.find((item) => item.id === groupId)?.name ?? `分组 #${groupId}`
+  return groups.value.find((item) => item.id === groupId)?.name ?? t('groupFallback', { id: groupId })
 }
 
 function nodeGroupName(groupId: number | null) {
   if (groupId === null) {
-    return '未分组'
+    return t('ungrouped')
   }
-  return nodeGroups.value.find((item) => item.id === groupId)?.name ?? `节点分组 #${groupId}`
+  return nodeGroups.value.find((item) => item.id === groupId)?.name ?? t('nodeGroupFallback', { id: groupId })
 }
 
 function nodeLatencyText(item: NodeItem) {
@@ -435,12 +438,12 @@ function nodeLatencyText(item: NodeItem) {
     return `${item.last_latency_ms} ms`
   }
   if (item.last_latency_status === 'timeout') {
-    return '超时'
+    return t('timeout')
   }
   if (item.last_latency_status === 'error') {
-    return '不可用'
+    return t('unavailable')
   }
-  return '未测速'
+  return t('untested')
 }
 
 function nodeLatencyClass(item: NodeItem) {
@@ -456,7 +459,7 @@ function nodeLatencyClass(item: NodeItem) {
 function nodeLatencyTitle(item: NodeItem) {
   const parts = [nodeLatencyText(item)]
   if (item.last_latency_tested_at) {
-    parts.push(`最后测速：${formatExpiry(item.last_latency_tested_at)}`)
+    parts.push(t('lastLatency', { time: formatExpiry(item.last_latency_tested_at) }))
   }
   if (item.last_latency_message) {
     parts.push(item.last_latency_message)
@@ -466,9 +469,9 @@ function nodeLatencyTitle(item: NodeItem) {
 
 function templateName(templateId: number | null) {
   if (templateId === null) {
-    return '未指定模板'
+    return t('unspecifiedTemplate')
   }
-  return templates.value.find((item) => item.id === templateId)?.name ?? `模板 #${templateId}`
+  return templates.value.find((item) => item.id === templateId)?.name ?? t('templateFallback', { id: templateId })
 }
 
 function isUpstreamRawTemplate(template: TemplateItem | null) {
@@ -631,10 +634,10 @@ async function submit() {
 
     if (editingId.value !== null) {
       await updateSubscription(editingId.value, payload)
-      successMessage.value = '订阅已更新。'
+      successMessage.value = t('subscriptionUpdated')
     } else {
       await createSubscription(payload)
-      successMessage.value = '订阅已创建。'
+      successMessage.value = t('subscriptionCreated')
     }
 
     closeEditor()
@@ -670,7 +673,10 @@ async function moveSelectedSubscriptions() {
         }),
       ),
     )
-    successMessage.value = `已移动 ${selectedSubscriptions.value.length} 个订阅到「${groupName(batchGroupId.value)}」。`
+    successMessage.value = t('subscriptionsMoved', {
+      count: selectedSubscriptions.value.length,
+      group: groupName(batchGroupId.value),
+    })
     clearSelection()
     await load()
   } catch (error) {
@@ -689,10 +695,10 @@ async function submitGroup() {
     const payload = { name: groupForm.name, sort_order: groupForm.sort_order }
     if (editingGroupId.value !== null) {
       await updateSubscriptionGroup(editingGroupId.value, payload)
-      successMessage.value = '订阅分组已更新。'
+      successMessage.value = t('subscriptionGroupUpdated')
     } else {
       await createSubscriptionGroup(payload)
-      successMessage.value = '订阅分组已创建。'
+      successMessage.value = t('subscriptionGroupCreated')
     }
     resetGroupForm()
     await load()
@@ -706,7 +712,7 @@ async function submitGroup() {
 async function rotateToken(id: number) {
   try {
     await rotateSubscriptionToken(id)
-    successMessage.value = '订阅 token 已轮换。'
+    successMessage.value = t('tokenRotated')
     await load()
   } catch (error) {
     errorMessage.value = extractApiError(error)
@@ -725,7 +731,7 @@ async function toggleSubscriptionEnabled(item: SubscriptionItem) {
       expires_at: item.expires_at,
       node_ids: item.node_ids,
     })
-    successMessage.value = item.enabled ? '订阅已停用。' : '订阅已启用。'
+    successMessage.value = item.enabled ? t('subscriptionDisabled') : t('subscriptionEnabled')
     await load()
   } catch (error) {
     errorMessage.value = extractApiError(error)
@@ -735,7 +741,7 @@ async function toggleSubscriptionEnabled(item: SubscriptionItem) {
 async function renew(item: SubscriptionItem, days = 30) {
   try {
     await renewSubscription(item.id, days)
-    successMessage.value = `已为「${item.name}」续期 ${days} 天。`
+    successMessage.value = t('renewedDays', { name: item.name, days })
     await load()
   } catch (error) {
     errorMessage.value = extractApiError(error)
@@ -743,7 +749,7 @@ async function renew(item: SubscriptionItem, days = 30) {
 }
 
 async function removeSubscription(id: number) {
-  if (!window.confirm('确定删除这个订阅吗？')) {
+  if (!window.confirm(t('confirmDeleteSubscription'))) {
     return
   }
 
@@ -753,7 +759,7 @@ async function removeSubscription(id: number) {
       closeEditor()
     }
     selectedIds.value = selectedIds.value.filter((item) => item !== id)
-    successMessage.value = '订阅已删除。'
+    successMessage.value = t('subscriptionDeleted')
     await load()
   } catch (error) {
     errorMessage.value = extractApiError(error)
@@ -761,7 +767,7 @@ async function removeSubscription(id: number) {
 }
 
 async function removeGroup(id: number) {
-  if (!window.confirm('确定删除这个分组吗？')) {
+  if (!window.confirm(t('confirmDeleteSubscriptionGroup'))) {
     return
   }
 
@@ -773,7 +779,7 @@ async function removeGroup(id: number) {
     if (batchGroupId.value === id) {
       batchGroupId.value = null
     }
-    successMessage.value = '订阅分组已删除。'
+    successMessage.value = t('subscriptionGroupDeleted')
     await load()
   } catch (error) {
     errorMessage.value = extractApiError(error)
@@ -788,26 +794,24 @@ onMounted(load)
     <header class="page-header">
       <div>
         <span class="eyebrow">Subscriptions</span>
-        <h2 class="page-title">订阅管理</h2>
-        <p class="page-copy">
-          共 {{ subscriptions.length }} 个订阅，{{ groups.length }} 个分组，当前导出策略为 {{ currentModeLabel }}。
-        </p>
+        <h2 class="page-title">{{ t('subscriptions') }}</h2>
+        <p class="page-copy">{{ t('subscriptionsCopy') }}</p>
       </div>
       <div class="inline-actions">
-        <select v-model="groupFilter" class="select toolbar-select" aria-label="订阅分组筛选">
-          <option value="all">全部分组</option>
-          <option value="none">未分组</option>
+        <select v-model="groupFilter" class="select toolbar-select" :aria-label="t('subscriptionGroup')">
+          <option value="all">{{ t('allGroups') }}</option>
+          <option value="none">{{ t('ungrouped') }}</option>
           <option v-for="group in groups" :key="group.id" :value="group.id">{{ group.name }}</option>
         </select>
-        <select v-model="exportMode" class="select toolbar-select" aria-label="导出策略">
+        <select v-model="exportMode" class="select toolbar-select" :aria-label="t('exportStrategy')">
           <option value="strict">strict</option>
           <option value="best_effort">best_effort</option>
         </select>
         <button class="button button-ghost" type="button" :disabled="loading" @click="load">
-          {{ loading ? '刷新中...' : '刷新' }}
+          {{ loading ? t('refreshing') : t('refresh') }}
         </button>
-        <button class="button button-ghost" type="button" @click="openGroupEditor">分组管理</button>
-        <button class="button button-accent" type="button" @click="openCreate">创建订阅</button>
+        <button class="button button-ghost" type="button" @click="openGroupEditor">{{ t('groupManagement') }}</button>
+        <button class="button button-accent" type="button" @click="openCreate">{{ t('createSubscription') }}</button>
       </div>
     </header>
 
@@ -817,22 +821,22 @@ onMounted(load)
     <article class="card stack management-card">
       <div class="section-bar">
         <div>
-          <div class="hint">订阅列表</div>
-          <p class="card-copy">当前筛选 {{ filteredSubscriptions.length }} 个，已选择 {{ selectedCount }} 个。</p>
+          <div class="hint">{{ t('subscriptionList') }}</div>
+          <p class="card-copy">{{ t('subscriptionListSummary', { filtered: filteredSubscriptions.length, selected: selectedCount }) }}</p>
         </div>
         <div class="inline-actions bulk-actions">
-          <select v-model="batchGroupId" class="select toolbar-select" aria-label="批量移动到分组">
-            <option :value="null">移动到未分组</option>
+          <select v-model="batchGroupId" class="select toolbar-select" :aria-label="t('moveGroup')">
+            <option :value="null">{{ t('moveToUngrouped') }}</option>
             <option v-for="group in groups" :key="group.id" :value="group.id">{{ group.name }}</option>
           </select>
-          <button class="button button-ghost" type="button" :disabled="selectedCount === 0" @click="clearSelection">清空选择</button>
+          <button class="button button-ghost" type="button" :disabled="selectedCount === 0" @click="clearSelection">{{ t('clearSelection') }}</button>
           <button class="button button-accent" type="button" :disabled="saving || selectedCount === 0" @click="moveSelectedSubscriptions">
-            移动分组
+            {{ t('moveGroup') }}
           </button>
         </div>
       </div>
 
-      <div v-if="filteredSubscriptions.length === 0" class="empty-state">这个分组下还没有订阅。</div>
+      <div v-if="filteredSubscriptions.length === 0" class="empty-state">{{ t('emptySubscriptions') }}</div>
 
       <div v-else class="table-wrap subscription-board">
         <table class="table dense-table selectable-table subscription-table">
@@ -842,13 +846,13 @@ onMounted(load)
                 <input
                   type="checkbox"
                   :checked="currentPageSelected"
-                  :aria-label="currentPageSelected ? '取消全选当前页' : '全选当前页'"
+                  :aria-label="currentPageSelected ? t('unselectCurrentPage') : t('selectCurrentPage')"
                   @change="toggleCurrentPage(($event.target as HTMLInputElement).checked)"
                 />
               </th>
-              <th>订阅</th>
-              <th>出口</th>
-              <th>操作</th>
+              <th>{{ t('subscription') }}</th>
+              <th>{{ t('outlet') }}</th>
+              <th>{{ t('actions') }}</th>
             </tr>
           </thead>
           <tbody>
@@ -858,7 +862,7 @@ onMounted(load)
               :class="{ 'row-selected': selectedIds.includes(item.id) }"
             >
               <td class="selection-cell">
-                <input v-model="selectedIds" :value="item.id" type="checkbox" :aria-label="`选择 ${item.name}`" />
+                <input v-model="selectedIds" :value="item.id" type="checkbox" :aria-label="t('selectSubscription', { name: item.name })" />
               </td>
               <td class="subscription-name-cell">
                 <div class="subscription-title-row">
@@ -868,12 +872,12 @@ onMounted(load)
                   </span>
                 </div>
                 <div class="subscription-inline-meta">
-                  <span>{{ item.description || '无描述' }}</span>
+                  <span>{{ item.description || t('noDescription') }}</span>
                   <code class="compact-token">{{ item.token }}</code>
                 </div>
                 <div class="subscription-chip-rail">
                   <span class="status-badge status-badge-neutral">{{ groupName(item.group_id) }}</span>
-                  <span class="metric-chip">{{ item.node_ids.length }} 节点</span>
+                  <span class="metric-chip">{{ t('nodesUnit', { count: item.node_ids.length }) }}</span>
                   <span class="metric-chip" :class="{ 'metric-chip-warn': subscriptionStatus(item) === 'expired' }">
                     {{ formatExpiry(item.expires_at) }}
                   </span>
@@ -884,28 +888,28 @@ onMounted(load)
               </td>
               <td class="subscription-export-cell">
                 <div class="inline-meter">
-                  <span class="metric-chip">默认 {{ TARGET_LABELS[defaultTarget(item)] }}</span>
-                  <span class="status-badge status-badge-ok">{{ healthyExportCount(item) }} 可用</span>
+                  <span class="metric-chip">{{ t('defaultClient', { client: TARGET_LABELS[defaultTarget(item)] }) }}</span>
+                  <span class="status-badge status-badge-ok">{{ t('available', { count: healthyExportCount(item) }) }}</span>
                   <span v-if="warningExportCount(item) > 0" class="status-badge status-badge-warn">
-                    {{ warningExportCount(item) }} 警告
+                    {{ t('warnings', { count: warningExportCount(item) }) }}
                   </span>
-                  <button class="button button-ghost button-compact" type="button" @click="copyText(autoSubscriptionLink(item), '自动识别订阅链接已复制。')">
-                    复制
+                  <button class="button button-ghost button-compact" type="button" @click="copyText(autoSubscriptionLink(item), t('autoLinkCopied'))">
+                    {{ t('copy') }}
                   </button>
                   <button class="button button-accent button-compact" type="button" @click="openExportConsole(item)">
-                    导出
+                    {{ t('export') }}
                   </button>
                 </div>
               </td>
               <td>
                 <div class="inline-actions row-actions">
-                  <button class="button button-ghost button-compact" type="button" @click="startEdit(item)">编辑</button>
+                  <button class="button button-ghost button-compact" type="button" @click="startEdit(item)">{{ t('edit') }}</button>
                   <button class="button button-ghost button-compact" type="button" @click="toggleSubscriptionEnabled(item)">
-                    {{ item.enabled ? '停用' : '启用' }}
+                    {{ item.enabled ? t('disabled') : t('enabled') }}
                   </button>
-                  <button class="button button-ghost button-compact" type="button" @click="renew(item, 30)">续30天</button>
-                  <button class="button button-ghost button-compact" type="button" @click="rotateToken(item.id)">轮换</button>
-                  <button class="button button-danger button-compact" type="button" @click="removeSubscription(item.id)">删除</button>
+                  <button class="button button-ghost button-compact" type="button" @click="renew(item, 30)">{{ t('renew30Days') }}</button>
+                  <button class="button button-ghost button-compact" type="button" @click="rotateToken(item.id)">{{ t('rotate') }}</button>
+                  <button class="button button-danger button-compact" type="button" @click="removeSubscription(item.id)">{{ t('delete') }}</button>
                 </div>
               </td>
             </tr>
@@ -914,13 +918,13 @@ onMounted(load)
       </div>
 
       <footer class="pagination-bar">
-        <span class="hint">第 {{ page }} / {{ pageCount }} 页</span>
-        <select v-model.number="pageSize" class="select page-size-select" aria-label="每页数量">
-          <option v-for="size in PAGE_SIZE_OPTIONS" :key="size" :value="size">每页 {{ size }}</option>
+        <span class="hint">{{ t('pageLabel', { page, count: pageCount }) }}</span>
+        <select v-model.number="pageSize" class="select page-size-select" :aria-label="t('pageSize', { size: pageSize })">
+          <option v-for="size in PAGE_SIZE_OPTIONS" :key="size" :value="size">{{ t('pageSize', { size }) }}</option>
         </select>
         <div class="inline-actions">
-          <button class="button button-ghost button-compact" type="button" :disabled="page <= 1" @click="page -= 1">上一页</button>
-          <button class="button button-ghost button-compact" type="button" :disabled="page >= pageCount" @click="page += 1">下一页</button>
+          <button class="button button-ghost button-compact" type="button" :disabled="page <= 1" @click="page -= 1">{{ t('previousPage') }}</button>
+          <button class="button button-ghost button-compact" type="button" :disabled="page >= pageCount" @click="page += 1">{{ t('nextPage') }}</button>
         </div>
       </footer>
     </article>
@@ -931,34 +935,34 @@ onMounted(load)
           <header class="modal-header">
             <div>
               <span class="eyebrow">{{ isEditing ? 'Edit Subscription' : 'New Subscription' }}</span>
-              <h3>{{ isEditing ? '编辑订阅' : '创建订阅' }}</h3>
+              <h3>{{ isEditing ? t('editSubscription') : t('createSubscription') }}</h3>
             </div>
-            <button class="icon-button" type="button" aria-label="关闭" @click="closeEditor">×</button>
+            <button class="icon-button" type="button" :aria-label="t('close')" @click="closeEditor">×</button>
           </header>
 
           <form class="form-grid" @submit.prevent="submit">
             <div class="form-columns">
               <div class="stack">
                 <div>
-                  <label class="field-label" for="subscription-name">订阅名称</label>
-                  <input id="subscription-name" v-model.trim="form.name" class="input" placeholder="例如：主力线路" />
+                  <label class="field-label" for="subscription-name">{{ t('subscriptionName') }}</label>
+                  <input id="subscription-name" v-model.trim="form.name" class="input" :placeholder="t('subscriptionNamePlaceholder')" />
                 </div>
 
                 <div>
-                  <label class="field-label" for="subscription-group">订阅分组</label>
+                  <label class="field-label" for="subscription-group">{{ t('subscriptionGroup') }}</label>
                   <select id="subscription-group" v-model="form.group_id" class="select">
-                    <option :value="null">未分组</option>
+                    <option :value="null">{{ t('ungrouped') }}</option>
                     <option v-for="group in groups" :key="group.id" :value="group.id">{{ group.name }}</option>
                   </select>
                 </div>
 
                 <div>
-                  <label class="field-label" for="subscription-description">描述</label>
-                  <textarea id="subscription-description" v-model.trim="form.description" class="textarea" placeholder="可选" />
+                  <label class="field-label" for="subscription-description">{{ t('description') }}</label>
+                  <textarea id="subscription-description" v-model.trim="form.description" class="textarea" :placeholder="t('optional')" />
                 </div>
 
                 <div>
-                  <label class="field-label" for="subscription-client">默认客户端</label>
+                  <label class="field-label" for="subscription-client">{{ t('defaultClientLabel') }}</label>
                   <select id="subscription-client" v-model="form.default_client" class="select">
                     <option v-for="target in exportTargets" :key="target" :value="target">
                       {{ TARGET_LABELS[target] }}
@@ -967,23 +971,23 @@ onMounted(load)
                 </div>
 
                 <div>
-                  <label class="field-label" for="subscription-expires-at">到期时间</label>
+                  <label class="field-label" for="subscription-expires-at">{{ t('expiresAt') }}</label>
                   <input id="subscription-expires-at" v-model="form.expires_at" class="input" type="datetime-local" />
                   <div class="quick-expiry-row">
-                    <button class="button button-ghost button-compact" type="button" @click="setExpiryDays(15)">15天</button>
-                    <button class="button button-ghost button-compact" type="button" @click="setExpiryDays(30)">30天</button>
-                    <button class="button button-ghost button-compact" type="button" @click="setExpiryDays(90)">90天</button>
-                    <button class="button button-ghost button-compact" type="button" @click="setExpiryDays(180)">180天</button>
-                    <button class="button button-ghost button-compact" type="button" @click="setExpiryDays(365)">365天</button>
-                    <button class="button button-ghost button-compact" type="button" @click="form.expires_at = ''">长期</button>
+                    <button class="button button-ghost button-compact" type="button" @click="setExpiryDays(15)">{{ t('days15') }}</button>
+                    <button class="button button-ghost button-compact" type="button" @click="setExpiryDays(30)">{{ t('days30') }}</button>
+                    <button class="button button-ghost button-compact" type="button" @click="setExpiryDays(90)">{{ t('days90') }}</button>
+                    <button class="button button-ghost button-compact" type="button" @click="setExpiryDays(180)">{{ t('days180') }}</button>
+                    <button class="button button-ghost button-compact" type="button" @click="setExpiryDays(365)">{{ t('days365') }}</button>
+                    <button class="button button-ghost button-compact" type="button" @click="form.expires_at = ''">{{ t('longTermButton') }}</button>
                   </div>
-                  <div class="hint template-kind-hint">留空表示长期有效；过期后订阅链接会停止导出。</div>
+                  <div class="hint template-kind-hint">{{ t('expiryHint') }}</div>
                 </div>
 
                 <div>
-                  <label class="field-label" for="subscription-template">关联模板</label>
+                  <label class="field-label" for="subscription-template">{{ t('templateLabel') }}</label>
                   <select id="subscription-template" v-model="form.template_id" class="select">
-                    <option :value="null">不使用模板</option>
+                    <option :value="null">{{ t('noTemplate') }}</option>
                     <option v-for="item in templates" :key="item.id" :value="item.id">
                       {{ item.name }} · {{ item.kind }}
                     </option>
@@ -996,8 +1000,8 @@ onMounted(load)
                 <label class="checkbox-item">
                   <input v-model="form.enabled" type="checkbox" />
                   <span>
-                    <strong>启用订阅</strong>
-                    <div class="muted">关闭后保留记录，但不建议继续分发给客户端。</div>
+                    <strong>{{ t('enableSubscription') }}</strong>
+                    <div class="muted">{{ t('enableSubscriptionHint') }}</div>
                   </span>
                 </label>
 
@@ -1007,7 +1011,7 @@ onMounted(load)
                     <span class="status-badge status-badge-neutral">Clash/Mihomo</span>
                   </div>
                   <p class="compat-copy compat-copy-ok">
-                    当前订阅会直接使用上游原始模板导出，可以不选择节点。
+                    {{ t('rawTemplateExportHint') }}
                   </p>
                 </div>
 
@@ -1017,7 +1021,7 @@ onMounted(load)
                       {{ currentTargetLabel }}
                     </span>
                     <span class="status-badge status-badge-neutral">{{ currentModeLabel }}</span>
-                    <span class="hint">{{ formCompatibility.supportedCount }}/{{ formCompatibility.totalCount }} 可导出</span>
+                    <span class="hint">{{ formCompatibility.supportedCount }}/{{ formCompatibility.totalCount }} {{ t('exportable') }}</span>
                   </div>
                   <p v-if="formCompatibility.unsupportedNodes.length > 0" class="compat-copy compat-copy-warn">
                     {{ formatUnsupportedNodes(formCompatibility.unsupportedNodes) }}
@@ -1028,10 +1032,10 @@ onMounted(load)
                   <div class="selected-node-panel">
                     <div class="selected-node-panel-head">
                       <div>
-                        <strong>已选节点</strong>
+                        <strong>{{ t('selectedNodes') }}</strong>
                         <span class="hint">
-                          {{ selectedNodeCount }} 个
-                          <template v-if="missingSelectedNodeCount > 0">，{{ missingSelectedNodeCount }} 个节点已不存在</template>
+                          {{ t('nodesUnit', { count: selectedNodeCount }) }}
+                          <template v-if="missingSelectedNodeCount > 0">{{ t('missingNodes', { count: missingSelectedNodeCount }) }}</template>
                         </span>
                       </div>
                       <button
@@ -1040,45 +1044,45 @@ onMounted(load)
                         :disabled="selectedNodeCount === 0"
                         @click="clearFormNodes"
                       >
-                        清空已选
+                        {{ t('clearSelectedNodes') }}
                       </button>
                     </div>
-                    <div v-if="selectedFormNodes.length === 0" class="hint">还没有选择节点，可以在下方筛选后勾选。</div>
+                    <div v-if="selectedFormNodes.length === 0" class="hint">{{ t('noSelectedNodes') }}</div>
                     <div v-else class="selected-node-chip-list">
                       <span v-for="item in selectedFormNodes" :key="item.id" class="selected-node-chip">
                         <span class="selected-node-chip-main">
                           <strong>{{ item.name }}</strong>
                           <small>{{ item.protocol }} · {{ nodeLatencyText(item) }}</small>
                         </span>
-                        <button type="button" aria-label="移除节点" @click="removeFormNode(item.id)">×</button>
+                        <button type="button" :aria-label="t('removeNode')" @click="removeFormNode(item.id)">×</button>
                       </span>
                     </div>
                   </div>
 
                   <div class="node-picker-toolbar">
                     <div>
-                      <label class="field-label" for="subscription-node-group">节点分组筛选</label>
+                      <label class="field-label" for="subscription-node-group">{{ t('nodeGroupFilter') }}</label>
                       <select id="subscription-node-group" v-model="nodeGroupFilter" class="select">
-                        <option value="all">全部节点分组</option>
-                        <option value="none">未分组节点</option>
+                        <option value="all">{{ t('allNodeGroups') }}</option>
+                        <option value="none">{{ t('ungroupedNodes') }}</option>
                         <option v-for="group in nodeGroups" :key="group.id" :value="group.id">{{ group.name }}</option>
                       </select>
                     </div>
                     <div>
-                      <label class="field-label" for="subscription-node-health">链接状态</label>
+                      <label class="field-label" for="subscription-node-health">{{ t('linkStatus') }}</label>
                       <select id="subscription-node-health" v-model="nodeHealthFilter" class="select">
-                        <option value="all">全部显示</option>
-                        <option value="ok">只显示正常链接</option>
+                        <option value="all">{{ t('showAll') }}</option>
+                        <option value="ok">{{ t('showHealthyOnly') }}</option>
                       </select>
                     </div>
                     <div>
-                      <label class="field-label" for="subscription-node-search">搜索节点</label>
+                      <label class="field-label" for="subscription-node-search">{{ t('searchNodes') }}</label>
                       <input
                         id="subscription-node-search"
                         v-model.trim="nodeSearch"
                         class="input"
                         type="search"
-                        placeholder="名称 / 协议 / 地址 / 分组"
+                        :placeholder="t('searchPlaceholder')"
                       />
                     </div>
                     <button
@@ -1087,7 +1091,7 @@ onMounted(load)
                       :disabled="filteredFormNodes.length === 0"
                       @click="toggleFilteredNodes(true)"
                     >
-                      选中当前分组
+                      {{ t('selectCurrentGroup') }}
                     </button>
                     <button
                       class="button button-ghost button-compact"
@@ -1095,15 +1099,15 @@ onMounted(load)
                       :disabled="filteredFormNodes.length === 0"
                       @click="toggleFilteredNodes(false)"
                     >
-                      取消当前分组
+                      {{ t('unselectCurrentGroup') }}
                     </button>
                   </div>
 
                   <div class="field-label">
-                    选择节点，已选 {{ selectedNodeCount }} 个，当前显示 {{ filteredFormNodes.length }} 个
+                    {{ t('selectNodesSummary', { selected: selectedNodeCount, visible: filteredFormNodes.length }) }}
                   </div>
-                  <div v-if="nodes.length === 0" class="empty-state">还没有节点，请先导入节点。</div>
-                  <div v-else-if="filteredFormNodes.length === 0" class="empty-state">没有匹配的节点，可以放宽分组、状态或搜索条件。</div>
+                  <div v-if="nodes.length === 0" class="empty-state">{{ t('noNodesYet') }}</div>
+                  <div v-else-if="filteredFormNodes.length === 0" class="empty-state">{{ t('noMatchedNodes') }}</div>
                   <div v-else class="checkbox-list modal-node-list">
                     <label v-for="item in filteredFormNodes" :key="item.id" class="checkbox-item">
                       <input v-model="form.node_ids" :value="item.id" type="checkbox" />
@@ -1125,7 +1129,7 @@ onMounted(load)
             </div>
 
             <div class="modal-actions">
-              <button class="button button-ghost" type="button" :disabled="saving" @click="closeEditor">取消</button>
+              <button class="button button-ghost" type="button" :disabled="saving" @click="closeEditor">{{ t('cancel') }}</button>
               <button class="button button-accent" type="submit" :disabled="!canSubmitSubscription">
                 {{ submitLabel }}
               </button>
@@ -1143,15 +1147,15 @@ onMounted(load)
               <span class="eyebrow">Export Console</span>
               <h3>{{ exportConsole.name }}</h3>
               <p class="card-copy">
-                {{ exportTargets.length }} 个客户端出口，当前策略为 {{ currentModeLabel }}。自动识别链接会按客户端 User-Agent 选择导出格式。
+                {{ t('exportConsoleCopy', { count: exportTargets.length, mode: currentModeLabel }) }}
               </p>
             </div>
-            <button class="icon-button" type="button" aria-label="关闭" @click="exportConsole = null">x</button>
+            <button class="icon-button" type="button" :aria-label="t('close')" @click="exportConsole = null">x</button>
           </header>
 
           <div class="export-console-hero">
             <div>
-              <div class="hint">自动识别订阅</div>
+              <div class="hint">{{ t('autoDetectSubscription') }}</div>
               <a class="token-link export-console-auto-link" :href="autoSubscriptionLink(exportConsole)" target="_blank" rel="noreferrer">
                 {{ autoSubscriptionLink(exportConsole) }}
               </a>
@@ -1159,9 +1163,9 @@ onMounted(load)
             <button
               class="button button-accent"
               type="button"
-              @click="copyText(autoSubscriptionLink(exportConsole), '自动识别订阅链接已复制。')"
+              @click="copyText(autoSubscriptionLink(exportConsole), t('autoLinkCopied'))"
             >
-              复制自动链接
+              {{ t('copyAutoLink') }}
             </button>
           </div>
 
@@ -1169,7 +1173,7 @@ onMounted(load)
             <article v-for="target in exportTargets" :key="target" class="export-console-card">
               <div class="export-console-card-head">
                 <div>
-                  <div class="hint">客户端</div>
+                  <div class="hint">{{ t('client') }}</div>
                   <strong>{{ TARGET_LABELS[target] }}</strong>
                 </div>
                 <span
@@ -1186,9 +1190,9 @@ onMounted(load)
                 <button
                   class="button button-ghost button-compact"
                   type="button"
-                  @click="copyText(exportLink(exportConsole.token, target), `${TARGET_LABELS[target]} 订阅链接已复制。`)"
+                  @click="copyText(exportLink(exportConsole.token, target), t('targetLinkCopied', { target: TARGET_LABELS[target] }))"
                 >
-                  复制链接
+                  {{ t('copyLink') }}
                 </button>
                 <button
                   v-if="subscriptionCompatibility(exportConsole, target).unsupportedNodes.length > 0"
@@ -1196,7 +1200,7 @@ onMounted(load)
                   type="button"
                   @click="openCompatibilityDetail(exportConsole, target)"
                 >
-                  查看警告
+                  {{ t('viewWarnings') }}
                 </button>
               </div>
             </article>
@@ -1210,10 +1214,10 @@ onMounted(load)
         <section class="modal-panel">
           <header class="modal-header">
             <div>
-              <span class="eyebrow">Compatibility</span>
+              <span class="eyebrow">{{ t('compatibility') }}</span>
               <h3>{{ compatibilityDetail.title }}</h3>
             </div>
-            <button class="icon-button" type="button" aria-label="关闭" @click="compatibilityDetail = null">×</button>
+            <button class="icon-button" type="button" :aria-label="t('close')" @click="compatibilityDetail = null">×</button>
           </header>
 
           <div class="stack">
@@ -1237,22 +1241,22 @@ onMounted(load)
           <header class="modal-header">
             <div>
               <span class="eyebrow">Subscription Groups</span>
-              <h3>订阅分组</h3>
+              <h3>{{ t('subscriptionGroups') }}</h3>
             </div>
-            <button class="icon-button" type="button" aria-label="关闭" @click="closeGroupEditor">×</button>
+            <button class="icon-button" type="button" :aria-label="t('close')" @click="closeGroupEditor">×</button>
           </header>
 
           <form class="form-grid" @submit.prevent="submitGroup">
             <div>
-              <label class="field-label" for="subscription-group-name">分组名称</label>
-              <input id="subscription-group-name" v-model.trim="groupForm.name" class="input" placeholder="例如：影视订阅" />
+              <label class="field-label" for="subscription-group-name">{{ t('groupName') }}</label>
+              <input id="subscription-group-name" v-model.trim="groupForm.name" class="input" :placeholder="t('subscriptionGroupNamePlaceholder')" />
             </div>
             <div>
-              <label class="field-label" for="subscription-group-order">排序</label>
+              <label class="field-label" for="subscription-group-order">{{ t('sortOrder') }}</label>
               <input id="subscription-group-order" v-model.number="groupForm.sort_order" class="input" type="number" />
             </div>
             <div class="modal-actions">
-              <button class="button button-ghost" type="button" @click="resetGroupForm">清空</button>
+              <button class="button button-ghost" type="button" @click="resetGroupForm">{{ t('clear') }}</button>
               <button class="button button-accent" type="submit" :disabled="saving || !groupForm.name">{{ groupSubmitLabel }}</button>
             </div>
           </form>
@@ -1262,8 +1266,8 @@ onMounted(load)
               <span>{{ group.name }}</span>
               <span class="muted">sort {{ group.sort_order }}</span>
               <div class="inline-actions">
-                <button class="button button-ghost button-compact" type="button" @click="startEditGroup(group)">编辑</button>
-                <button class="button button-danger button-compact" type="button" @click="removeGroup(group.id)">删除</button>
+                <button class="button button-ghost button-compact" type="button" @click="startEditGroup(group)">{{ t('edit') }}</button>
+                <button class="button button-danger button-compact" type="button" @click="removeGroup(group.id)">{{ t('delete') }}</button>
               </div>
             </div>
           </div>

@@ -1,0 +1,2 @@
+ALTER TABLE users
+ADD COLUMN must_change_credentials INTEGER NOT NULL DEFAULT 1;

@@ -54,7 +54,7 @@ impl AppConfig {
         let bootstrap_admin_username =
             env::var("BOOTSTRAP_ADMIN_USERNAME").unwrap_or_else(|_| "admin".to_string());
         let bootstrap_admin_password =
-            env::var("BOOTSTRAP_ADMIN_PASSWORD").unwrap_or_else(|_| "change-me-now".to_string());
+            env::var("BOOTSTRAP_ADMIN_PASSWORD").unwrap_or_else(|_| "admin123456".to_string());
 
         Ok(Self {
             server: ServerConfig { port, environment },

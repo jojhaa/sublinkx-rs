@@ -3,14 +3,16 @@ import { computed, onMounted, ref } from 'vue'
 import { extractApiError } from '../api/client'
 import { listNodes } from '../api/nodes'
 import { listSubscriptions } from '../api/subscriptions'
+import { useI18n } from '../i18n'
 
+const { t } = useI18n()
 const nodeCount = ref(0)
 const subscriptionCount = ref(0)
 const loading = ref(false)
 const errorMessage = ref('')
 
 const summaryText = computed(() => {
-  return `当前已有 ${nodeCount.value} 个节点和 ${subscriptionCount.value} 个订阅。节点、模板、订阅链接已经形成完整分发链路。`
+  return t('overviewSummary', { nodes: nodeCount.value, subscriptions: subscriptionCount.value })
 })
 
 async function load() {
@@ -35,12 +37,12 @@ onMounted(load)
   <section class="stack">
     <header class="page-header">
       <div>
-        <span class="eyebrow">Overview</span>
-        <h2 class="page-title">总览</h2>
-        <p class="page-copy">把节点库存、订阅分发和客户端导出状态放在同一个仪表盘里。</p>
+        <span class="eyebrow">{{ t('overviewEyebrow') }}</span>
+        <h2 class="page-title">{{ t('overviewTitle') }}</h2>
+        <p class="page-copy">{{ t('overviewCopy') }}</p>
       </div>
       <button class="button button-ghost" type="button" :disabled="loading" @click="load">
-        {{ loading ? '刷新中...' : '刷新数据' }}
+        {{ loading ? t('refreshing') : t('refreshData') }}
       </button>
     </header>
 
@@ -48,25 +50,25 @@ onMounted(load)
 
     <div class="dashboard-grid">
       <article class="card stat-card">
-        <div class="hint">节点总数</div>
+        <div class="hint">{{ t('nodeTotal') }}</div>
         <p class="stat-value">{{ nodeCount }}</p>
-        <p class="stat-note">覆盖 SS、VMess、VLESS、Trojan、Hysteria2、TUIC、WireGuard、AnyTLS 等协议。</p>
+        <p class="stat-note">{{ t('nodeTotalNote') }}</p>
       </article>
 
       <article class="card stat-card">
-        <div class="hint">订阅总数</div>
+        <div class="hint">{{ t('subscriptionTotal') }}</div>
         <p class="stat-value">{{ subscriptionCount }}</p>
-        <p class="stat-note">每个订阅拥有独立随机 token，可轮换，可按客户端自动识别。</p>
+        <p class="stat-note">{{ t('subscriptionTotalNote') }}</p>
       </article>
 
       <article class="card stat-card">
-        <div class="hint">导出体系</div>
+        <div class="hint">{{ t('exportSystem') }}</div>
         <p class="stat-value">Multi</p>
-        <p class="stat-note">已接入 Clash / Mihomo / Surge / sing-box / Xray / QuanX / Loon 等导出目标。</p>
+        <p class="stat-note">{{ t('exportSystemNote') }}</p>
       </article>
 
       <article class="card wide-card">
-        <div class="hint">当前状态</div>
+        <div class="hint">{{ t('currentStatus') }}</div>
         <p class="card-copy">{{ summaryText }}</p>
       </article>
     </div>

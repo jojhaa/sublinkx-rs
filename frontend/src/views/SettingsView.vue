@@ -8,7 +8,9 @@ import {
   updateSettings,
   type MihomoCoreStatus,
 } from '../api/settings'
+import { useI18n } from '../i18n'
 
+const { t } = useI18n()
 const loading = ref(false)
 const saving = ref(false)
 const checkingCore = ref(false)
@@ -60,7 +62,7 @@ async function submit() {
     form.latency_core_path = response.data.latency_core_path
     form.latency_test_url = response.data.latency_test_url
     form.latency_timeout_secs = response.data.latency_timeout_secs
-    successMessage.value = '设置已保存。'
+    successMessage.value = t('settingsSaved')
   } catch (error) {
     errorMessage.value = extractApiError(error)
   } finally {
@@ -78,7 +80,7 @@ async function checkMihomoCore(showMessage = true) {
     const response = await getMihomoCoreStatus()
     mihomoCore.value = response.data
     if (showMessage) {
-      successMessage.value = response.data.installed ? 'Mihomo 内核检测完成。' : '未检测到 Mihomo 内核，可以点击下载。'
+      successMessage.value = response.data.installed ? t('coreCheckDone') : t('coreNotFound')
     }
   } catch (error) {
     errorMessage.value = extractApiError(error)
@@ -94,7 +96,7 @@ async function installMihomoCore() {
   try {
     const response = await downloadMihomoCore()
     form.latency_core_path = response.data.path
-    successMessage.value = `已下载 ${response.data.version}：${response.data.asset_name}`
+    successMessage.value = t('coreDownloaded', { version: response.data.version, asset: response.data.asset_name })
     await checkMihomoCore(false)
   } catch (error) {
     errorMessage.value = extractApiError(error)
@@ -110,12 +112,12 @@ onMounted(load)
   <section class="stack">
     <header class="page-header">
       <div>
-        <span class="eyebrow">Settings</span>
-        <h2 class="page-title">系统设置</h2>
-        <p class="page-copy">集中管理后台自动任务和运行策略。</p>
+        <span class="eyebrow">{{ t('settingsEyebrow') }}</span>
+        <h2 class="page-title">{{ t('settingsTitle') }}</h2>
+        <p class="page-copy">{{ t('settingsCopy') }}</p>
       </div>
       <button class="button button-ghost" type="button" :disabled="loading" @click="load">
-        {{ loading ? '刷新中...' : '刷新' }}
+        {{ loading ? t('refreshing') : t('refresh') }}
       </button>
     </header>
 
@@ -125,9 +127,9 @@ onMounted(load)
     <article class="settings-console">
       <div class="settings-console-header">
         <div>
-          <div class="hint">Latency Control Plane</div>
-          <h3>Mihomo 内核与延迟测试</h3>
-          <p class="card-copy">检测内核、控制自动测速，并保存节点最后延迟与错误原因。</p>
+          <div class="hint">{{ t('latencyConsoleHint') }}</div>
+          <h3>{{ t('latencyConsoleTitle') }}</h3>
+          <p class="card-copy">{{ t('latencyConsoleCopy') }}</p>
         </div>
         <span class="settings-console-mark">MIHOMO</span>
       </div>
@@ -137,8 +139,8 @@ onMounted(load)
           <div class="settings-panel-title">
             <span class="settings-panel-index">01</span>
             <div>
-              <strong>Core Readiness</strong>
-              <div class="hint">检测、下载与运行路径</div>
+              <strong>{{ t('coreReadiness') }}</strong>
+              <div class="hint">{{ t('coreReadinessHint') }}</div>
             </div>
           </div>
 
@@ -147,31 +149,31 @@ onMounted(load)
               <span class="status-badge" :class="mihomoCore?.installed ? 'status-badge-ok' : 'status-badge-warn'">
                 {{ mihomoCore?.installed ? 'READY' : 'MISSING' }}
               </span>
-              <strong>{{ mihomoCore?.installed ? '内核可用' : '需要下载内核' }}</strong>
+              <strong>{{ mihomoCore?.installed ? t('coreReady') : t('coreMissing') }}</strong>
             </div>
             <span class="metric-chip">{{ mihomoCore ? `${mihomoCore.os}/${mihomoCore.arch}` : 'checking' }}</span>
           </div>
 
           <div class="settings-core-grid">
-            <span class="hint">路径</span>
+            <span class="hint">{{ t('path') }}</span>
             <code class="token-link">{{ mihomoCore?.path || 'backend/mihomo/' }}</code>
-            <span class="hint">版本</span>
-            <span>{{ mihomoCore?.version || '未知' }}</span>
+            <span class="hint">{{ t('version') }}</span>
+            <span>{{ mihomoCore?.version || t('unknown') }}</span>
           </div>
 
           <div>
-            <label class="field-label" for="latency-core-path">自定义内核路径</label>
+            <label class="field-label" for="latency-core-path">{{ t('customCorePath') }}</label>
             <input
               id="latency-core-path"
               v-model.trim="form.latency_core_path"
               class="input"
-              placeholder="留空则自动查找 backend/mihomo"
+              :placeholder="t('customCorePlaceholder')"
             />
           </div>
 
           <div class="settings-button-rail">
             <button class="button button-ghost button-compact" type="button" :disabled="checkingCore" @click="checkMihomoCore()">
-              {{ checkingCore ? '检测中...' : '检测内核' }}
+              {{ checkingCore ? t('checkingCore') : t('checkCore') }}
             </button>
             <button
               class="button button-accent button-compact"
@@ -179,12 +181,12 @@ onMounted(load)
               :disabled="downloadingCore || mihomoCore?.supported === false"
               @click="installMihomoCore"
             >
-              {{ downloadingCore ? '下载中...' : mihomoCore?.installed ? '下载/更新内核' : '下载内核' }}
+              {{ downloadingCore ? t('downloading') : mihomoCore?.installed ? t('updateCore') : t('downloadCore') }}
             </button>
           </div>
 
           <p class="compat-copy">
-            自动下载遵循官方 FAQ：AMD64 默认选择 v1 构建，Linux 旧内核优先 go123，并保存到后端 mihomo 文件夹。
+            {{ t('coreFaqNote') }}
           </p>
         </section>
 
@@ -192,8 +194,8 @@ onMounted(load)
           <div class="settings-panel-title">
             <span class="settings-panel-index">02</span>
             <div>
-              <strong>Scheduler</strong>
-              <div class="hint">后台自动测速节奏</div>
+              <strong>{{ t('scheduler') }}</strong>
+              <div class="hint">{{ t('schedulerHint') }}</div>
             </div>
           </div>
 
@@ -201,14 +203,14 @@ onMounted(load)
             <input v-model="form.latency_auto_enabled" type="checkbox" />
             <span></span>
             <div>
-              <strong>启用自动延迟测试</strong>
-              <small>关闭后仍可在节点管理页面手动测速。</small>
+              <strong>{{ t('enableAutoLatency') }}</strong>
+              <small>{{ t('enableAutoLatencyHint') }}</small>
             </div>
           </label>
 
           <div class="settings-control-grid">
             <label>
-              <span class="field-label" for="latency-interval">自动测速间隔</span>
+              <span class="field-label" for="latency-interval">{{ t('latencyInterval') }}</span>
               <div class="settings-inline-field">
                 <input
                   id="latency-interval"
@@ -218,12 +220,12 @@ onMounted(load)
                   min="5"
                   type="number"
                 />
-                <span class="metric-chip">分钟</span>
+                <span class="metric-chip">{{ t('minute') }}</span>
               </div>
             </label>
 
             <label>
-              <span class="field-label" for="latency-timeout">测速超时</span>
+              <span class="field-label" for="latency-timeout">{{ t('latencyTimeout') }}</span>
               <div class="settings-inline-field">
                 <input
                   id="latency-timeout"
@@ -233,33 +235,33 @@ onMounted(load)
                   min="3"
                   type="number"
                 />
-                <span class="metric-chip">秒</span>
+                <span class="metric-chip">{{ t('second') }}</span>
               </div>
             </label>
           </div>
 
           <div>
-            <label class="field-label" for="latency-test-url">测试 URL</label>
+            <label class="field-label" for="latency-test-url">{{ t('testUrl') }}</label>
             <input
               id="latency-test-url"
               v-model.trim="form.latency_test_url"
               class="input"
               placeholder="https://www.gstatic.com/generate_204"
             />
-            <div class="hint template-kind-hint">Mihomo delay API 会让节点真实访问这个 URL。</div>
+            <div class="hint template-kind-hint">{{ t('testUrlHint') }}</div>
           </div>
         </section>
 
         <section class="settings-console-panel settings-proof-panel">
-          <span class="status-badge status-badge-neutral">真实链路</span>
+          <span class="status-badge status-badge-neutral">{{ t('realLink') }}</span>
           <p class="compat-copy">
-            这里不是 TCPING。系统会临时启动 Mihomo，加载单个节点，调用内核延迟测试接口访问测试 URL，因此会验证协议握手、认证、TLS/Reality/HY2 等真实配置。
+            {{ t('realLinkCopy') }}
           </p>
         </section>
 
         <div class="settings-save-rail">
           <button class="button button-accent" type="submit" :disabled="saving">
-            {{ saving ? '保存中...' : '保存设置' }}
+            {{ saving ? t('saving') : t('saveSettings') }}
           </button>
         </div>
       </form>

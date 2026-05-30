@@ -43,6 +43,10 @@ pub fn build_app(state: AppState) -> Router {
         .route("/api/v1/auth/login", axum::routing::post(api::auth::login))
         .route("/api/v1/auth/me", get(api::auth::me))
         .route(
+            "/api/v1/auth/change-credentials",
+            axum::routing::post(api::auth::change_credentials),
+        )
+        .route(
             "/api/v1/nodes",
             get(api::nodes::list).post(api::nodes::create),
         )

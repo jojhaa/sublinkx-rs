@@ -15,6 +15,8 @@ pub enum AppError {
     NotFound(String),
     #[error("unauthorized")]
     Unauthorized,
+    #[error("forbidden: {0}")]
+    Forbidden(String),
     #[error("internal server error")]
     Internal,
 }
@@ -32,6 +34,7 @@ impl IntoResponse for AppError {
             AppError::BadRequest(_) => StatusCode::BAD_REQUEST,
             AppError::NotFound(_) => StatusCode::NOT_FOUND,
             AppError::Unauthorized => StatusCode::UNAUTHORIZED,
+            AppError::Forbidden(_) => StatusCode::FORBIDDEN,
             AppError::Internal => StatusCode::INTERNAL_SERVER_ERROR,
         };
         let body = Json(ErrorBody {
@@ -39,6 +42,7 @@ impl IntoResponse for AppError {
                 StatusCode::BAD_REQUEST => "bad_request",
                 StatusCode::NOT_FOUND => "not_found",
                 StatusCode::UNAUTHORIZED => "unauthorized",
+                StatusCode::FORBIDDEN => "forbidden",
                 _ => "internal_error",
             },
             message: self.to_string(),

@@ -125,6 +125,64 @@ backend/mihomo/
 
 For example, use `backend/mihomo/mihomo.exe` on Windows or `backend/mihomo/mihomo` on Linux. The settings page can also detect and download the official MetaCubeX/mihomo binary for the current server OS, or you can configure a custom path manually. Automatic downloads follow the official FAQ naming rules: AMD64 defaults to the conservative `v1` build, while old Linux kernels prefer `go123` builds.
 
+
+## Docker
+
+Docker deployment uses the published Docker Hub images. For the full guide, see [Docker Deployment](docs/docker.md).
+
+Published images:
+
+```text
+docker.io/jojhaa/sublinkx-rs-backend:latest
+docker.io/jojhaa/sublinkx-rs-frontend:latest
+```
+
+```bash
+cp .env.example .env
+docker compose up -d
+```
+
+Open:
+
+```text
+http://localhost:3000
+```
+
+Default first login:
+
+```text
+admin / admin123456
+```
+
+The first login must change both username and password.
+
+Runtime data is mapped to local folders by default:
+
+```text
+docker-data/
+  backend/
+    app.db
+  mihomo/
+    mihomo
+```
+
+The Docker bridge subnet is fixed by default:
+
+```env
+SUBLINKX_DOCKER_SUBNET=172.31.88.0/24
+```
+
+If it conflicts with existing Docker, VPN, or LAN networks, edit `.env` and change `SUBLINKX_DOCKER_SUBNET`.
+
+### Common Commands
+
+```bash
+docker compose ps
+docker compose logs -f
+docker compose restart
+docker compose down
+```
+
 ## License
 
 License not specified yet.
