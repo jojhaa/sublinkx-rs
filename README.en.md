@@ -36,6 +36,7 @@ Thanks to [gooaclok819/sublinkX](https://github.com/gooaclok819/sublinkX) for th
 - Rust backend built with Axum, SQLx, and SQLite.
 - Vue 3 admin console for nodes, subscriptions, templates, groups, settings, and exports.
 - Responsive console layouts for desktop, tablet, and mobile.
+- Compact desktop sidebar with language switching near the brand area and a lightweight account/status strip at the bottom.
 - Detailed and compact list modes for nodes and subscriptions. Compact node cards focus on name and real-link latency; compact subscription cards focus on name and expiry time, with details opened in a modal.
 - Page-size preferences for node and subscription lists are persisted in the browser.
 - Multi-protocol node parsing for Shadowsocks, VMess, VLESS, Trojan, Hysteria2, TUIC, WireGuard, AnyTLS, and more.

@@ -56,6 +56,7 @@ onMounted(async () => {
         <p class="brand-copy">
           {{ t('brandCopy') }}
         </p>
+        <LanguageSwitch compact class="sidebar-language" />
       </div>
 
       <nav class="nav-list" :aria-label="t('mainNavigation')">
@@ -70,13 +71,15 @@ onMounted(async () => {
       </nav>
 
       <div class="sidebar-footer">
-        <LanguageSwitch class="sidebar-language" />
-        <div class="user-card">
-          <div class="hint">{{ t('currentLogin') }}</div>
-          <strong>{{ userLabel }}</strong>
-          <div class="muted">{{ auth.user?.role ?? 'admin' }}</div>
+        <div class="user-card sidebar-user-card">
+          <div class="user-status-dot" aria-hidden="true"></div>
+          <div class="user-card-main">
+            <div class="hint">{{ t('currentLogin') }}</div>
+            <strong>{{ userLabel }}</strong>
+            <div class="muted">{{ auth.user?.role ?? 'admin' }}</div>
+          </div>
+          <button class="button button-ghost sidebar-logout" type="button" @click="logout">{{ t('logout') }}</button>
         </div>
-        <button class="button button-ghost" type="button" @click="logout">{{ t('logout') }}</button>
       </div>
     </aside>
 
