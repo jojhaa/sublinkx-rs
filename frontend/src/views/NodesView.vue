@@ -177,6 +177,36 @@ function setLatencyResult(result: NodeLatencyResult) {
     ...latencyResults.value,
     [result.id]: result,
   }
+  nodes.value = nodes.value.map((item) =>
+    item.id === result.id
+      ? {
+          ...item,
+          last_latency_ms: result.latency_ms,
+          last_latency_status: result.status,
+          last_latency_message: result.message,
+          last_latency_tested_at: result.tested_at,
+        }
+      : item,
+  )
+}
+
+function upsertNodes(nextNodes: NodeItem[]) {
+  if (nextNodes.length === 0) {
+    return
+  }
+  const incomingIds = new Set(nextNodes.map((item) => item.id))
+  nodes.value = [...nextNodes, ...nodes.value.filter((item) => !incomingIds.has(item.id))].sort((a, b) => b.id - a.id)
+}
+
+function replaceNode(nextNode: NodeItem) {
+  nodes.value = nodes.value.map((item) => (item.id === nextNode.id ? nextNode : item))
+}
+
+function removeNodesById(ids: number[]) {
+  const idSet = new Set(ids)
+  nodes.value = nodes.value.filter((item) => !idSet.has(item.id))
+  selectedIds.value = selectedIds.value.filter((id) => !idSet.has(id))
+  latencyResults.value = Object.fromEntries(Object.entries(latencyResults.value).filter(([id]) => !idSet.has(Number(id))))
 }
 
 function savedLatencyResult(item: NodeItem): NodeLatencyResult | null {
@@ -406,13 +436,14 @@ async function submit() {
 
   try {
     if (editingId.value !== null) {
-      await updateNode(editingId.value, {
+      const response = await updateNode(editingId.value, {
         name: form.name || undefined,
         raw_link: form.raw_link,
         group_id: form.group_id,
         remark: form.remark || undefined,
         enabled: form.enabled,
       })
+      replaceNode(response.data)
       successMessage.value = t('nodeUpdated')
     } else {
       const rawLinks = splitRawLinks(form.raw_link)
@@ -438,6 +469,11 @@ async function submit() {
       if (successCount === 0) {
         throw failures[0]?.item.reason ?? new Error(t('importFailed'))
       }
+      upsertNodes(
+        results
+          .filter((item): item is PromiseFulfilledResult<{ code: string; data: NodeItem }> => item.status === 'fulfilled')
+          .map((item) => item.value.data),
+      )
 
       if (failures.length === 0) {
         successMessage.value = successCount === 1 ? t('nodeImported') : t('nodesImported', { count: successCount })
@@ -451,7 +487,6 @@ async function submit() {
     }
 
     closeEditor()
-    await load()
   } catch (error) {
     errorMessage.value = extractApiError(error)
   } finally {
@@ -469,7 +504,7 @@ async function moveSelectedNodes() {
   successMessage.value = ''
 
   try {
-    await Promise.all(
+    const updatedNodes = await Promise.all(
       selectedNodes.value.map((item) =>
         updateNode(item.id, {
           name: item.name,
@@ -480,9 +515,9 @@ async function moveSelectedNodes() {
         }),
       ),
     )
+    upsertNodes(updatedNodes.map((item) => item.data))
     successMessage.value = t('nodesMoved', { count: selectedNodes.value.length, group: groupName(batchGroupId.value) })
     clearSelection()
-    await load()
   } catch (error) {
     errorMessage.value = extractApiError(error)
   } finally {
@@ -517,8 +552,8 @@ async function importFromUpstreamSubscription() {
     if (response.failed > 0) {
       errorMessage.value = t('nodeImportFailures', { count: response.failed, reason: response.failures[0]?.reason ?? t('unknown') })
     }
+    upsertNodes(response.data)
     closeUpstreamImporter()
-    await load()
   } catch (error) {
     errorMessage.value = extractApiError(error)
   } finally {
@@ -559,9 +594,8 @@ async function removeNode(id: number) {
     if (editingId.value === id) {
       closeEditor()
     }
-    selectedIds.value = selectedIds.value.filter((item) => item !== id)
+    removeNodesById([id])
     successMessage.value = t('nodeDeleted')
-    await load()
   } catch (error) {
     errorMessage.value = extractApiError(error)
   }
@@ -596,11 +630,11 @@ async function removeSelectedNodes() {
     }
 
     selectedIds.value = []
+    removeNodesById(ids.filter((_, index) => results[index].status === 'fulfilled'))
     successMessage.value = t('nodesDeleted', { count: successCount })
     if (failures.length > 0) {
       errorMessage.value = t('nodeDeleteFailures', { count: failures.length, reason: extractApiError(failures[0].reason) })
     }
-    await load()
   } catch (error) {
     errorMessage.value = extractApiError(error)
   } finally {

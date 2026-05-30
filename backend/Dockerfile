@@ -4,6 +4,11 @@ FROM ${DOCKER_REGISTRY}/library/rust:1-bookworm AS builder
 
 WORKDIR /workspace/backend
 
+RUN mkdir -p /usr/local/cargo \
+    && printf '[source.crates-io]\nreplace-with = "rsproxy-sparse"\n\n[source.rsproxy-sparse]\nregistry = "sparse+https://rsproxy.cn/index/"\n\n[net]\ngit-fetch-with-cli = true\n' > /usr/local/cargo/config.toml
+
+ENV CARGO_HTTP_MULTIPLEXING=false
+
 COPY backend/Cargo.toml backend/Cargo.lock ./
 COPY backend/migrations ./migrations
 COPY backend/src ./src

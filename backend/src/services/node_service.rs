@@ -9,7 +9,7 @@ use std::{
     path::PathBuf,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
-use tokio::{process::Command, time::sleep};
+use tokio::{process::Command, task::JoinSet, time::sleep};
 
 use crate::{
     domain::node::NodeView,
@@ -289,21 +289,42 @@ pub async fn test_node_latency_batch(
 
     let settings = settings_service::load_settings(state).await?;
     ensure_mihomo_core_ready(&settings).await?;
-    let mut data = Vec::with_capacity(payload.ids.len());
-    for id in payload.ids {
-        let result = match node_repo::find_by_id(&state.db, id).await? {
-            Some(node) => real_latency_for_node(&node, &settings).await,
-            None => NodeLatencyResult {
-                id,
-                status: "error".to_string(),
-                latency_ms: None,
-                message: Some("node not found".to_string()),
-                tested_at: now_rfc3339(),
-            },
-        };
-        persist_latency_result(state, &result).await?;
-        data.push(result);
+    let mut prepared = Vec::with_capacity(payload.ids.len());
+    for (index, id) in payload.ids.into_iter().enumerate() {
+        prepared.push((index, id, node_repo::find_by_id(&state.db, id).await?));
     }
+
+    let mut indexed_results = Vec::with_capacity(prepared.len());
+    for chunk in prepared.chunks(6) {
+        let mut tasks = JoinSet::new();
+        for (index, id, node) in chunk.iter().cloned() {
+            let settings = settings.clone();
+            tasks.spawn(async move {
+                let result = match node {
+                    Some(node) => real_latency_for_node(&node, &settings).await,
+                    None => NodeLatencyResult {
+                        id,
+                        status: "error".to_string(),
+                        latency_ms: None,
+                        message: Some("node not found".to_string()),
+                        tested_at: now_rfc3339(),
+                    },
+                };
+                (index, result)
+            });
+        }
+
+        while let Some(joined) = tasks.join_next().await {
+            let (index, result) = joined.map_err(|_| AppError::Internal)?;
+            persist_latency_result(state, &result).await?;
+            indexed_results.push((index, result));
+        }
+    }
+    indexed_results.sort_by_key(|(index, _)| *index);
+    let data = indexed_results
+        .into_iter()
+        .map(|(_, result)| result)
+        .collect();
 
     Ok(NodeLatencyBatchResponse {
         code: "00000",
