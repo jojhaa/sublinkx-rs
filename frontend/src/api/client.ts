@@ -10,11 +10,24 @@ const apiClient = axios.create({
   },
 })
 
+function appendCacheBust(url: string | undefined): string | undefined {
+  if (!url) {
+    return url
+  }
+
+  const separator = url.includes('?') ? '&' : '?'
+  return `${url}${separator}_=${Date.now()}`
+}
+
 apiClient.interceptors.request.use((config) => {
   const token = localStorage.getItem(TOKEN_KEY)
 
   if (token) {
     config.headers.Authorization = `Bearer ${token}`
+  }
+
+  if (config.method?.toLowerCase() === 'get') {
+    config.url = appendCacheBust(config.url)
   }
 
   return config
