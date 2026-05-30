@@ -222,6 +222,64 @@ For Nginx Proxy Manager, 1Panel, BT Panel, or Caddy, reverse proxy:
 http://127.0.0.1:3000
 ```
 
+### Recommended BT Panel / Outer Nginx Config
+
+Keep the outer reverse proxy pointed at the frontend port `3000`. The frontend container will proxy backend requests to the backend container internally. Do not point an outer `/api/` location directly at `127.0.0.1:8080` unless you intentionally expose the backend port yourself.
+
+If you need a separate `/api/` location in BT Panel or Nginx, proxy it to `3000` and disable cache:
+
+```nginx
+location ^~ /api/ {
+    proxy_pass http://127.0.0.1:3000;
+
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Real-Port $remote_port;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_set_header X-Forwarded-Host $host;
+    proxy_set_header X-Forwarded-Port $server_port;
+    proxy_set_header REMOTE-HOST $remote_addr;
+
+    proxy_connect_timeout 60s;
+    proxy_send_timeout 600s;
+    proxy_read_timeout 600s;
+
+    proxy_http_version 1.1;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection $connection_upgrade;
+
+    proxy_cache off;
+    proxy_no_cache 1;
+    proxy_cache_bypass 1;
+
+    add_header Cache-Control "no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0" always;
+    add_header Pragma "no-cache" always;
+    add_header Expires "0" always;
+}
+```
+
+It is also recommended to disable HTML cache for the frontend page, so browsers do not keep loading an old `index-*.js` bundle after upgrades:
+
+```nginx
+location ^~ / {
+    proxy_pass http://127.0.0.1:3000;
+
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+
+    proxy_cache off;
+    proxy_no_cache 1;
+    proxy_cache_bypass 1;
+
+    add_header Cache-Control "no-store, no-cache, must-revalidate, max-age=0" always;
+    add_header Pragma "no-cache" always;
+    add_header Expires "0" always;
+}
+```
+
 ## Common Commands
 
 Status:

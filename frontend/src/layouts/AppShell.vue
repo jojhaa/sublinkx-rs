@@ -38,6 +38,17 @@ onMounted(async () => {
 
 <template>
   <div class="page-shell shell-layout">
+    <header class="mobile-appbar">
+      <div>
+        <span class="eyebrow">SublinkX RS</span>
+        <strong>{{ t('brandTitle') }}</strong>
+      </div>
+      <div class="mobile-appbar-actions">
+        <LanguageSwitch compact />
+        <button class="button button-ghost button-compact" type="button" @click="logout">{{ t('logout') }}</button>
+      </div>
+    </header>
+
     <aside class="sidebar">
       <div class="brand-block">
         <span class="eyebrow">SublinkX RS</span>
@@ -59,7 +70,7 @@ onMounted(async () => {
       </nav>
 
       <div class="sidebar-footer">
-        <LanguageSwitch />
+        <LanguageSwitch class="sidebar-language" />
         <div class="user-card">
           <div class="hint">{{ t('currentLogin') }}</div>
           <strong>{{ userLabel }}</strong>

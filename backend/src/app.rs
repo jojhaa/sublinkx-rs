@@ -22,7 +22,12 @@ pub fn build_app(state: AppState) -> Router {
             Method::DELETE,
             Method::OPTIONS,
         ])
-        .allow_headers([header::AUTHORIZATION, header::CONTENT_TYPE]);
+        .allow_headers([
+            header::AUTHORIZATION,
+            header::CACHE_CONTROL,
+            header::CONTENT_TYPE,
+            header::PRAGMA,
+        ]);
 
     Router::new()
         .route("/healthz", get(api::health::healthz))

@@ -222,6 +222,77 @@ ports:
 http://127.0.0.1:3000
 ```
 
+### 宝塔 / 外层 Nginx 推荐配置
+
+宝塔仍然转发到前端 `3000`，让前端容器内部再转发到后端。不要把外层 Nginx 的 `/api/` 直接转发到 `127.0.0.1:8080`，因为默认 Compose 中后端只 `expose` 给 Docker 内部网络，并没有映射到宿主机端口。
+
+如果需要在宝塔里单独写 `/api/` 规则，也应该转发到 `3000`，并关闭缓存：
+
+```nginx
+location ^~ /api/ {
+    proxy_pass http://127.0.0.1:3000;
+
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Real-Port $remote_port;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_set_header X-Forwarded-Host $host;
+    proxy_set_header X-Forwarded-Port $server_port;
+    proxy_set_header REMOTE-HOST $remote_addr;
+
+    proxy_connect_timeout 60s;
+    proxy_send_timeout 600s;
+    proxy_read_timeout 600s;
+
+    proxy_http_version 1.1;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection $connection_upgrade;
+
+    proxy_cache off;
+    proxy_no_cache 1;
+    proxy_cache_bypass 1;
+
+    add_header Cache-Control "no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0" always;
+    add_header Pragma "no-cache" always;
+    add_header Expires "0" always;
+}
+```
+
+前端页面也建议禁用 HTML 缓存，避免浏览器一直加载旧的 `index-*.js`：
+
+```nginx
+location ^~ / {
+    proxy_pass http://127.0.0.1:3000;
+
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+
+    proxy_cache off;
+    proxy_no_cache 1;
+    proxy_cache_bypass 1;
+
+    add_header Cache-Control "no-store, no-cache, must-revalidate, max-age=0" always;
+    add_header Pragma "no-cache" always;
+    add_header Expires "0" always;
+}
+```
+
+修改后执行：
+
+```bash
+nginx -t
+systemctl reload nginx
+```
+
+如果宝塔开启过代理缓存，建议同时清理站点缓存目录，例如：
+
+```bash
+rm -rf /www/wwwroot/你的域名/proxy_cache_dir/*
+```
+
 ## 常用命令
 
 查看状态：

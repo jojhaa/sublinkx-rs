@@ -21,6 +21,7 @@ import {
   updateSubscriptionGroup,
   type GroupItem,
 } from '../api/groups'
+import { readStoredPageSize, storePageSize } from '../utils/pagination'
 
 const { t } = useI18n()
 
@@ -75,6 +76,7 @@ const exportTargets: ExportTarget[] = [
   'mixed',
 ]
 const PAGE_SIZE_OPTIONS = [10, 20, 50, 100]
+const PAGE_SIZE_STORAGE_KEY = 'sublinkx_subscriptions_page_size'
 
 const TARGET_LABELS: Record<ExportTarget, string> = {
   clash: 'Clash',
@@ -142,8 +144,10 @@ const nodeHealthFilter = ref<'all' | 'ok'>('all')
 const nodeSearch = ref('')
 const selectedIds = ref<number[]>([])
 const batchGroupId = ref<number | null>(null)
+const displayMode = ref<'detailed' | 'minimal'>('detailed')
+const detailSubscription = ref<SubscriptionItem | null>(null)
 const page = ref(1)
-const pageSize = ref(20)
+const pageSize = ref(readStoredPageSize(PAGE_SIZE_STORAGE_KEY, PAGE_SIZE_OPTIONS))
 const errorMessage = ref('')
 const successMessage = ref('')
 const exportMode = ref<ExportMode>('strict')
@@ -261,6 +265,10 @@ const groupSubmitLabel = computed(() => (isEditingGroup.value ? t('saveGroup') :
 watch([filteredSubscriptions, pageSize], () => {
   page.value = Math.min(page.value, pageCount.value)
   selectedIds.value = selectedIds.value.filter((id) => filteredSubscriptions.value.some((item) => item.id === id))
+})
+
+watch(pageSize, (value) => {
+  storePageSize(PAGE_SIZE_STORAGE_KEY, value)
 })
 
 watch(groupFilter, () => {
@@ -837,7 +845,7 @@ onMounted(load)
         <h2 class="page-title">{{ t('subscriptions') }}</h2>
         <p class="page-copy">{{ t('subscriptionsCopy') }}</p>
       </div>
-      <div class="inline-actions">
+      <div class="inline-actions page-actions">
         <select v-model="groupFilter" class="select toolbar-select" :aria-label="t('subscriptionGroup')">
           <option value="all">{{ t('allGroups') }}</option>
           <option value="none">{{ t('ungrouped') }}</option>
@@ -847,10 +855,19 @@ onMounted(load)
           <option value="strict">strict</option>
           <option value="best_effort">best_effort</option>
         </select>
-        <button class="button button-ghost" type="button" :disabled="loading" @click="load">
+        <button class="button button-ghost mobile-secondary-action" type="button" :disabled="loading" @click="load">
           {{ loading ? t('refreshing') : t('refresh') }}
         </button>
-        <button class="button button-ghost" type="button" @click="openGroupEditor">{{ t('groupManagement') }}</button>
+        <button class="button button-ghost mobile-secondary-action" type="button" @click="openGroupEditor">{{ t('groupManagement') }}</button>
+        <details class="mobile-action-drawer">
+          <summary>{{ t('moreActions') }}</summary>
+          <div class="mobile-action-grid">
+            <button class="button button-ghost" type="button" :disabled="loading" @click="load">
+              {{ loading ? t('refreshing') : t('refresh') }}
+            </button>
+            <button class="button button-ghost" type="button" @click="openGroupEditor">{{ t('groupManagement') }}</button>
+          </div>
+        </details>
         <button class="button button-accent" type="button" @click="openCreate">{{ t('createSubscription') }}</button>
       </div>
     </header>
@@ -864,7 +881,25 @@ onMounted(load)
           <div class="hint">{{ t('subscriptionList') }}</div>
           <p class="card-copy">{{ t('subscriptionListSummary', { filtered: filteredSubscriptions.length, selected: selectedCount }) }}</p>
         </div>
-        <div class="inline-actions bulk-actions">
+        <div class="view-switch">
+          <button class="view-switch-button" :class="{ active: displayMode === 'detailed' }" type="button" @click="displayMode = 'detailed'">
+            {{ t('detailedView') }}
+          </button>
+          <button class="view-switch-button" :class="{ active: displayMode === 'minimal' }" type="button" @click="displayMode = 'minimal'">
+            {{ t('minimalView') }}
+          </button>
+        </div>
+        <label v-if="filteredSubscriptions.length > 0" class="select-page-toggle" :class="{ 'is-active': currentPageSelected }">
+          <input
+            type="checkbox"
+            :checked="currentPageSelected"
+            @change="toggleCurrentPage(($event.target as HTMLInputElement).checked)"
+          />
+          <span class="select-page-toggle-mark"></span>
+          <span class="select-page-toggle-text">{{ currentPageSelected ? t('unselectCurrentPage') : t('selectCurrentPage') }}</span>
+          <span class="select-page-toggle-count">{{ selectedCount }}/{{ pagedSubscriptions.length }}</span>
+        </label>
+        <div class="inline-actions bulk-actions" :class="{ 'is-empty-selection': selectedCount === 0 }">
           <select v-model="batchGroupId" class="select toolbar-select" :aria-label="t('moveGroup')">
             <option :value="null">{{ t('moveToUngrouped') }}</option>
             <option v-for="group in groups" :key="group.id" :value="group.id">{{ group.name }}</option>
@@ -877,6 +912,21 @@ onMounted(load)
       </div>
 
       <div v-if="filteredSubscriptions.length === 0" class="empty-state">{{ t('emptySubscriptions') }}</div>
+
+      <div v-else-if="displayMode === 'minimal'" class="minimal-card-grid">
+        <div v-for="item in pagedSubscriptions" :key="item.id" class="minimal-info-card" :class="{ 'is-selected': selectedIds.includes(item.id) }">
+          <label class="minimal-select-dot" :aria-label="t('selectSubscription', { name: item.name })" @click.stop>
+            <input v-model="selectedIds" :value="item.id" type="checkbox" />
+            <span></span>
+          </label>
+          <button class="minimal-card-main" type="button" @click="detailSubscription = item">
+            <span class="minimal-card-title">{{ item.name }}</span>
+            <span class="metric-chip" :class="{ 'metric-chip-warn': subscriptionStatus(item) === 'expired' }">
+              {{ formatExpiry(item.expires_at) }}
+            </span>
+          </button>
+        </div>
+      </div>
 
       <div v-else class="table-wrap subscription-board">
         <table class="table dense-table selectable-table subscription-table">
@@ -968,6 +1018,31 @@ onMounted(load)
         </div>
       </footer>
     </article>
+
+    <Teleport to="body">
+      <div v-if="detailSubscription" class="modal-backdrop" @click.self="detailSubscription = null">
+        <section class="modal-panel">
+          <header class="modal-header">
+            <div>
+              <span class="eyebrow">{{ t('subscriptionDetail') }}</span>
+              <h3>{{ detailSubscription.name }}</h3>
+            </div>
+            <button class="icon-button" type="button" :aria-label="t('close')" @click="detailSubscription = null">×</button>
+          </header>
+          <div class="detail-grid">
+            <div><span>{{ t('subscriptionGroup') }}</span><strong>{{ groupName(detailSubscription.group_id) }}</strong></div>
+            <div><span>{{ t('expiresAt') }}</span><strong>{{ formatExpiry(detailSubscription.expires_at) }}</strong></div>
+            <div><span>{{ t('node') }}</span><strong>{{ t('nodesUnit', { count: detailSubscription.node_ids.length }) }}</strong></div>
+            <div><span>{{ t('defaultClientLabel') }}</span><strong>{{ TARGET_LABELS[defaultTarget(detailSubscription)] }}</strong></div>
+          </div>
+          <div class="modal-actions">
+            <button class="button button-ghost" type="button" @click="copyText(autoSubscriptionLink(detailSubscription), t('autoLinkCopied'))">{{ t('copyAutoLink') }}</button>
+            <button class="button button-accent" type="button" @click="openExportConsole(detailSubscription); detailSubscription = null">{{ t('export') }}</button>
+            <button class="button button-ghost" type="button" @click="startEdit(detailSubscription); detailSubscription = null">{{ t('edit') }}</button>
+          </div>
+        </section>
+      </div>
+    </Teleport>
 
     <Teleport to="body">
       <div v-if="showEditor" class="modal-backdrop" @click.self="closeEditor">

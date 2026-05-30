@@ -19,7 +19,7 @@
 | 方向 | 原项目 | sublinkx-rs 当前增强 |
 | --- | --- | --- |
 | 技术栈 | 原项目实现 | 后端重构为 Rust/Axum，前端重构为 Vue 3，默认使用 SQLite |
-| 管理后台 | 以原订阅管理能力为核心 | 增加节点、订阅、模板、分组、系统设置、语言切换等完整管理界面 |
+| 管理后台 | 以原订阅管理能力为核心 | 增加节点、订阅、模板、分组、系统设置、语言切换等完整管理界面，并适配桌面、平板和移动端 |
 | 节点导入 | 基础订阅导入 | 支持手动多行导入、整段 Base64 订阅自动解码、上游订阅链接导入、Mihomo YAML 节点提取 |
 | 上游模板 | 主要偏转换输出 | 增加上游 Mihomo 模板保存与透传，适合不希望二次转换破坏复杂规则的订阅 |
 | 多客户端导出 | 原有客户端适配思路 | 扩展 Mihomo/Clash Meta、Clash、Xray、Surge、sing-box、Quantumult X、Loon、Surfboard、Mellow、ClashR、SS SIP002/SIP008、Trojan URI 等目标 |
@@ -35,6 +35,9 @@
 
 - Rust 后端：基于 Axum、SQLx 和 SQLite，适合轻量部署到 Linux 服务器。
 - Vue 3 前端：提供节点、订阅、模板、分组、设置和导出管理界面。
+- 多端控制台：统一桌面、平板和移动端布局，节点与订阅支持详细/简约两种展示模式。
+- 简约卡片：节点简约模式只突出名称和真实链路延迟，订阅简约模式只突出名称和到期时间，点击卡片可查看完整详情。
+- 操作偏好：节点和订阅分页数量会保存在浏览器本地，刷新后继续使用上次选择。
 - 多协议节点：支持 Shadowsocks、VMess、VLESS、Trojan、Hysteria2、TUIC、WireGuard、AnyTLS 等协议的解析和扩展。
 - 多客户端导出：覆盖 Mihomo/Clash Meta、Clash、Xray、Surge、sing-box、Quantumult X、Loon、Surfboard、Mellow、ClashR、SS SIP002/SIP008、Trojan URI 等目标。
 - 模板与保真检查：支持 Clash/Mihomo、Surge、sing-box、Quantumult X 等模板方向，并提供上游字段与二次导出字段的完整性检查。
@@ -173,7 +176,46 @@ docker compose down
 docker compose up -d
 ```
 
-### 6. 常用命令
+### 6. 宝塔 / Nginx 反向代理
+
+Docker 部署默认只把前端容器暴露到宿主机 `3000` 端口，后端 `8080` 只在 Docker 内部网络访问。因此宝塔、1Panel、Nginx Proxy Manager 或外层 Nginx 反代时，不要直接转发到 `8080`，统一转发到：
+
+```text
+http://127.0.0.1:3000
+```
+
+前端容器内部 Nginx 会继续代理后端接口：
+
+```text
+/api/     -> backend:8080/api/
+/s/       -> backend:8080/s/
+/healthz  -> backend:8080/healthz
+```
+
+如果外层 Nginx 单独写 `/api/` 规则，也仍然应该转发到 `3000`，并禁用缓存：
+
+```nginx
+location ^~ /api/ {
+    proxy_pass http://127.0.0.1:3000;
+
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+
+    proxy_cache off;
+    proxy_no_cache 1;
+    proxy_cache_bypass 1;
+
+    add_header Cache-Control "no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0" always;
+    add_header Pragma "no-cache" always;
+    add_header Expires "0" always;
+}
+```
+
+注意：如果转发到 `127.0.0.1:8080`，默认 Compose 配置下会返回 `502`，因为后端没有暴露到宿主机。
+
+### 7. 常用命令
 
 ```bash
 docker compose ps

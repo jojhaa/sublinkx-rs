@@ -19,7 +19,7 @@ Thanks to [gooaclok819/sublinkX](https://github.com/gooaclok819/sublinkX) for th
 | Area | Upstream project | sublinkx-rs additions |
 | --- | --- | --- |
 | Stack | Original implementation | Backend rewritten with Rust/Axum, frontend rewritten with Vue 3, SQLite as default storage |
-| Admin console | Core subscription management | Full console for nodes, subscriptions, templates, groups, settings, and language switching |
+| Admin console | Core subscription management | Full console for nodes, subscriptions, templates, groups, settings, and language switching, with desktop, tablet, and mobile layouts |
 | Node import | Basic subscription import | Manual multi-line import, full Base64 subscription decoding, upstream URL import, and Mihomo YAML proxy extraction |
 | Upstream templates | Mostly conversion-oriented | Upstream Mihomo template passthrough for subscriptions that should not be converted twice |
 | Client exports | Original client adaptation idea | Extended targets including Mihomo/Clash Meta, Clash, Xray, Surge, sing-box, Quantumult X, Loon, Surfboard, Mellow, ClashR, SS SIP002/SIP008, Trojan URI, and mixed exports |
@@ -35,6 +35,9 @@ Thanks to [gooaclok819/sublinkX](https://github.com/gooaclok819/sublinkX) for th
 
 - Rust backend built with Axum, SQLx, and SQLite.
 - Vue 3 admin console for nodes, subscriptions, templates, groups, settings, and exports.
+- Responsive console layouts for desktop, tablet, and mobile.
+- Detailed and compact list modes for nodes and subscriptions. Compact node cards focus on name and real-link latency; compact subscription cards focus on name and expiry time, with details opened in a modal.
+- Page-size preferences for node and subscription lists are persisted in the browser.
 - Multi-protocol node parsing for Shadowsocks, VMess, VLESS, Trojan, Hysteria2, TUIC, WireGuard, AnyTLS, and more.
 - Multi-client exports for Mihomo/Clash Meta, Clash, Xray, Surge, sing-box, Quantumult X, Loon, Surfboard, Mellow, ClashR, SS SIP002/SIP008, Trojan URI, and mixed exports.
 - Template-aware exports and field-fidelity checks to reduce data loss during conversion.
@@ -137,6 +140,43 @@ SUBLINKX_DOCKER_SUBNET=172.31.88.0/24
 ```
 
 If it conflicts with existing Docker, VPN, or LAN networks, edit `SUBLINKX_DOCKER_SUBNET` in `.env`.
+
+### Reverse Proxy Notes
+
+The Docker deployment exposes only the frontend container on host port `3000`. The backend `8080` port is internal to the Docker network by default. For BT Panel, 1Panel, Nginx Proxy Manager, Caddy, or an outer Nginx reverse proxy, point the site to:
+
+```text
+http://127.0.0.1:3000
+```
+
+The frontend container then proxies backend paths internally:
+
+```text
+/api/     -> backend:8080/api/
+/s/       -> backend:8080/s/
+/healthz  -> backend:8080/healthz
+```
+
+If you create a separate outer `/api/` rule, still proxy it to `3000` and disable cache:
+
+```nginx
+location ^~ /api/ {
+    proxy_pass http://127.0.0.1:3000;
+
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+
+    proxy_cache off;
+    proxy_no_cache 1;
+    proxy_cache_bypass 1;
+
+    add_header Cache-Control "no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0" always;
+    add_header Pragma "no-cache" always;
+    add_header Expires "0" always;
+}
+```
 
 More details: [Docker Deployment](docs/docker.en.md).
 
