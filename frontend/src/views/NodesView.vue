@@ -122,10 +122,42 @@ watch(groupFilter, () => {
 })
 
 function splitRawLinks(rawText: string) {
+  const directLinks = extractRawLinks(rawText)
+  if (directLinks.length > 0) {
+    return directLinks
+  }
+
+  const decoded = decodeBase64Text(rawText)
+  return decoded ? extractRawLinks(decoded) : []
+}
+
+function extractRawLinks(rawText: string) {
   return rawText
     .split(/\r?\n/)
+    .flatMap((line) => line.split(/\s+/))
     .map((item) => item.trim())
-    .filter((item) => item.length > 0)
+    .filter(isSupportedRawLink)
+}
+
+function isSupportedRawLink(value: string) {
+  return /^(ss|vmess|vless|trojan|hy2|hysteria2|tuic|wireguard|anytls|any-tls):\/\//i.test(value)
+}
+
+function decodeBase64Text(rawText: string) {
+  const compact = rawText.replace(/\s+/g, '')
+  if (!compact || compact.length < 8) {
+    return ''
+  }
+
+  try {
+    const normalized = compact.replace(/-/g, '+').replace(/_/g, '/')
+    const padded = normalized.padEnd(normalized.length + ((4 - (normalized.length % 4)) % 4), '=')
+    const binary = atob(padded)
+    const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0))
+    return new TextDecoder().decode(bytes)
+  } catch {
+    return ''
+  }
 }
 
 function isNodeSupportedForTarget(node: Pick<NodeItem, 'protocol'>, target: ExportTarget) {

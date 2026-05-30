@@ -1,46 +1,46 @@
-# Docker 部署
+# Docker Deployment
 
-[English](docker.en.md)
+[中文](docker.md)
 
-本项目只保留一个 `docker-compose.yml`，默认直接使用 Docker Hub 镜像：
+Only one `docker-compose.yml` is needed. It uses the published Docker Hub images by default:
 
 ```text
 docker.io/jojhaa/sublinkx-rs-backend:latest
 docker.io/jojhaa/sublinkx-rs-frontend:latest
 ```
 
-项目来源说明：`sublinkx-rs` 基于 [gooaclok819/sublinkX](https://github.com/gooaclok819/sublinkX) 二次修改与重构，当前 Docker 镜像为本仓库构建产物。
+Origin note: `sublinkx-rs` is a modified and rewritten version based on [gooaclok819/sublinkX](https://github.com/gooaclok819/sublinkX). The Docker images listed above are built from this repository.
 
-## 快速启动
+## Quick Start
 
 ```bash
 cp .env.example .env
 docker compose up -d
 ```
 
-访问：
+Open:
 
 ```text
-http://服务器IP:3000
+http://server-ip:3000
 ```
 
-本机测试：
+Local test:
 
 ```text
 http://localhost:3000
 ```
 
-默认首次登录账号：
+Default first login:
 
 ```text
 admin / admin123456
 ```
 
-首次登录后必须修改用户名和密码。密码会使用 Argon2 哈希后保存到 SQLite。
+The first login must change both username and password. Passwords are stored in SQLite as Argon2 hashes.
 
-## 配置文件
+## Environment File
 
-复制 `.env.example` 后至少修改 `JWT_SECRET`：
+Copy `.env.example` and change at least `JWT_SECRET`:
 
 ```env
 FRONTEND_PORT=3000
@@ -55,15 +55,15 @@ BOOTSTRAP_ADMIN_USERNAME=admin
 BOOTSTRAP_ADMIN_PASSWORD=admin123456
 ```
 
-生产部署建议：
+Production recommendation:
 
 ```env
-JWT_SECRET=请改成一串随机长密钥
+JWT_SECRET=use-a-long-random-secret
 ```
 
-## 本地数据映射
+## Local Data Mapping
 
-默认把运行数据映射到本地文件夹：
+Runtime data is bind-mounted to local folders by default:
 
 ```text
 docker-data/
@@ -73,74 +73,74 @@ docker-data/
     mihomo
 ```
 
-映射关系：
+Mounts:
 
 ```yaml
 ./docker-data/backend:/app/data
 ./docker-data/mihomo:/app/mihomo
 ```
 
-也可以改成绝对路径。
+Absolute paths are also supported.
 
-Windows 示例：
+Windows example:
 
 ```env
 BACKEND_DATA_DIR=D:/sublinkx-data/backend
 MIHOMO_CORE_DIR=D:/sublinkx-data/mihomo
 ```
 
-Linux 示例：
+Linux example:
 
 ```env
 BACKEND_DATA_DIR=/opt/sublinkx-rs/data
 MIHOMO_CORE_DIR=/opt/sublinkx-rs/mihomo
 ```
 
-SQLite 数据库文件：
+SQLite database:
 
 ```text
 BACKEND_DATA_DIR/app.db
 ```
 
-Mihomo 内核目录：
+Mihomo core directory:
 
 ```text
 MIHOMO_CORE_DIR/
 ```
 
-也可以登录后台后，在“系统设置”页面下载 Mihomo 内核。
+You can also download the Mihomo core from the Settings page after login.
 
-## 固定 Docker 网段
+## Fixed Docker Subnet
 
-默认固定网段：
+Default subnet:
 
 ```env
 SUBLINKX_DOCKER_SUBNET=172.31.88.0/24
 ```
 
-如果和已有 Docker、VPN 或局域网网段冲突，改 `.env`：
+If it conflicts with existing Docker, VPN, or LAN networks, edit `.env`:
 
 ```env
 SUBLINKX_DOCKER_SUBNET=172.30.88.0/24
 ```
 
-修改后重建网络：
+Recreate the network after changing it:
 
 ```bash
 docker compose down
 docker compose up -d
 ```
 
-## 端口和反向代理
+## Ports and Reverse Proxy
 
-默认只暴露前端：
+Only the frontend is exposed by default:
 
 ```yaml
 ports:
   - "3000:80"
 ```
 
-后端只在 Docker 内部网络访问。前端 Nginx 会代理：
+The backend is only reachable inside the Docker network. The frontend Nginx container proxies:
 
 ```text
 /api/     -> backend:8080/api/
@@ -148,46 +148,46 @@ ports:
 /healthz  -> backend:8080/healthz
 ```
 
-如果使用 Nginx Proxy Manager、1Panel、宝塔或 Caddy，反代：
+For Nginx Proxy Manager, 1Panel, BT Panel, or Caddy, reverse proxy:
 
 ```text
 http://127.0.0.1:3000
 ```
 
-## 常用命令
+## Common Commands
 
-查看状态：
+Status:
 
 ```bash
 docker compose ps
 ```
 
-查看日志：
+Logs:
 
 ```bash
 docker compose logs -f
 ```
 
-重启：
+Restart:
 
 ```bash
 docker compose restart
 ```
 
-停止：
+Stop:
 
 ```bash
 docker compose down
 ```
 
-升级镜像：
+Upgrade:
 
 ```bash
 docker compose pull
 docker compose up -d
 ```
 
-备份 SQLite：
+Back up SQLite:
 
 ```bash
 docker compose down
@@ -195,21 +195,21 @@ cp ./docker-data/backend/app.db ./app.db.bak
 docker compose up -d
 ```
 
-## 发布新镜像
+## Publish New Images
 
-登录 Docker Hub：
+Login to Docker Hub:
 
 ```bash
 docker login docker.io -u jojhaa
 ```
 
-Windows PowerShell：
+Windows PowerShell:
 
 ```powershell
 .\scripts\docker-push.ps1 -Namespace jojhaa -Tag latest
 ```
 
-手动推送：
+Manual push:
 
 ```powershell
 docker tag sublinkx-rs-backend:local jojhaa/sublinkx-rs-backend:latest
@@ -219,4 +219,4 @@ docker tag sublinkx-rs-frontend:local jojhaa/sublinkx-rs-frontend:latest
 docker push jojhaa/sublinkx-rs-frontend:latest
 ```
 
-如果 Docker Hub 开启了 2FA，`docker login` 的密码需要填写 Docker Hub Access Token。
+If Docker Hub 2FA is enabled, use a Docker Hub access token as the `docker login` password.
