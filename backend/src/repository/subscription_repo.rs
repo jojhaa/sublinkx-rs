@@ -9,7 +9,7 @@ pub struct NewSubscriptionRecord<'a> {
     pub default_client: Option<&'a str>,
     pub template_id: Option<i64>,
     pub group_id: Option<i64>,
-    pub enabled: bool,
+    pub enabled: i64,
     pub expires_at: Option<&'a str>,
     pub created_at: &'a str,
     pub updated_at: &'a str,
@@ -22,7 +22,7 @@ pub struct UpdateSubscriptionRecord<'a> {
     pub default_client: Option<&'a str>,
     pub template_id: Option<i64>,
     pub group_id: Option<i64>,
-    pub enabled: bool,
+    pub enabled: i64,
     pub expires_at: Option<&'a str>,
     pub updated_at: &'a str,
 }
@@ -30,7 +30,7 @@ pub struct UpdateSubscriptionRecord<'a> {
 pub async fn list(pool: &DbPool) -> Result<Vec<SubscriptionRecord>, sqlx::Error> {
     sqlx::query_as::<_, SubscriptionRecord>(
         r#"
-        SELECT id, name, token, description, default_client, template_id, group_id, enabled, expires_at, created_at, updated_at
+        SELECT id, name, token, description, default_client, template_id, group_id, enabled + 0 AS enabled, expires_at, created_at, updated_at
         FROM subscriptions
         ORDER BY id DESC
         "#,
@@ -42,7 +42,7 @@ pub async fn list(pool: &DbPool) -> Result<Vec<SubscriptionRecord>, sqlx::Error>
 pub async fn find_by_id(pool: &DbPool, id: i64) -> Result<Option<SubscriptionRecord>, sqlx::Error> {
     sqlx::query_as::<_, SubscriptionRecord>(
         r#"
-        SELECT id, name, token, description, default_client, template_id, group_id, enabled, expires_at, created_at, updated_at
+        SELECT id, name, token, description, default_client, template_id, group_id, enabled + 0 AS enabled, expires_at, created_at, updated_at
         FROM subscriptions
         WHERE id = ?
         "#,
@@ -58,7 +58,7 @@ pub async fn find_by_name(
 ) -> Result<Option<SubscriptionRecord>, sqlx::Error> {
     sqlx::query_as::<_, SubscriptionRecord>(
         r#"
-        SELECT id, name, token, description, default_client, template_id, group_id, enabled, expires_at, created_at, updated_at
+        SELECT id, name, token, description, default_client, template_id, group_id, enabled + 0 AS enabled, expires_at, created_at, updated_at
         FROM subscriptions
         WHERE name = ?
         "#,
@@ -74,7 +74,7 @@ pub async fn find_by_token(
 ) -> Result<Option<SubscriptionRecord>, sqlx::Error> {
     sqlx::query_as::<_, SubscriptionRecord>(
         r#"
-        SELECT id, name, token, description, default_client, template_id, group_id, enabled, expires_at, created_at, updated_at
+        SELECT id, name, token, description, default_client, template_id, group_id, enabled + 0 AS enabled, expires_at, created_at, updated_at
         FROM subscriptions
         WHERE token = ?
         "#,

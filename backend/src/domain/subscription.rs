@@ -12,7 +12,7 @@ pub struct SubscriptionRecord {
     pub default_client: Option<String>,
     pub template_id: Option<i64>,
     pub group_id: Option<i64>,
-    pub enabled: bool,
+    pub enabled: i64,
     pub expires_at: Option<String>,
     pub created_at: String,
     pub updated_at: String,

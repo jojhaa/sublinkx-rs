@@ -91,7 +91,7 @@ pub async fn create_node(
             raw_link: payload.raw_link.trim(),
             server: &parsed.server,
             port: i64::from(parsed.port),
-            enabled: true,
+            enabled: bool_to_db(true),
             group_id: payload.group_id,
             source_type: "manual",
             source_ref: None,
@@ -161,7 +161,7 @@ pub async fn import_nodes_from_subscription(
                                 raw_link: raw_link.trim(),
                                 server: &parsed.server,
                                 port: i64::from(parsed.port),
-                                enabled: true,
+                                enabled: bool_to_db(true),
                                 group_id: payload.group_id,
                                 source_type: "upstream_subscription",
                                 source_ref: Some(url),
@@ -241,7 +241,7 @@ pub async fn update_node(
             raw_link: payload.raw_link.trim(),
             server: &parsed.server,
             port: i64::from(parsed.port),
-            enabled: payload.enabled.unwrap_or(existing.enabled),
+            enabled: payload.enabled.map(bool_to_db).unwrap_or(existing.enabled),
             group_id: payload.group_id,
             fingerprint: &parsed.fingerprint,
             settings_json: &settings_json,
@@ -1663,6 +1663,10 @@ fn truncate_source(value: &str) -> String {
     let mut truncated = value.chars().take(MAX_LEN).collect::<String>();
     truncated.push_str("...");
     truncated
+}
+
+fn bool_to_db(value: bool) -> i64 {
+    if value { 1 } else { 0 }
 }
 
 #[cfg(test)]

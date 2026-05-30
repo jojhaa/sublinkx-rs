@@ -96,7 +96,7 @@ pub async fn create_subscription(
             default_client: payload.default_client.as_deref(),
             template_id: payload.template_id,
             group_id: payload.group_id,
-            enabled: payload.enabled.unwrap_or(true),
+            enabled: bool_to_db(payload.enabled.unwrap_or(true)),
             expires_at: payload.expires_at.as_deref(),
             created_at: &now,
             updated_at: &now,
@@ -149,7 +149,7 @@ pub async fn update_subscription(
             default_client: payload.default_client.as_deref(),
             template_id: payload.template_id,
             group_id: payload.group_id,
-            enabled: payload.enabled.unwrap_or(existing.enabled),
+            enabled: payload.enabled.map(bool_to_db).unwrap_or(existing.enabled),
             expires_at: payload.expires_at.as_deref(),
             updated_at: &now_rfc3339(),
         },
@@ -241,7 +241,7 @@ pub async fn renew_subscription(
             default_client: existing.default_client.as_deref(),
             template_id: existing.template_id,
             group_id: existing.group_id,
-            enabled: true,
+            enabled: bool_to_db(true),
             expires_at: Some(&expires_at),
             updated_at: &now_rfc3339(),
         },
@@ -282,7 +282,7 @@ async fn build_view(
         default_client: record.default_client,
         template_id: record.template_id,
         group_id: record.group_id,
-        enabled: record.enabled,
+        enabled: record.enabled != 0,
         expires_at: record.expires_at.clone(),
         status,
         node_ids,
@@ -373,7 +373,7 @@ pub fn subscription_is_expired(subscription: &SubscriptionView) -> bool {
 }
 
 fn subscription_status(record: &SubscriptionRecord) -> &'static str {
-    if !record.enabled {
+    if record.enabled == 0 {
         return "disabled";
     }
     if record
@@ -385,6 +385,10 @@ fn subscription_status(record: &SubscriptionRecord) -> &'static str {
         return "expired";
     }
     "active"
+}
+
+fn bool_to_db(value: bool) -> i64 {
+    if value { 1 } else { 0 }
 }
 
 fn validate_expires_at(expires_at: Option<&str>) -> Result<(), AppError> {

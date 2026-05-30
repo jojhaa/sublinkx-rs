@@ -4,7 +4,7 @@ use crate::db::DbPool;
 use crate::domain::node::NodeRecord;
 
 const NODE_SELECT_FIELDS: &str = r#"
-id, name, protocol, raw_link, server, port, enabled, group_id, source_type, source_ref,
+id, name, protocol, raw_link, server, port, enabled + 0 AS enabled, group_id, source_type, source_ref,
 fingerprint, settings_json, remark, last_latency_ms, last_latency_status,
 last_latency_message, last_latency_tested_at, created_at, updated_at
 "#;
@@ -15,7 +15,7 @@ pub struct NewNodeRecord<'a> {
     pub raw_link: &'a str,
     pub server: &'a str,
     pub port: i64,
-    pub enabled: bool,
+    pub enabled: i64,
     pub group_id: Option<i64>,
     pub source_type: &'a str,
     pub source_ref: Option<&'a str>,
@@ -32,7 +32,7 @@ pub struct UpdateNodeRecord<'a> {
     pub raw_link: &'a str,
     pub server: &'a str,
     pub port: i64,
-    pub enabled: bool,
+    pub enabled: i64,
     pub group_id: Option<i64>,
     pub fingerprint: &'a str,
     pub settings_json: &'a str,
@@ -44,7 +44,7 @@ pub async fn list(pool: &DbPool) -> Result<Vec<NodeRecord>, sqlx::Error> {
     sqlx::query_as::<_, NodeRecord>(
         r#"
         SELECT
-               id, name, protocol, raw_link, server, port, enabled, group_id, source_type, source_ref,
+               id, name, protocol, raw_link, server, port, enabled + 0 AS enabled, group_id, source_type, source_ref,
                fingerprint, settings_json, remark, last_latency_ms, last_latency_status,
                last_latency_message, last_latency_tested_at, created_at, updated_at
         FROM nodes
@@ -59,7 +59,7 @@ pub async fn find_by_id(pool: &DbPool, id: i64) -> Result<Option<NodeRecord>, sq
     sqlx::query_as::<_, NodeRecord>(
         r#"
         SELECT
-               id, name, protocol, raw_link, server, port, enabled, group_id, source_type, source_ref,
+               id, name, protocol, raw_link, server, port, enabled + 0 AS enabled, group_id, source_type, source_ref,
                fingerprint, settings_json, remark, last_latency_ms, last_latency_status,
                last_latency_message, last_latency_tested_at, created_at, updated_at
         FROM nodes
@@ -78,7 +78,7 @@ pub async fn find_by_fingerprint(
     sqlx::query_as::<_, NodeRecord>(
         r#"
         SELECT
-               id, name, protocol, raw_link, server, port, enabled, group_id, source_type, source_ref,
+               id, name, protocol, raw_link, server, port, enabled + 0 AS enabled, group_id, source_type, source_ref,
                fingerprint, settings_json, remark, last_latency_ms, last_latency_status,
                last_latency_message, last_latency_tested_at, created_at, updated_at
         FROM nodes
