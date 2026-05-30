@@ -1,91 +1,85 @@
-# Client Compatibility Targets
+# 客户端兼容矩阵
 
-As of 2026-05-29, the rewrite should target current mainstream proxy clients instead of only preserving legacy `clash / surge / v2ray` outputs.
+更新日期：2026-05-29
 
-This document defines compatibility priorities for `sublinkx-rs`.
+本文档用于规划 `sublinkx-rs` 需要优先适配的主流代理客户端。新系统不应只保留旧版 `clash / surge / v2ray` 输出，而应该按“客户端家族”设计导出器和兼容策略。
 
-## 1. Compatibility Strategy
+## 1. 兼容策略
 
-The new system should not treat "subscription export" as a single feature.
+订阅导出不应该被当成单一功能处理。后端需要支持多个输出家族：
 
-It should support multiple output families:
+- Mihomo / Clash 家族配置
+- Xray / v2rayN 家族 URI 订阅
+- sing-box outbound 配置
+- Surge 家族配置
 
-- Mihomo / Clash-family configuration
-- Xray / v2rayN-family node subscription
-- sing-box outbound subscription
-- Surge-family configuration
+后端架构需要具备：
 
-The backend architecture must support:
+- 多导出渲染器
+- 按协议能力过滤节点
+- 按客户端生成配置
+- 按客户端家族维护格式版本
 
-- Multiple renderers
-- Capability-aware protocol filtering
-- Client-specific profile generation
-- Format versioning per client family
+## 2. 优先级
 
-## 2. Priority Tiers
+### Tier 1：MVP 或早期必须支持
 
-### Tier 1: Must Support In MVP Or Early Milestones
+这些是第一优先级客户端家族。
 
-These are the first-class compatibility targets.
-
-1. Mihomo / Clash-family
-   - Representative clients:
+1. Mihomo / Clash 家族
    - Clash Verge Rev
    - Stash
-   - Other Mihomo-compatible GUIs
+   - 其它 Mihomo 兼容 GUI
 
-2. v2rayN / Xray-family
-   - Representative clients:
+2. v2rayN / Xray 家族
    - v2rayN
    - v2rayNG
 
-3. Surge-family
-   - Representative clients:
+3. Surge 家族
    - Surge
-   - Shadowrocket partial compatibility path via Surge-style output when applicable
+   - Shadowrocket 可在部分场景通过 Surge 风格输出兼容
 
-4. sing-box-family
-   - Representative clients:
+4. sing-box 家族
    - NekoBox for Android
    - Hiddify App
-   - Other sing-box GUI clients
+   - 其它 sing-box GUI 客户端
 
-### Tier 2: Planned After Core Stability
+### Tier 2：核心稳定后继续适配
 
-- Direct Shadowrocket-optimized output
-- sing-box rule-set aware profile output
-- GUI.for.SingBox-oriented compatibility verification
-- Hiddify-specific profile tuning
+- Shadowrocket 专用输出
+- 支持 rule-set 的 sing-box profile
+- GUI.for.SingBox 兼容验证
+- Hiddify 专用配置优化
 
-## 3. Current Mainstream Client Signals
+## 3. 当前主流客户端信号
 
-The following projects/pages were checked on 2026-05-29:
+以下信息检查于 2026-05-29：
 
-- Clash Verge Rev is actively maintained and positions itself as a modern GUI built around Mihomo for Windows, macOS, and Linux.
-- v2rayN is actively maintained and describes itself as a GUI client for Windows, Linux, and macOS supporting Xray, sing-box, and others.
-- v2rayNG is actively maintained and describes itself as an Android client supporting Xray core and v2fly core.
-- NekoBox for Android is actively maintained and documents support for widely used subscription formats including ClashMeta, v2rayN, and sing-box outbound.
-- Hiddify App positions itself as a multi-platform client based on sing-box.
-- Stash documents itself as a Clash-compatible client on Apple platforms.
-- Shadowrocket remains a widely used Apple-platform rule-based proxy client.
+- Clash Verge Rev 仍在维护，定位为基于 Mihomo 的现代跨平台 GUI。
+- v2rayN 仍在维护，支持 Windows、Linux、macOS，并支持 Xray、sing-box 等内核。
+- v2rayNG 仍在维护，是 Android 平台常用的 Xray / v2fly 客户端。
+- NekoBox for Android 支持 ClashMeta、v2rayN、sing-box outbound 等常见订阅格式。
+- Hiddify App 是基于 sing-box 的多平台客户端。
+- Stash 是 Apple 平台上常见的 Clash 兼容客户端。
+- Shadowrocket 仍是 Apple 平台广泛使用的规则代理客户端。
 
-## 4. Renderer Targets
+## 4. 导出器目标
 
-The backend should provide separate renderers instead of one mixed export path:
+后端应提供独立导出器，而不是把所有格式混在一个输出路径里：
 
 - `mihomo`
 - `surge`
 - `xray_uri_bundle`
 - `sing_box_outbound_bundle`
 
-Recommended public access form:
+推荐公开访问形式：
 
 - `/s/{token}?target=mihomo`
 - `/s/{token}?target=surge`
 - `/s/{token}?target=xray`
 - `/s/{token}?target=sing-box`
 
-Optional alias mapping may be added later:
+后续可增加客户端别名：
 
 - `client=clash-verge-rev`
 - `client=v2rayn`
@@ -95,66 +89,66 @@ Optional alias mapping may be added later:
 - `client=stash`
 - `client=shadowrocket`
 
-The backend should internally map client aliases to renderer families plus profile transforms.
+后端内部应把客户端别名映射到导出器家族和客户端专用转换规则。
 
-## 5. Compatibility Matrix Design
+## 5. 兼容矩阵设计
 
-Each protocol handler should declare render support:
+每个协议处理器都应声明自己支持哪些导出目标：
 
-- Can render to Mihomo
-- Can render to Surge
-- Can render to Xray URI bundle
-- Can render to sing-box outbound
+- 是否可导出到 Mihomo
+- 是否可导出到 Surge
+- 是否可导出到 Xray URI bundle
+- 是否可导出到 sing-box outbound
 
-This avoids invalid exports for unsupported protocol and client combinations.
+这样可以避免把不兼容节点静默导出给错误客户端。
 
-Example:
+示例：
 
-- `wireguard` may support sing-box but not all Surge variants
-- `reality` transport may work for sing-box and Xray-family clients but need client-specific flags
-- Some advanced plugins may be acceptable only in Mihomo-compatible outputs
+- `wireguard` 可能支持 sing-box，但不一定支持所有 Surge 版本。
+- `reality` transport 可用于 sing-box 和 Xray 家族，但需要客户端专用字段。
+- 某些高级插件可能只适合 Mihomo 兼容输出。
 
-## 6. Product Rules
+## 6. 产品规则
 
-Rules for export behavior:
+导出行为规则：
 
-1. Never silently emit unsupported nodes into a client format.
-2. Return explicit compatibility warnings in admin preview.
-3. Allow per-subscription client presets.
-4. Allow per-client filtering rules.
-5. Support "strict mode" and "best effort mode".
+1. 不要把不支持的节点静默写入目标客户端格式。
+2. 管理后台预览必须展示明确兼容警告。
+3. 每个订阅可以设置默认客户端目标。
+4. 每个客户端可以设置过滤规则。
+5. 同时支持 `strict` 和 `best_effort`。
 
-Strict mode:
+`strict`：
 
-- Fails when any selected node is not compatible with the target client family.
+- 只要选中节点中有任意节点不兼容目标客户端，就导出失败。
 
-Best effort mode:
+`best_effort`：
 
-- Drops unsupported nodes and records warnings.
+- 自动移除不兼容节点，并记录警告。
 
-## 7. Frontend Requirements
+## 7. 前端要求
 
-The admin frontend should expose:
+管理后台需要展示：
 
-- Target client family selector
-- Compatibility preview per node
-- Unsupported-node warning list
-- Export sample preview
-- Default client target per subscription
+- 目标客户端家族选择器
+- 每个节点的兼容性 badge
+- 不兼容节点列表
+- 导出预览
+- 每个订阅的默认客户端目标
 
-## 8. Delivery Order
+## 8. 实现顺序
 
-Recommended implementation order:
+推荐实现顺序：
 
-1. Mihomo renderer
-2. Xray URI bundle renderer for v2rayN / v2rayNG class clients
-3. Surge renderer
-4. sing-box outbound renderer
-5. Client-specific compatibility tuning
+1. Mihomo 导出器
+2. Xray URI bundle 导出器，面向 v2rayN / v2rayNG
+3. Surge 导出器
+4. sing-box outbound 导出器
+5. 客户端专用兼容优化
 
-## 9. Sources
+## 9. 参考来源
 
-Sources checked on 2026-05-29:
+检查日期：2026-05-29
 
 - [Clash Verge Rev](https://github.com/clash-verge-rev/clash-verge-rev)
 - [v2rayN](https://github.com/2dust/v2rayN)
@@ -165,6 +159,6 @@ Sources checked on 2026-05-29:
 - [Stash App Store page](https://apps.apple.com/us/app/stash/id1596063349?l=zh-CN&l=zh-Hans-CN%3Fplatform%3Diphone)
 - [Shadowrocket App Store page](https://apps.apple.com/us/app/shadowrocket/id932747118?l=en-us)
 
-See also:
+相关文档：
 
-- [protocol-client-matrix.md](D:\Desktop\tool\sublinkx-rs\docs\protocol-client-matrix.md)
+- [协议 x 客户端矩阵](protocol-client-matrix.md)

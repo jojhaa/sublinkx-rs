@@ -1,17 +1,17 @@
-# sublinkx-rs Rewrite Plan
+# sublinkx-rs 重构蓝图
 
-## 1. Goal
+## 1. 目标
 
-Rebuild the old `sublinkX-2.1` system into a maintainable, secure, multi-protocol subscription platform.
+将旧版 `sublinkX-2.1` 的订阅分发思路重构为一个可维护、可部署、可扩展的多协议订阅管理平台。
 
-Core goals:
+核心目标：
 
-- Support many node protocols without repeated large refactors
-- Separate protocol parsing, storage, rendering, and frontend editing
-- Replace weak security design with explicit auth and token boundaries
-- Keep the product focus: node management, subscription management, template management, and client export
+- 支持更多节点协议，避免每新增协议都大规模改造。
+- 拆分协议解析、数据存储、导出渲染和前端编辑。
+- 使用明确的认证、密码哈希和 token 边界替代弱安全设计。
+- 保持产品重点：节点管理、订阅管理、模板管理和客户端导出。
 
-## 2. High-Level Architecture
+## 2. 总体架构
 
 ```text
 sublinkx-rs/
@@ -20,49 +20,48 @@ sublinkx-rs/
   docs/
 ```
 
-Backend stack:
+后端技术栈：
 
 - Rust
 - Axum
 - SQLx
-- SQLite first, PostgreSQL-ready
+- SQLite first，支持 MySQL
 - Serde
 - JsonWebToken
 - Argon2
 - Reqwest
 - Tracing
 
-Frontend stack:
+前端技术栈：
 
 - Vue 3
 - Vite
 - TypeScript
 - Pinia
 - Vue Router
-- Element Plus
 
-## 3. Key Differences From The Legacy Project
+## 3. 与旧系统的关键区别
 
-Legacy project:
+旧系统特点：
 
-- Function-first structure
-- Link-string-driven node model
-- Protocol support added with manual branching
-- Plaintext password verification
-- Predictable subscription token design
+- 以功能脚本为主组织代码。
+- 节点模型更依赖原始链接字符串。
+- 新增协议时容易出现大量分支判断。
+- 账号安全设计较弱。
+- 订阅 token 容易被预测或固定化。
 
-New project:
+新系统方向：
 
-- Domain-first structure
-- Structured node model with protocol metadata
-- Protocol registry architecture
-- Argon2 password hashes
-- Random subscription tokens
-- Safer remote fetch and template handling
+- 以领域模型组织代码。
+- 使用结构化节点模型保存协议元数据。
+- 使用协议注册表扩展协议。
+- 密码使用 Argon2 哈希保存。
+- 订阅 token 随机生成并支持轮换。
+- 对远程拉取、模板渲染和公开订阅访问设置边界。
 
-## 4. Folder Plan
+## 4. 目录规划
 
-### 4.1 Backend
+### 4.1 后端
 
 ```text
 backend/
@@ -84,7 +83,7 @@ backend/
   migrations/
 ```
 
-### 4.2 Frontend
+### 4.2 前端
 
 ```text
 frontend/
@@ -100,40 +99,38 @@ frontend/
     views/
 ```
 
-## 5. Data Model Principles
+## 5. 数据模型原则
 
-Node data must use:
+节点数据应包含：
 
-- Stable common fields
-- `protocol` type
-- `settings_json` for protocol-specific fields
-- `raw_link` for compatibility and traceability
-- `fingerprint` for deduplication
-- `source_type` and `source_ref` for import origin
+- 稳定的公共字段
+- `protocol` 协议类型
+- `settings_json` 协议专用字段
+- `raw_link` 原始链接，便于兼容和追踪
+- `fingerprint` 去重指纹
+- `source_type` 和 `source_ref` 导入来源
 
-Subscriptions must use:
+订阅数据应包含：
 
-- Random token
-- Explicit node ordering table
-- Optional client default and template binding
+- 随机 token
+- 节点排序关系表
+- 可选默认客户端
+- 可选模板绑定
+- 启用/停用状态
+- 到期时间
 
-Templates should be:
+模板数据应优先保存到数据库。只有出现明确需求时，才额外写入文件系统。
 
-- Stored in database first
-- Written to files only if a clear requirement appears later
+## 6. 协议扩展策略
 
-## 6. Protocol Expansion Strategy
+后端必须使用协议注册表模型。每个协议模块应提供：
 
-The backend must use a protocol registry model.
+- 链接解析器
+- 结构化校验器
+- 能力声明
+- 按客户端类型声明渲染支持
 
-Each protocol module should provide:
-
-- Link parser
-- Structured validator
-- Capability declaration
-- Render support per client type
-
-Planned protocol module layout:
+规划中的协议模块结构：
 
 ```text
 backend/src/protocols/
@@ -151,150 +148,153 @@ backend/src/protocols/
   wireguard.rs
 ```
 
-Design rule:
+设计规则：
 
-- Adding one protocol should not require editing unrelated business logic
+- 新增一个协议时，不应要求修改大量无关业务逻辑。
 
-## 6.1 Client Compatibility Strategy
+## 7. 客户端兼容策略
 
-The new project must target current mainstream clients, not only the legacy output names.
+新项目需要面向当前主流客户端，而不是只保留旧版输出名称。
 
-Primary target families:
+主要目标家族：
 
-- Mihomo / Clash-family clients
-- v2rayN / Xray-family clients
-- Surge-family clients
-- sing-box-family clients
+- Mihomo / Clash 家族客户端
+- v2rayN / Xray 家族客户端
+- Surge 家族客户端
+- sing-box 家族客户端
 
-Detailed targets and compatibility rules are documented in:
+详细规则见：
 
-- [client-compatibility.md](D:\Desktop\tool\sublinkx-rs\docs\client-compatibility.md)
-- [client-target-registry.md](D:\Desktop\tool\sublinkx-rs\docs\client-target-registry.md)
+- [客户端兼容矩阵](client-compatibility.md)
+- [客户端目标注册表](client-target-registry.md)
+- [协议 x 客户端矩阵](protocol-client-matrix.md)
 
-## 7. Security Baseline
+## 8. 安全基线
 
-Must-have changes:
+必须具备：
 
-- Passwords stored with Argon2
-- Admin auth by JWT
-- Public subscription access token separated from admin auth
-- Subscription token must be random and rotatable
-- Remote fetch restricted by timeout, size, scheme, and target validation
-- Template operations restricted to trusted boundaries
+- 密码使用 Argon2 保存。
+- 管理后台使用 JWT 鉴权。
+- 公开订阅 token 与后台登录 token 分离。
+- 订阅 token 必须随机生成并可轮换。
+- 远程拉取需要限制超时、大小、协议和目标。
+- 模板操作必须限制在可信边界内。
 
-## 8. Phased Development Plan
+## 9. 分阶段开发计划
 
-### Phase 0: Planning
+### Phase 0：规划
 
-Deliverables:
+交付内容：
 
-- Project skeleton
-- Rewrite blueprint
-- Data model design
-- Protocol expansion rules
+- 项目骨架
+- 重构蓝图
+- 数据模型设计
+- 协议扩展规则
 
-### Phase 1: Backend Foundation
+### Phase 1：后端基础
 
-Deliverables:
+交付内容：
 
-- Rust workspace init
-- Axum app bootstrap
-- Config loading
-- Tracing and error middleware
-- SQLx setup and first migration
-- User model and admin bootstrap
+- Rust 工程初始化
+- Axum 应用启动
+- 配置加载
+- tracing 和错误中间件
+- SQLx 初始化和第一批迁移
+- 用户模型和管理员引导
 
-### Phase 2: Authentication And Admin Base
+### Phase 2：认证与后台基础
 
-Deliverables:
+交付内容：
 
-- Login API
-- JWT middleware
-- Current user API
-- Change password API
+- 登录 API
+- JWT 中间件
+- 当前用户 API
+- 修改密码 API
 
-### Phase 3: Node Domain
+### Phase 3：节点领域
 
-Deliverables:
+交付内容：
 
-- Node group CRUD
-- Node CRUD
-- Import raw links
-- Parse into structured protocol settings
-- Dedup with fingerprint
+- 节点分组 CRUD
+- 节点 CRUD
+- 原始链接导入
+- 解析为结构化协议设置
+- 使用 fingerprint 去重
 
-### Phase 4: Subscription Domain
+### Phase 4：订阅领域
 
-Deliverables:
+交付内容：
 
-- Subscription CRUD
-- Bind nodes with sort order
-- Rotate subscription token
-- Enable or disable subscriptions
+- 订阅 CRUD
+- 绑定节点并维护排序
+- 轮换订阅 token
+- 启用或停用订阅
+- 到期时间和续期
 
-### Phase 5: Render And Export
+### Phase 5：渲染与导出
 
-Deliverables:
+交付内容：
 
-- Unified canonical node pipeline
-- Mihomo renderer
-- Surge renderer
-- Xray URI bundle renderer
-- sing-box outbound renderer
-- Client-family compatibility filtering
+- 统一规范化节点管线
+- Mihomo 导出器
+- Surge 导出器
+- Xray URI bundle 导出器
+- sing-box outbound 导出器
+- 客户端家族兼容过滤
 
-### Phase 6: Frontend Admin
+### Phase 6：前端管理台
 
-Deliverables:
+交付内容：
 
-- Login page
-- Dashboard
-- Node management
-- Subscription management
-- Template management
-- Settings page
+- 登录页
+- 总览页
+- 节点管理
+- 订阅管理
+- 模板管理
+- 系统设置
 
-### Phase 7: Hardening
+### Phase 7：加固
 
-Deliverables:
+交付内容：
 
-- Access logs
-- Remote fetch guardrails
-- Test coverage for protocol parsing
-- Docker deployment files
+- 访问日志
+- 远程拉取保护
+- 协议解析测试
+- Docker 部署文件
 
-## 9. MVP Scope
+## 10. MVP 范围
 
-First usable version should include only:
+第一版可用范围：
 
-- Admin login
-- Node CRUD
-- Subscription CRUD
-- Node ordering
-- Mihomo / Surge / Xray export
-- Random token subscription access
+- 管理员登录
+- 节点 CRUD
+- 订阅 CRUD
+- 节点排序
+- Mihomo / Surge / Xray 导出
+- 随机 token 订阅访问
 
-Not in first milestone:
+首个里程碑不包含：
 
-- Multi-role permission system
-- Advanced dashboards
-- Complex template inheritance
-- Background sync scheduler
+- 多角色权限系统
+- 高级统计面板
+- 复杂模板继承
+- 后台同步调度器
 
-## 10. Immediate Next Steps
+## 11. 后续实现顺序
 
-Recommended implementation order:
+推荐顺序：
 
-1. Initialize Rust backend workspace
-2. Write first SQLx migrations
-3. Define core Rust domain types for node and subscription
-4. Bootstrap Vue 3 frontend
-5. Connect auth flow before protocol-heavy work
+1. 稳定 Rust 后端基础。
+2. 完善 SQLx 迁移。
+3. 定义节点和订阅核心领域类型。
+4. 稳定 Vue 3 前端基础布局。
+5. 优先打通认证流程。
+6. 再推进协议扩展和多客户端导出。
 
-## 11. Non-Negotiable Design Rules
+## 12. 不可妥协的设计规则
 
-- Do not couple protocol parsing to controller handlers
-- Do not store plaintext passwords
-- Do not use predictable subscription tokens
-- Do not let protocol-specific fields explode into one giant table schema
-- Do not mix admin auth with public subscription access
+- 不要把协议解析耦合到 controller handler。
+- 不要保存明文密码。
+- 不要使用可预测订阅 token。
+- 不要让协议专用字段膨胀成一张巨型表。
+- 不要混用后台鉴权和公开订阅访问。

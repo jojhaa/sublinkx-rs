@@ -2,14 +2,14 @@
 
 [中文](docker.md)
 
-Only one `docker-compose.yml` is needed. It uses the published Docker Hub images by default:
+This page explains how to deploy `sublinkx-rs` with Docker Compose.
+
+It uses the published Docker Hub images by default:
 
 ```text
 docker.io/jojhaa/sublinkx-rs-backend:latest
 docker.io/jojhaa/sublinkx-rs-frontend:latest
 ```
-
-Origin note: `sublinkx-rs` is a modified and rewritten version based on [gooaclok819/sublinkX](https://github.com/gooaclok819/sublinkX). The Docker images listed above are built from this repository.
 
 ## Quick Start
 
@@ -20,12 +20,7 @@ git clone https://github.com/jojhaa/sublinkx-rs.git
 cd sublinkx-rs
 ```
 
-This provides `docker-compose.yml`, `.env.example`, deployment docs, and the default local directory layout. The default deployment does not build from source locally; `docker-compose.yml` pulls the Docker Hub images:
-
-```text
-docker.io/jojhaa/sublinkx-rs-backend:latest
-docker.io/jojhaa/sublinkx-rs-frontend:latest
-```
+This provides `docker-compose.yml`, `.env.example`, deployment docs, and the default local directory layout. The default deployment does not build from source locally.
 
 ```bash
 cp .env.example .env

@@ -2,17 +2,19 @@
 
 [中文](README.md)
 
-`sublinkx-rs` is a Rust + Vue 3 project for multi-protocol, multi-client subscription management. It is a secondary modification, architectural rewrite, and feature extension based on [gooaclok819/sublinkX](https://github.com/gooaclok819/sublinkX). The project keeps the core subscription-delivery idea, while rebuilding the backend with Rust/Axum, rebuilding the admin console with Vue 3, and using SQLite as the default storage.
+`sublinkx-rs` is a multi-protocol subscription management console built with Rust + Vue 3.
 
-## Origin
+It is a modified, rewritten, and extended version based on [gooaclok819/sublinkX](https://github.com/gooaclok819/sublinkX).
 
-- Upstream project: [gooaclok819/sublinkX](https://github.com/gooaclok819/sublinkX)
-- This repository: a modified and extended Rust + Vue 3 rewrite focused on multi-protocol import, client template export, upstream template passthrough, real-link latency testing, subscription lifecycle management, and Docker deployment.
-- Note: this repository is not the official upstream repository.
+## Origin And Acknowledgements
 
-## Acknowledgements
+This project is based on [gooaclok819/sublinkX](https://github.com/gooaclok819/sublinkX). Thanks to the upstream project for the original subscription delivery idea and implementation reference.
 
-Thanks to [gooaclok819/sublinkX](https://github.com/gooaclok819/sublinkX) for the original subscription-delivery idea and implementation reference. `sublinkx-rs` started from that project direction and then evolved into a Rust + Vue 3 rewrite with additional operational features. Please respect the upstream project's open-source contribution and license requirements when using, modifying, or redistributing this project.
+Notes:
+
+- This repository is not the official upstream repository.
+- This project rewrites and extends the upstream idea with Rust + Vue 3.
+- Both this project and the upstream project use the MIT License. Please keep copyright and license notices when redistributing.
 
 ## What This Version Adds
 
@@ -205,6 +207,7 @@ Default URLs:
 
 ## Documentation
 
+- [Documentation Index](docs/README.md)
 - [Docker Deployment](docs/docker.en.md)
 - [Refactor Plan](docs/plan.md)
 - [Client Compatibility Matrix](docs/client-compatibility.md)

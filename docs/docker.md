@@ -2,14 +2,14 @@
 
 [English](docker.en.md)
 
-本项目只保留一个 `docker-compose.yml`，默认直接使用 Docker Hub 镜像：
+本页说明如何使用 Docker Compose 部署 `sublinkx-rs`。
+
+默认使用 Docker Hub 镜像：
 
 ```text
 docker.io/jojhaa/sublinkx-rs-backend:latest
 docker.io/jojhaa/sublinkx-rs-frontend:latest
 ```
-
-项目来源说明：`sublinkx-rs` 基于 [gooaclok819/sublinkX](https://github.com/gooaclok819/sublinkX) 二次修改与重构，当前 Docker 镜像为本仓库构建产物。
 
 ## 快速启动
 
@@ -20,12 +20,7 @@ git clone https://github.com/jojhaa/sublinkx-rs.git
 cd sublinkx-rs
 ```
 
-这一步会获取 `docker-compose.yml`、`.env.example`、部署文档和默认目录结构。默认部署不会在本机编译源码，而是通过 `docker-compose.yml` 拉取 Docker Hub 镜像：
-
-```text
-docker.io/jojhaa/sublinkx-rs-backend:latest
-docker.io/jojhaa/sublinkx-rs-frontend:latest
-```
+这一步会获取 `docker-compose.yml`、`.env.example`、部署文档和默认目录结构。默认部署不会在本机编译源码。
 
 ```bash
 cp .env.example .env

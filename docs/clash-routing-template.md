@@ -1,15 +1,15 @@
-# Clash Routing Template
+# Clash 分流模板说明
 
-Clash/Mihomo routing is built from two parts:
+Clash/Mihomo 的分流配置主要由两部分组成：
 
-- `proxy-groups`: named policies that choose the final outbound node.
-- `rules`: ordered match rules that send traffic to a policy group, `DIRECT`, or `REJECT`.
+- `proxy-groups`：策略组，用于决定最终使用哪个出站节点。
+- `rules`：按顺序匹配的规则，把流量分配到策略组、`DIRECT` 或 `REJECT`。
 
-In sublinkx-rs, the exporter injects real nodes into `proxies`, then appends an `AUTO` select group and a final `MATCH,AUTO` fallback. A Clash template can define additional groups, rule providers, DNS, and routing rules before that fallback.
+在 `sublinkx-rs` 中，导出器会把真实节点注入到 `proxies`，然后追加一个 `AUTO` 策略组和最终的 `MATCH,AUTO` 兜底规则。Clash 模板可以在兜底规则之前定义额外的策略组、规则集、DNS 和分流规则。
 
-## Minimal Split Routing Template
+## 最小分流模板
 
-Create a template with `kind = clash` and paste this YAML:
+创建一个 `kind = clash` 的模板，并粘贴下面的 YAML：
 
 ```yaml
 mixed-port: 7890
@@ -117,17 +117,17 @@ rules:
   - GEOIP,CN,DIRECT
 ```
 
-## How Matching Works
+## 匹配机制
 
-Rules are evaluated from top to bottom. The first match wins. That means block rules and private/direct rules should appear before broad proxy rules. The exporter appends `MATCH,AUTO` after template rules, so unmatched traffic still has a fallback.
+规则会从上到下依次匹配，命中第一条后停止。因此广告拦截、私有网络、直连规则应放在宽泛代理规则之前。导出器会在模板规则后追加 `MATCH,AUTO`，所以未匹配流量仍有兜底策略。
 
-`rules` send traffic to a group name such as `PROXY`, `AI`, or `STREAMING`. `proxy-groups` define how that group chooses nodes. The generated `AUTO` group includes exported nodes and is safe to reference from your template.
+`rules` 会把流量送到 `PROXY`、`AI`、`STREAMING` 等策略组。`proxy-groups` 决定这些策略组如何选择节点。生成的 `AUTO` 组包含当前导出的节点，可以在模板中安全引用。
 
-## Practical Group Pattern
+## 实用策略组模式
 
-Use `PROXY` as the general-purpose group, then create business groups such as `AI`, `STREAMING`, `GAME`, or `DOWNLOAD`. Rules can route special domains to those groups while everything else falls back to `AUTO`.
+建议把 `PROXY` 作为通用代理组，再创建 `AI`、`STREAMING`、`GAME`、`DOWNLOAD` 等业务组。规则可以把特定域名导向业务组，其余流量由 `AUTO` 兜底。
 
-If a Clash client does not support remote `rule-providers`, replace `RULE-SET` lines with direct rules such as:
+如果某些 Clash 客户端不支持远程 `rule-providers`，可以把 `RULE-SET` 替换成直接规则，例如：
 
 ```yaml
 rules:
@@ -136,20 +136,20 @@ rules:
   - GEOIP,CN,DIRECT
 ```
 
-## ACL4SSR-Style Full Routing Template
+## ACL4SSR 风格完整分流模板
 
-`youshandefeiyang/sub-web-modify` does not hardcode Clash YAML directly. It passes remote subconverter `.ini` files to the backend. Its default Clash routing is based on ACL4SSR remote configs such as:
+`youshandefeiyang/sub-web-modify` 不直接写死 Clash YAML，而是把远程 subconverter `.ini` 配置传给后端。它的默认 Clash 分流主要参考 ACL4SSR 远程配置，例如：
 
 - `ACL4SSR_Online_Full_NoAuto.ini`
 - `ACL4SSR_Online_Full.ini`
 - `GeneralClashRule.ini`
 
-That style has two key ideas:
+这种风格有两个核心点：
 
-- Many `ruleset=PolicyGroup,RuleListUrl` entries route traffic into named policy groups.
-- Many `custom_proxy_group=Name\`type\`filter` entries create manual, auto-test, fallback, region, media, AI, and catch-all groups.
+- 大量 `ruleset=PolicyGroup,RuleListUrl` 把流量导入命名策略组。
+- 大量 `custom_proxy_group=Name\`type\`filter` 创建手动选择、自动测速、故障转移、地区、媒体、AI 和兜底策略组。
 
-For this project we use native Clash/Mihomo YAML templates instead of subconverter ini. The closest native version is:
+本项目使用原生 Clash/Mihomo YAML 模板，而不是 subconverter ini。最接近的原生模板如下：
 
 ```yaml
 mixed-port: 7890
@@ -537,4 +537,4 @@ rules:
   - GEOIP,CN,全球直连
 ```
 
-The generated exporter will append the real `proxies`, an `AUTO` group, and `MATCH,AUTO`. If you prefer ACL4SSR's `漏网之鱼` group to be the final fallback, add `- MATCH,漏网之鱼` at the end of the template and disable or ignore the generated `MATCH,AUTO` fallback in a future exporter option.
+导出器会追加真实 `proxies`、`AUTO` 组和 `MATCH,AUTO`。如果你希望 ACL4SSR 风格的 `漏网之鱼` 作为最终兜底，可以在模板末尾加入 `- MATCH,漏网之鱼`。后续导出器可以增加选项，用于禁用或忽略自动生成的 `MATCH,AUTO` 兜底。
