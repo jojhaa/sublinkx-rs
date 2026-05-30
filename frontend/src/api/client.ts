@@ -4,6 +4,10 @@ import { TOKEN_KEY } from '../store/auth'
 const apiClient = axios.create({
   baseURL: import.meta.env.VITE_API_BASE_URL ?? 'http://127.0.0.1:8080',
   timeout: 15000,
+  headers: {
+    'Cache-Control': 'no-cache',
+    Pragma: 'no-cache',
+  },
 })
 
 apiClient.interceptors.request.use((config) => {

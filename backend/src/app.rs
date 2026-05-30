@@ -1,9 +1,9 @@
 use axum::{
     Router,
-    http::{Method, header},
+    http::{HeaderValue, Method, header},
     routing::get,
 };
-use tower_http::{cors::CorsLayer, trace::TraceLayer};
+use tower_http::{cors::CorsLayer, set_header::SetResponseHeaderLayer, trace::TraceLayer};
 
 use crate::{api, state::AppState};
 
@@ -118,6 +118,18 @@ pub fn build_app(state: AppState) -> Router {
                 .put(api::templates::update)
                 .delete(api::templates::delete),
         )
+        .layer(SetResponseHeaderLayer::if_not_present(
+            header::CACHE_CONTROL,
+            HeaderValue::from_static("no-store, no-cache, must-revalidate, proxy-revalidate"),
+        ))
+        .layer(SetResponseHeaderLayer::if_not_present(
+            header::PRAGMA,
+            HeaderValue::from_static("no-cache"),
+        ))
+        .layer(SetResponseHeaderLayer::if_not_present(
+            header::EXPIRES,
+            HeaderValue::from_static("0"),
+        ))
         .layer(cors)
         .layer(TraceLayer::new_for_http())
         .with_state(state)
