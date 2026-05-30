@@ -41,43 +41,76 @@ async function submit() {
 
 <template>
   <div class="auth-page">
-    <section class="auth-card">
-      <div class="auth-topbar">
-        <span class="eyebrow">{{ t('secureConsole') }}</span>
-        <LanguageSwitch />
+    <section class="auth-console">
+      <div class="auth-card auth-signin-panel">
+        <div class="auth-topbar">
+          <span class="eyebrow">{{ t('secureConsole') }}</span>
+          <LanguageSwitch compact />
+        </div>
+        <h1 class="hero-title">{{ t('loginTitle') }}</h1>
+        <p class="hero-copy">
+          {{ t('loginCopy') }}
+        </p>
+
+        <form class="form-grid auth-form" @submit.prevent="submit">
+          <div v-if="errorMessage" class="error-banner">{{ errorMessage }}</div>
+
+          <div>
+            <label class="field-label" for="username">{{ t('username') }}</label>
+            <input id="username" v-model.trim="form.username" class="input" autocomplete="username" />
+          </div>
+
+          <div>
+            <label class="field-label" for="password">{{ t('password') }}</label>
+            <input
+              id="password"
+              v-model="form.password"
+              class="input"
+              type="password"
+              autocomplete="current-password"
+            />
+          </div>
+
+          <button class="button button-accent auth-submit" type="submit" :disabled="loading">
+            {{ loading ? t('loggingIn') : t('enterAdmin') }}
+          </button>
+
+          <div class="hint auth-hint">
+            {{ t('loginHintDefault') }}
+          </div>
+        </form>
       </div>
-      <h1 class="hero-title">{{ t('loginTitle') }}</h1>
-      <p class="hero-copy">
-        {{ t('loginCopy') }}
-      </p>
 
-      <form class="form-grid" @submit.prevent="submit">
-        <div v-if="errorMessage" class="error-banner">{{ errorMessage }}</div>
-
-        <div>
-          <label class="field-label" for="username">{{ t('username') }}</label>
-          <input id="username" v-model.trim="form.username" class="input" autocomplete="username" />
+      <aside class="auth-card auth-status-panel">
+        <div class="auth-status-header">
+          <span class="eyebrow">SUBLINKX RS</span>
+          <span class="status-badge status-badge-neutral">SQLite</span>
         </div>
-
-        <div>
-          <label class="field-label" for="password">{{ t('password') }}</label>
-          <input
-            id="password"
-            v-model="form.password"
-            class="input"
-            type="password"
-            autocomplete="current-password"
-          />
+        <div class="auth-orbit">
+          <span></span>
+          <span></span>
+          <span></span>
+          <strong>RS</strong>
         </div>
-
-        <button class="button button-accent" type="submit" :disabled="loading">
-          {{ loading ? t('loggingIn') : t('enterAdmin') }}
-        </button>
-
-        <div class="hint">
-          {{ t('loginHintDefault') }}
+        <div class="auth-status-grid">
+          <div>
+            <strong>Rust API</strong>
+            <span>Axum / SQLx</span>
+          </div>
+          <div>
+            <strong>Vue 3</strong>
+            <span>Admin console</span>
+          </div>
+          <div>
+            <strong>Mihomo</strong>
+            <span>Real-link latency</span>
+          </div>
+          <div>
+            <strong>MIT</strong>
+            <span>Open source</span>
+          </div>
         </div>
-      </form>
+      </aside>
     </section>
   </div>
 </template>

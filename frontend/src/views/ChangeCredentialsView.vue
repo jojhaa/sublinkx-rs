@@ -44,7 +44,7 @@ async function submit() {
     <section class="auth-card">
       <div class="auth-topbar">
         <span class="eyebrow">Security Setup</span>
-        <LanguageSwitch />
+        <LanguageSwitch compact />
       </div>
       <h1 class="hero-title">{{ t('firstLoginTitle') }}</h1>
       <p class="hero-copy">

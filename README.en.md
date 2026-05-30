@@ -10,6 +10,27 @@
 - This repository: a modified and extended Rust + Vue 3 rewrite focused on multi-protocol import, client template export, upstream template passthrough, real-link latency testing, subscription lifecycle management, and Docker deployment.
 - Note: this repository is not the official upstream repository.
 
+## Acknowledgements
+
+Thanks to [gooaclok819/sublinkX](https://github.com/gooaclok819/sublinkX) for the original subscription-delivery idea and implementation reference. `sublinkx-rs` started from that project direction and then evolved into a Rust + Vue 3 rewrite with additional operational features. Please respect the upstream project's open-source contribution and license requirements when using, modifying, or redistributing this project.
+
+## What This Version Adds
+
+| Area | Upstream project | sublinkx-rs additions |
+| --- | --- | --- |
+| Stack | Original implementation | Backend rewritten with Rust/Axum, frontend rewritten with Vue 3, SQLite as default storage |
+| Admin console | Core subscription management | Full console for nodes, subscriptions, templates, groups, settings, and language switching |
+| Node import | Basic subscription import | Manual multi-line import, full Base64 subscription decoding, upstream URL import, and Mihomo YAML proxy extraction |
+| Upstream templates | Mostly conversion-oriented | Upstream Mihomo template passthrough for subscriptions that should not be converted twice |
+| Client exports | Original client adaptation idea | Extended targets including Mihomo/Clash Meta, Clash, Xray, Surge, sing-box, Quantumult X, Loon, Surfboard, Mellow, ClashR, SS SIP002/SIP008, Trojan URI, and mixed exports |
+| Template system | Basic template direction | Template management plus Clash/Mihomo routing templates and renderers for Surge, sing-box, Quantumult X, and more |
+| Fidelity checks | Manual validation after export | Field-fidelity checks that compare upstream proxy fields against second-pass exported fields |
+| Subscription lifecycle | Basic distribution | Enable/disable, expiry time, quick renewal, groups, node filtering, and auto-detected client links |
+| Latency testing | Not a core focus | Real-link latency checks through Mihomo, with persisted latency, test time, and failure status |
+| Security | Basic account configuration | Forced first-login credential change and Argon2 password hashing |
+| Deployment | Mostly manual deployment | Docker Hub images, a single `docker-compose.yml`, local data bind mounts, and a fixed Docker subnet |
+| Documentation | Upstream documentation | Separate Chinese/English README files, Docker deployment docs, compatibility matrices, and protocol x client design notes |
+
 ## Highlights
 
 - Rust backend built with Axum, SQLx, and SQLite.
@@ -117,4 +138,6 @@ Default URLs:
 
 ## License
 
-License not specified yet. Please also review the license and attribution requirements of the upstream project [gooaclok819/sublinkX](https://github.com/gooaclok819/sublinkX) before redistribution.
+This project is licensed under the [MIT License](LICENSE).
+
+This project is a secondary modification and rewrite based on [gooaclok819/sublinkX](https://github.com/gooaclok819/sublinkX), which is also licensed under the MIT License. Thanks to the upstream author for the open-source contribution. When using, modifying, or distributing this project, please keep the copyright and license notices for both this project and the upstream project.

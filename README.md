@@ -10,6 +10,27 @@
 - 当前项目：基于原项目思路进行二次开发，重点增强多协议导入、客户端模板导出、上游模板透传、真实链路测速、订阅生命周期和 Docker 部署体验。
 - 说明：本仓库不是原项目的官方仓库；如需了解原始实现，请访问上方原项目链接。
 
+## 致谢
+
+感谢 [gooaclok819/sublinkX](https://github.com/gooaclok819/sublinkX) 原项目提供的订阅分发思路和实现参考。`sublinkx-rs` 的设计起点来自原项目，当前仓库在此基础上进行了 Rust + Vue 3 方向的重构和扩展。请在使用、修改或二次分发本项目时，同时尊重原项目的开源贡献和许可要求。
+
+## 与原项目相比新增了什么
+
+| 方向 | 原项目 | sublinkx-rs 当前增强 |
+| --- | --- | --- |
+| 技术栈 | 原项目实现 | 后端重构为 Rust/Axum，前端重构为 Vue 3，默认使用 SQLite |
+| 管理后台 | 以原订阅管理能力为核心 | 增加节点、订阅、模板、分组、系统设置、语言切换等完整管理界面 |
+| 节点导入 | 基础订阅导入 | 支持手动多行导入、整段 Base64 订阅自动解码、上游订阅链接导入、Mihomo YAML 节点提取 |
+| 上游模板 | 主要偏转换输出 | 增加上游 Mihomo 模板保存与透传，适合不希望二次转换破坏复杂规则的订阅 |
+| 多客户端导出 | 原有客户端适配思路 | 扩展 Mihomo/Clash Meta、Clash、Xray、Surge、sing-box、Quantumult X、Loon、Surfboard、Mellow、ClashR、SS SIP002/SIP008、Trojan URI 等目标 |
+| 模板能力 | 基础模板方向 | 增加客户端模板管理、Clash/Mihomo 分流模板、Surge/sing-box/Quantumult X 等渲染方向 |
+| 转换保真 | 依赖导出结果人工确认 | 增加“上游字段 vs 二次导出字段”的保真检查，用于发现协议字段丢失 |
+| 订阅生命周期 | 基础订阅分发 | 增加启用/停用、过期时间、快捷续期、分组、节点筛选、自动识别客户端链接 |
+| 延迟测试 | 非核心能力 | 集成 Mihomo 内核做真实链路测速，保存延迟、测速时间和不可用状态 |
+| 安全 | 基础账号配置 | 默认首次登录强制修改账号密码，密码使用 Argon2 哈希保存 |
+| 部署 | 手动部署为主 | 增加 Docker Hub 镜像、单一 `docker-compose.yml`、本地数据映射、固定 Docker 网段 |
+| 文档 | 原项目文档 | 增加中英文分离 README、Docker 部署文档、兼容矩阵、协议 x 客户端设计说明 |
+
 ## 项目特性
 
 - Rust 后端：基于 Axum、SQLx 和 SQLite，适合轻量部署到 Linux 服务器。
@@ -178,4 +199,6 @@ backend/mihomo/
 
 ## License
 
-License not specified yet. Please also review the license and attribution requirements of the upstream project [gooaclok819/sublinkX](https://github.com/gooaclok819/sublinkX) before redistribution.
+本项目使用 [MIT License](LICENSE)。
+
+本项目基于 [gooaclok819/sublinkX](https://github.com/gooaclok819/sublinkX) 二次修改与重构，原项目同样采用 MIT License。感谢原作者的开源贡献；使用、修改或分发本项目时，请保留本项目和原项目的版权与许可证声明。
