@@ -32,6 +32,14 @@ pub fn build_app(state: AppState) -> Router {
             "/api/v1/settings",
             get(api::settings::get).put(api::settings::update),
         )
+        .route(
+            "/api/v1/settings/mihomo-core",
+            get(api::settings::mihomo_core_status),
+        )
+        .route(
+            "/api/v1/settings/mihomo-core/download",
+            axum::routing::post(api::settings::download_mihomo_core),
+        )
         .route("/api/v1/auth/login", axum::routing::post(api::auth::login))
         .route("/api/v1/auth/me", get(api::auth::me))
         .route(

@@ -16,3 +16,36 @@ pub struct SettingsResponse {
     pub code: &'static str,
     pub data: AppSettingsView,
 }
+
+#[derive(Debug, Serialize)]
+pub struct MihomoCoreStatus {
+    pub os: String,
+    pub arch: String,
+    pub supported: bool,
+    pub installed: bool,
+    pub path: Option<String>,
+    pub version: Option<String>,
+    pub message: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct MihomoCoreStatusResponse {
+    pub code: &'static str,
+    pub data: MihomoCoreStatus,
+}
+
+#[derive(Debug, Serialize)]
+pub struct MihomoCoreDownloadResult {
+    pub os: String,
+    pub arch: String,
+    pub version: String,
+    pub asset_name: String,
+    pub path: String,
+    pub size: u64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct MihomoCoreDownloadResponse {
+    pub code: &'static str,
+    pub data: MihomoCoreDownloadResult,
+}

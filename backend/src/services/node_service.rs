@@ -28,7 +28,9 @@ use crate::{
     utils::time::now_rfc3339,
 };
 
-use super::{auth_service, export_service, protocol_parser_service, settings_service};
+use super::{
+    auth_service, export_service, mihomo_core_service, protocol_parser_service, settings_service,
+};
 
 pub async fn require_auth(state: &AppState, headers: &HeaderMap) -> Result<(), AppError> {
     auth_service::require_user(state, headers).await.map(|_| ())
@@ -260,6 +262,7 @@ pub async fn test_node_latency(state: &AppState, id: i64) -> Result<NodeLatencyR
         .await?
         .ok_or_else(|| AppError::NotFound("node not found".to_string()))?;
     let settings = settings_service::load_settings(state).await?;
+    ensure_mihomo_core_ready(&settings).await?;
     let data = real_latency_for_node(&node, &settings).await;
     persist_latency_result(state, &data).await?;
     Ok(NodeLatencyResponse {
@@ -284,13 +287,12 @@ pub async fn test_node_latency_batch(
         ));
     }
 
+    let settings = settings_service::load_settings(state).await?;
+    ensure_mihomo_core_ready(&settings).await?;
     let mut data = Vec::with_capacity(payload.ids.len());
     for id in payload.ids {
         let result = match node_repo::find_by_id(&state.db, id).await? {
-            Some(node) => {
-                let settings = settings_service::load_settings(state).await?;
-                real_latency_for_node(&node, &settings).await
-            }
+            Some(node) => real_latency_for_node(&node, &settings).await,
             None => NodeLatencyResult {
                 id,
                 status: "error".to_string(),
@@ -313,6 +315,7 @@ pub async fn test_all_enabled_node_latencies(
     state: &AppState,
 ) -> Result<Vec<NodeLatencyResult>, AppError> {
     let settings = settings_service::load_settings(state).await?;
+    ensure_mihomo_core_ready(&settings).await?;
     let nodes = node_repo::list_enabled(&state.db).await?;
     let mut results = Vec::with_capacity(nodes.len());
 
@@ -323,6 +326,47 @@ pub async fn test_all_enabled_node_latencies(
     }
 
     Ok(results)
+}
+
+async fn ensure_mihomo_core_ready(
+    settings: &crate::domain::settings::AppSettingsView,
+) -> Result<PathBuf, AppError> {
+    let Some(binary) = mihomo_core_service::resolve_existing_binary(&settings.latency_core_path)
+    else {
+        return Err(mihomo_core_missing_error());
+    };
+    let output = tokio::time::timeout(
+        Duration::from_secs(5),
+        Command::new(&binary).arg("-v").kill_on_drop(true).output(),
+    )
+    .await
+    .map_err(|_| {
+        AppError::BadRequest(format!(
+            "Mihomo 内核检测超时：{}。请到系统设置重新下载或配置 Mihomo 内核。",
+            binary.display()
+        ))
+    })?
+    .map_err(|error| {
+        AppError::BadRequest(format!(
+            "Mihomo 内核不可用：{} ({})。请到系统设置下载或重新配置 Mihomo 内核。",
+            binary.display(),
+            error
+        ))
+    })?;
+
+    if !output.status.success() {
+        return Err(AppError::BadRequest(format!(
+            "Mihomo 内核执行失败：{}。请到系统设置下载或重新配置 Mihomo 内核。",
+            binary.display()
+        )));
+    }
+    Ok(binary)
+}
+
+fn mihomo_core_missing_error() -> AppError {
+    AppError::BadRequest(
+        "Mihomo 内核未检测到，无法进行真实链路测速。请到系统设置点击“下载内核”，或手动配置 backend/mihomo/mihomo 路径。".to_string(),
+    )
 }
 
 async fn persist_latency_result(
@@ -457,71 +501,10 @@ async fn mihomo_real_latency_for_node(
 fn resolve_mihomo_binary(
     settings: &crate::domain::settings::AppSettingsView,
 ) -> Result<PathBuf, String> {
-    let configured = settings.latency_core_path.trim();
-    if !configured.is_empty() {
-        return Ok(PathBuf::from(configured));
-    }
-
-    for base in mihomo_search_bases() {
-        for candidate in mihomo_candidate_paths(&base) {
-            if candidate.is_file() {
-                return Ok(candidate);
-            }
-        }
-    }
-
-    Ok(PathBuf::from("mihomo"))
-}
-
-fn mihomo_search_bases() -> Vec<PathBuf> {
-    let mut bases = Vec::new();
-    if let Ok(current_dir) = std::env::current_dir() {
-        push_unique_path(&mut bases, current_dir.clone());
-        if let Some(parent) = current_dir.parent() {
-            push_unique_path(&mut bases, parent.to_path_buf());
-        }
-        push_unique_path(&mut bases, current_dir.join(".."));
-    }
-    if let Ok(exe_path) = std::env::current_exe()
-        && let Some(exe_dir) = exe_path.parent()
-    {
-        push_unique_path(&mut bases, exe_dir.to_path_buf());
-        if let Some(parent) = exe_dir.parent() {
-            push_unique_path(&mut bases, parent.to_path_buf());
-        }
-    }
-    bases
-}
-
-fn mihomo_candidate_paths(base: &PathBuf) -> Vec<PathBuf> {
-    let mut paths = Vec::new();
-    for file_name in mihomo_candidate_names() {
-        // Preferred deployment layout: backend/mihomo/{binary}
-        paths.push(base.join("mihomo").join(file_name));
-        // Also allow putting the binary directly under backend/ on Linux services.
-        paths.push(base.join(file_name));
-    }
-    paths
-}
-
-fn push_unique_path(paths: &mut Vec<PathBuf>, path: PathBuf) {
-    let normalized = path.canonicalize().unwrap_or(path);
-    if !paths.iter().any(|item| item == &normalized) {
-        paths.push(normalized);
-    }
-}
-
-fn mihomo_candidate_names() -> &'static [&'static str] {
-    if cfg!(windows) {
-        &[
-            "mihomo.exe",
-            "mihomo-windows-amd64.exe",
-            "mihomo-windows-amd64-compatible.exe",
-            "clash-meta.exe",
-        ]
-    } else {
-        &["mihomo", "mihomo-linux-amd64", "clash-meta"]
-    }
+    Ok(
+        mihomo_core_service::resolve_existing_binary(&settings.latency_core_path)
+            .unwrap_or_else(mihomo_core_service::fallback_binary_path),
+    )
 }
 
 fn write_mihomo_latency_config(

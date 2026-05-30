@@ -310,7 +310,7 @@ async function testLatency(item: NodeItem) {
       errorMessage.value = `${item.name} 延迟测试失败：${response.data.message ?? response.data.status}`
     }
   } catch (error) {
-    errorMessage.value = extractApiError(error)
+    errorMessage.value = formatLatencyApiError(error)
   } finally {
     testingLatencyIds.value = testingLatencyIds.value.filter((id) => id !== item.id)
   }
@@ -334,10 +334,18 @@ async function testSelectedLatencies() {
     const failedCount = response.data.length - okCount
     successMessage.value = `延迟测试完成：${okCount} 个成功，${failedCount} 个失败。`
   } catch (error) {
-    errorMessage.value = extractApiError(error)
+    errorMessage.value = formatLatencyApiError(error)
   } finally {
     testingLatencyIds.value = testingLatencyIds.value.filter((id) => !ids.includes(id))
   }
+}
+
+function formatLatencyApiError(error: unknown) {
+  const message = extractApiError(error)
+  if (message.includes('Mihomo 内核') || message.toLowerCase().includes('mihomo')) {
+    return `${message} 请进入“系统设置”页面检测并下载内核后再测速。`
+  }
+  return message
 }
 
 async function load() {

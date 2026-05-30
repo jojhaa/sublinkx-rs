@@ -12,7 +12,7 @@ use crate::{
 use super::auth_service;
 
 const LATENCY_AUTO_ENABLED: &str = "latency.auto_enabled";
-const LATENCY_CORE_PATH: &str = "latency.core_path";
+pub(crate) const LATENCY_CORE_PATH: &str = "latency.core_path";
 const LATENCY_INTERVAL_MINUTES: &str = "latency.interval_minutes";
 const LATENCY_TEST_URL: &str = "latency.test_url";
 const LATENCY_TIMEOUT_SECS: &str = "latency.timeout_secs";
@@ -49,6 +49,17 @@ pub async fn update_settings(
     )
     .await?;
     get_settings(state).await
+}
+
+pub async fn update_latency_core_path(state: &AppState, core_path: &str) -> Result<(), AppError> {
+    settings_repo::set(
+        &state.db,
+        LATENCY_CORE_PATH,
+        core_path.trim(),
+        &now_rfc3339(),
+    )
+    .await?;
+    Ok(())
 }
 
 pub async fn load_settings(state: &AppState) -> Result<AppSettingsView, AppError> {

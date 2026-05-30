@@ -61,7 +61,7 @@ npm run dev -- --host 127.0.0.1 --port 4173
 backend/mihomo/
 ```
 
-例如 Windows 可放 `backend/mihomo/mihomo.exe`，Linux 可放 `backend/mihomo/mihomo`，也可以在网页设置页中指定自定义内核路径。
+例如 Windows 可放 `backend/mihomo/mihomo.exe`，Linux 可放 `backend/mihomo/mihomo`。也可以在网页设置页中一键检测并下载当前服务器系统对应的官方 MetaCubeX/mihomo 内核，或指定自定义内核路径。自动下载会按官方 FAQ 解析系统和架构；AMD64 默认选择保守的 `v1` 指令集构建，Linux 旧内核会优先选择 `go123` 构建。
 
 ## 文档
 
@@ -123,7 +123,7 @@ Real-link latency testing requires a Mihomo/Clash Meta binary. Put the platform-
 backend/mihomo/
 ```
 
-For example, use `backend/mihomo/mihomo.exe` on Windows or `backend/mihomo/mihomo` on Linux. A custom path can also be configured from the settings page.
+For example, use `backend/mihomo/mihomo.exe` on Windows or `backend/mihomo/mihomo` on Linux. The settings page can also detect and download the official MetaCubeX/mihomo binary for the current server OS, or you can configure a custom path manually. Automatic downloads follow the official FAQ naming rules: AMD64 defaults to the conservative `v1` build, while old Linux kernels prefer `go123` builds.
 
 ## License
 
