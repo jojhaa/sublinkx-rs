@@ -560,6 +560,34 @@ function startEditGroup(item: GroupItem) {
   groupForm.sort_order = item.sort_order
 }
 
+function upsertSubscription(item: SubscriptionItem) {
+  const index = subscriptions.value.findIndex((subscription) => subscription.id === item.id)
+  if (index >= 0) {
+    subscriptions.value[index] = item
+    return
+  }
+  subscriptions.value = [item, ...subscriptions.value]
+}
+
+function removeSubscriptionById(id: number) {
+  subscriptions.value = subscriptions.value.filter((item) => item.id !== id)
+  selectedIds.value = selectedIds.value.filter((item) => item !== id)
+}
+
+function upsertGroup(item: GroupItem) {
+  const index = groups.value.findIndex((group) => group.id === item.id)
+  if (index >= 0) {
+    groups.value[index] = item
+    return
+  }
+  groups.value = [...groups.value, item].sort((left, right) => left.sort_order - right.sort_order || left.id - right.id)
+}
+
+function removeGroupById(id: number) {
+  groups.value = groups.value.filter((item) => item.id !== id)
+  subscriptions.value = subscriptions.value.map((item) => (item.group_id === id ? { ...item, group_id: null } : item))
+}
+
 function toggleCurrentPage(checked: boolean) {
   if (checked) {
     selectedIds.value = Array.from(new Set([...selectedIds.value, ...currentPageIds.value]))
@@ -593,26 +621,37 @@ async function load() {
   loading.value = true
   errorMessage.value = ''
 
-  try {
-    const [nodeResponse, subscriptionResponse, templateResponse, groupResponse, nodeGroupResponse] = await Promise.all([
-      listNodes(),
-      listSubscriptions(),
-      listTemplates(),
-      listSubscriptionGroups(),
-      listNodeGroups(),
-    ])
+  const [nodeResponse, subscriptionResponse, templateResponse, groupResponse, nodeGroupResponse] = await Promise.allSettled([
+    listNodes(),
+    listSubscriptions(),
+    listTemplates(),
+    listSubscriptionGroups(),
+    listNodeGroups(),
+  ])
 
-    nodes.value = nodeResponse.data
-    subscriptions.value = subscriptionResponse.data
-    templates.value = templateResponse.data
-    groups.value = groupResponse.data
-    nodeGroups.value = nodeGroupResponse.data
-    page.value = Math.min(page.value, pageCount.value)
-  } catch (error) {
-    errorMessage.value = extractApiError(error)
-  } finally {
-    loading.value = false
+  if (nodeResponse.status === 'fulfilled') {
+    nodes.value = nodeResponse.value.data
   }
+  if (subscriptionResponse.status === 'fulfilled') {
+    subscriptions.value = subscriptionResponse.value.data
+  }
+  if (templateResponse.status === 'fulfilled') {
+    templates.value = templateResponse.value.data
+  }
+  if (groupResponse.status === 'fulfilled') {
+    groups.value = groupResponse.value.data
+  }
+  if (nodeGroupResponse.status === 'fulfilled') {
+    nodeGroups.value = nodeGroupResponse.value.data
+    page.value = Math.min(page.value, pageCount.value)
+  }
+  const failure = [nodeResponse, subscriptionResponse, templateResponse, groupResponse, nodeGroupResponse].find(
+    (result) => result.status === 'rejected',
+  )
+  if (failure?.status === 'rejected') {
+    errorMessage.value = extractApiError(failure.reason)
+  }
+  loading.value = false
 }
 
 async function submit() {
@@ -633,15 +672,16 @@ async function submit() {
     }
 
     if (editingId.value !== null) {
-      await updateSubscription(editingId.value, payload)
+      const response = await updateSubscription(editingId.value, payload)
+      upsertSubscription(response.data)
       successMessage.value = t('subscriptionUpdated')
     } else {
-      await createSubscription(payload)
+      const response = await createSubscription(payload)
+      upsertSubscription(response.data)
       successMessage.value = t('subscriptionCreated')
     }
 
     closeEditor()
-    await load()
   } catch (error) {
     errorMessage.value = extractApiError(error)
   } finally {
@@ -694,14 +734,15 @@ async function submitGroup() {
   try {
     const payload = { name: groupForm.name, sort_order: groupForm.sort_order }
     if (editingGroupId.value !== null) {
-      await updateSubscriptionGroup(editingGroupId.value, payload)
+      const response = await updateSubscriptionGroup(editingGroupId.value, payload)
+      upsertGroup(response.data)
       successMessage.value = t('subscriptionGroupUpdated')
     } else {
-      await createSubscriptionGroup(payload)
+      const response = await createSubscriptionGroup(payload)
+      upsertGroup(response.data)
       successMessage.value = t('subscriptionGroupCreated')
     }
     resetGroupForm()
-    await load()
   } catch (error) {
     errorMessage.value = extractApiError(error)
   } finally {
@@ -758,9 +799,8 @@ async function removeSubscription(id: number) {
     if (editingId.value === id) {
       closeEditor()
     }
-    selectedIds.value = selectedIds.value.filter((item) => item !== id)
+    removeSubscriptionById(id)
     successMessage.value = t('subscriptionDeleted')
-    await load()
   } catch (error) {
     errorMessage.value = extractApiError(error)
   }
@@ -779,8 +819,8 @@ async function removeGroup(id: number) {
     if (batchGroupId.value === id) {
       batchGroupId.value = null
     }
+    removeGroupById(id)
     successMessage.value = t('subscriptionGroupDeleted')
-    await load()
   } catch (error) {
     errorMessage.value = extractApiError(error)
   }

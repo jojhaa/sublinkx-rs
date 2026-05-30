@@ -349,6 +349,20 @@ function startEditGroup(item: GroupItem) {
   groupForm.sort_order = item.sort_order
 }
 
+function upsertGroup(item: GroupItem) {
+  const index = groups.value.findIndex((group) => group.id === item.id)
+  if (index >= 0) {
+    groups.value[index] = item
+    return
+  }
+  groups.value = [...groups.value, item].sort((left, right) => left.sort_order - right.sort_order || left.id - right.id)
+}
+
+function removeGroupById(id: number) {
+  groups.value = groups.value.filter((item) => item.id !== id)
+  nodes.value = nodes.value.map((item) => (item.group_id === id ? { ...item, group_id: null } : item))
+}
+
 function toggleCurrentPage(checked: boolean) {
   if (checked) {
     selectedIds.value = Array.from(new Set([...selectedIds.value, ...currentPageIds.value]))
@@ -418,16 +432,20 @@ async function load() {
   loading.value = true
   errorMessage.value = ''
 
-  try {
-    const [nodeResponse, groupResponse] = await Promise.all([listNodes(), listNodeGroups()])
-    nodes.value = nodeResponse.data
-    groups.value = groupResponse.data
-    page.value = Math.min(page.value, pageCount.value)
-  } catch (error) {
-    errorMessage.value = extractApiError(error)
-  } finally {
-    loading.value = false
+  const [nodeResponse, groupResponse] = await Promise.allSettled([listNodes(), listNodeGroups()])
+
+  if (nodeResponse.status === 'fulfilled') {
+    nodes.value = nodeResponse.value.data
   }
+  if (groupResponse.status === 'fulfilled') {
+    groups.value = groupResponse.value.data
+    page.value = Math.min(page.value, pageCount.value)
+  }
+  const failure = [nodeResponse, groupResponse].find((result) => result.status === 'rejected')
+  if (failure?.status === 'rejected') {
+    errorMessage.value = extractApiError(failure.reason)
+  }
+  loading.value = false
 }
 
 async function submit() {
@@ -563,14 +581,15 @@ async function submitGroup() {
   try {
     const payload = { name: groupForm.name, sort_order: groupForm.sort_order }
     if (editingGroupId.value !== null) {
-      await updateNodeGroup(editingGroupId.value, payload)
+      const response = await updateNodeGroup(editingGroupId.value, payload)
+      upsertGroup(response.data)
       successMessage.value = t('nodeGroupUpdated')
     } else {
-      await createNodeGroup(payload)
+      const response = await createNodeGroup(payload)
+      upsertGroup(response.data)
       successMessage.value = t('nodeGroupCreated')
     }
     resetGroupForm()
-    await load()
   } catch (error) {
     errorMessage.value = extractApiError(error)
   } finally {
@@ -649,8 +668,8 @@ async function removeGroup(id: number) {
     if (batchGroupId.value === id) {
       batchGroupId.value = null
     }
+    removeGroupById(id)
     successMessage.value = t('nodeGroupDeleted')
-    await load()
   } catch (error) {
     errorMessage.value = extractApiError(error)
   }
