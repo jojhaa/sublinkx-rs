@@ -53,7 +53,6 @@ interface CompatibilitySummary {
   unsupportedNodes: NodeItem[]
 }
 
-const apiBase = import.meta.env.VITE_API_BASE_URL ?? 'http://127.0.0.1:8080'
 const exportTargets: ExportTarget[] = [
   'xray',
   'clash',
@@ -329,12 +328,30 @@ function openExportConsole(item: SubscriptionItem) {
   exportConsole.value = item
 }
 
+function subscriptionBaseUrl() {
+  const configuredBase = import.meta.env.VITE_API_BASE_URL
+  if (import.meta.env.DEV && configuredBase) {
+    return configuredBase.replace(/\/$/, '')
+  }
+
+  const browserOrigin = window.location.origin
+  if (browserOrigin && browserOrigin !== 'null') {
+    return browserOrigin.replace(/\/$/, '')
+  }
+
+  if (configuredBase) {
+    return configuredBase.replace(/\/$/, '')
+  }
+
+  return 'http://127.0.0.1:8080'
+}
+
 function exportLink(token: string, target: ExportTarget) {
-  return `${apiBase}/s/${token}?target=${target}&mode=${exportMode.value}`
+  return `${subscriptionBaseUrl()}/s/${token}?target=${target}&mode=${exportMode.value}`
 }
 
 function autoSubscriptionLink(item: SubscriptionItem) {
-  return `${apiBase}/s/${item.token}?mode=${exportMode.value}`
+  return `${subscriptionBaseUrl()}/s/${item.token}?mode=${exportMode.value}`
 }
 
 function subscriptionStatus(item: SubscriptionItem) {
