@@ -207,6 +207,7 @@ Default URLs:
 
 ## Documentation
 
+- [Changelog](CHANGELOG.md)
 - [Documentation Index](docs/README.md)
 - [Docker Deployment](docs/docker.en.md)
 - [Refactor Plan](docs/plan.md)

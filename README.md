@@ -264,6 +264,7 @@ backend/mihomo/
 
 ## 文档
 
+- [更新日志](CHANGELOG.md)
 - [文档索引](docs/README.md)
 - [Docker 部署](docs/docker.md)
 - [重构蓝图](docs/plan.md)
