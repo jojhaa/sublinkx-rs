@@ -106,8 +106,8 @@ async function submit() {
             <span>Real-link latency</span>
           </div>
           <div>
-            <strong>MIT</strong>
-            <span>Open source</span>
+            <strong>AGPL</strong>
+            <span>No closed source</span>
           </div>
         </div>
       </aside>

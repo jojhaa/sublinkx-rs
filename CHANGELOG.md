@@ -1,30 +1,37 @@
 # Changelog
 
-## v0.1.1 - 2026-06-01
-
-### 优化
-
-- 登录信息移动到语言切换区域下方，桌面侧栏布局更集中。
-- 节点管理和订阅管理默认使用简约展示，降低列表密度。
-- 订阅管理导出策略显示中文标签：严格模式、尽力兼容。
-
 ## v0.1.0 - 2026-06-01
 
-首个公开版本。
+首个公开版本，面向多协议、多客户端订阅管理场景。
 
-### 新增
+### 核心能力
 
 - Rust/Axum 后端与 Vue 3 管理控制台。
+- 默认 SQLite，支持 MySQL 8.x、容器 MySQL、本机 MySQL 和外部 MySQL。
 - 节点、节点分组、订阅、订阅分组、模板和系统设置管理。
-- SQLite 默认数据库，并支持 MySQL 8.x。
-- 多协议导入，包括手动多行导入、整段 Base64 解码、上游订阅导入和 Mihomo YAML 节点提取。
-- 多客户端导出，包括 Mihomo/Clash、Xray、Surge、sing-box、Quantumult X、Loon、Surfboard、Mellow、ClashR、SS SIP002/SIP008、Trojan URI 等目标规划与部分实现。
-- 上游 Mihomo 模板透传，减少复杂分流规则二次转换损坏。
-- 转换保真检查，用于对比上游 proxy 字段和二次导出字段。
-- Mihomo 内核管理和真实链路延迟测试。
 - 首次登录强制修改默认账号密码，密码使用 Argon2 哈希保存。
-- Docker Compose 部署，支持本地数据映射、固定 Docker 网段、容器 MySQL 或宿主机 MySQL。
-- 中英文 README、Docker 部署文档、兼容矩阵、协议 x 客户端矩阵和模板说明。
+- 中英文界面与中英文 README。
+
+### 节点与订阅
+
+- 支持手动多行导入、整段 Base64 自动解码、上游订阅链接导入。
+- 支持 Mihomo YAML 节点提取，并可保存上游模板用于透传导出。
+- 支持订阅启用/停用、到期时间、快捷续期、分组、节点筛选和自动识别客户端链接。
+- 支持详细/简约两种列表展示，适配桌面、平板和移动端。
+
+### 协议与客户端
+
+- 支持 Shadowsocks、VMess、VLESS、Trojan、Hysteria/Hysteria2、TUIC、WireGuard、AnyTLS 等协议方向。
+- 支持 Mihomo/Clash Meta、Clash、Xray、Surge、sing-box、Quantumult X、Quantumult、Loon、Surfboard、Mellow、ClashR、SS SIP002/SIP008、SSR、SSD、Trojan URI、Mixed 等导出目标。
+- 增加协议 x 客户端支持矩阵，仅在大屏展示完整表格。
+- 增加转换保真检查，用于对比上游 proxy 字段和二次导出字段。
+
+### 运维与部署
+
+- 支持 Mihomo 内核检测、下载和真实链路延迟测试。
+- 保存历史延迟、最后测速时间和不可用状态。
+- 提供 Docker Compose 部署，数据映射到本地目录，并支持固定 Docker 网段。
+- 提供 Windows、Linux、macOS 本地开发运行脚本。
 
 ### 默认账号
 

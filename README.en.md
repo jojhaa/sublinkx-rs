@@ -14,7 +14,7 @@ Notes:
 
 - This repository is not the official upstream repository.
 - This project rewrites and extends the upstream idea with Rust + Vue 3.
-- Both this project and the upstream project use the MIT License. Please keep copyright and license notices when redistributing.
+- This project uses AGPL-3.0-or-later and does not allow closed-source redistribution or closed-source hosted service versions. The upstream project uses the MIT License; please keep upstream copyright and license notices when redistributing.
 
 ## What This Version Adds
 
@@ -50,6 +50,72 @@ Notes:
 - First-login security flow with Argon2 password hashing.
 - Docker deployment with local data bind mounts.
 - SQLite by default, with optional MySQL 8.x support.
+
+## Local Development
+
+Install these first:
+
+- Rust stable
+- Node.js 20+ and npm
+
+Windows:
+
+```powershell
+.\scripts\dev.ps1
+```
+
+You can also use the CMD wrapper:
+
+```cmd
+scripts\dev.cmd
+```
+
+Linux:
+
+```bash
+chmod +x scripts/dev.sh
+./scripts/dev.sh
+```
+
+macOS:
+
+```bash
+chmod +x scripts/dev.sh
+./scripts/dev.sh
+```
+
+macOS is supported for local development as long as Rust, Node.js, and npm are installed.
+
+The scripts start both services:
+
+```text
+Backend : http://127.0.0.1:8080
+Frontend: http://127.0.0.1:5173
+```
+
+Local development uses SQLite by default:
+
+```text
+backend/data/app.db
+```
+
+Default first login:
+
+```text
+admin / admin123456
+```
+
+Override ports or database URL when needed:
+
+```bash
+BACKEND_PORT=18080 FRONTEND_PORT=15173 DATABASE_URL=sqlite://data/dev.db ./scripts/dev.sh
+```
+
+Windows PowerShell:
+
+```powershell
+.\scripts\dev.ps1 -BackendPort 18080 -FrontendPort 15173 -DatabaseUrl "sqlite://data/dev.db"
+```
 
 ## Docker Deployment
 
@@ -183,28 +249,6 @@ location ^~ /api/ {
 
 More details: [Docker Deployment](docs/docker.en.md).
 
-## Local Development
-
-Backend:
-
-```powershell
-cd backend
-cargo run
-```
-
-Frontend:
-
-```powershell
-cd frontend
-npm install
-npm run dev -- --host 127.0.0.1 --port 5173
-```
-
-Default URLs:
-
-- Frontend: http://127.0.0.1:5173
-- Backend: http://127.0.0.1:8080
-
 ## Documentation
 
 - [Changelog](CHANGELOG.md)
@@ -218,6 +262,6 @@ Default URLs:
 
 ## License
 
-This project is licensed under the [MIT License](LICENSE).
+This project is licensed under [AGPL-3.0-or-later](LICENSE). Closed-source redistribution, closed-source derivative versions, and closed-source hosted service versions based on this project are not permitted.
 
-This project is a secondary modification and rewrite based on [gooaclok819/sublinkX](https://github.com/gooaclok819/sublinkX), which is also licensed under the MIT License. Thanks to the upstream author for the open-source contribution. When using, modifying, or distributing this project, please keep the copyright and license notices for both this project and the upstream project.
+This project is a secondary modification and rewrite based on [gooaclok819/sublinkX](https://github.com/gooaclok819/sublinkX), which is licensed under the MIT License. Thanks to the upstream author for the open-source contribution. When using, modifying, or distributing this project, please keep the copyright and license notices for both this project and the upstream project.

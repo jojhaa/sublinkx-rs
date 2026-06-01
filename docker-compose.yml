@@ -5,6 +5,7 @@ services:
     environment:
       APP_ENV: production
       APP_PORT: 8080
+      SUBLINKX_RUNTIME_MODE: docker
       DATABASE_URL: ${DATABASE_URL:-sqlite:///app/data/app.db}
       JWT_SECRET: ${JWT_SECRET:-change-me-in-production}
       JWT_EXP_HOURS: ${JWT_EXP_HOURS:-24}

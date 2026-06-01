@@ -1,7 +1,8 @@
 [package]
 name = "sublinkx-rs-backend"
-version = "0.1.1"
+version = "0.1.0"
 edition = "2024"
+license = "AGPL-3.0-or-later"
 
 [dependencies]
 argon2 = "0.5"
@@ -21,7 +22,7 @@ serde_yaml = "0.9"
 sha2 = "0.10"
 sqlx = { version = "0.8", features = ["runtime-tokio-rustls", "any", "mysql", "sqlite"] }
 thiserror = "2"
-time = { version = "0.3", features = ["formatting", "macros", "parsing"] }
+time = { version = "0.3", features = ["formatting", "local-offset", "macros", "parsing"] }
 tokio = { version = "1", features = ["macros", "process", "rt-multi-thread", "net", "signal", "time"] }
 tower-http = { version = "0.6", features = ["cors", "set-header", "trace"] }
 tracing = "0.1"

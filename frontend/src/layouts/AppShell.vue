@@ -15,6 +15,7 @@ const navItems = [
   { name: 'subscriptions', labelKey: 'subscriptions', to: '/subscriptions' },
   { name: 'templates', labelKey: 'templates', to: '/templates' },
   { name: 'settings', labelKey: 'settings', to: '/settings' },
+  { name: 'about', labelKey: 'about', to: '/about' },
 ] satisfies Array<{ name: string; labelKey: MessageKey; to: string }>
 
 const userLabel = computed(() => auth.user?.nickname || auth.user?.username || t('admin'))

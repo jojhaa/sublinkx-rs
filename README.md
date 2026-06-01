@@ -14,7 +14,7 @@
 
 - 本仓库不是原项目官方仓库。
 - 当前项目在原项目基础上进行了 Rust + Vue 3 方向的重构。
-- 本项目和原项目均采用 MIT License，二次分发时请保留版权和许可证声明。
+- 本项目采用 AGPL-3.0-or-later，不允许闭源二次分发或闭源网络服务版本；原项目为 MIT License，二次分发时请保留原项目版权和许可证声明。
 
 ## 主要特性
 
@@ -47,6 +47,72 @@
 | 延迟测试 | 非核心能力 | 集成 Mihomo 做真实链路测速，并保存结果 |
 | 订阅管理 | 基础分发 | 增加启用/禁用、到期时间、分组、节点筛选和自动识别链接 |
 | 部署 | 手动部署为主 | 增加 Docker Hub 镜像、Compose、本地数据映射、固定 Docker 网段 |
+
+## 本地运行
+
+本地运行需要先安装：
+
+- Rust stable
+- Node.js 20+ 和 npm
+
+Windows：
+
+```powershell
+.\scripts\dev.ps1
+```
+
+也可以使用 CMD 包装脚本：
+
+```cmd
+scripts\dev.cmd
+```
+
+Linux：
+
+```bash
+chmod +x scripts/dev.sh
+./scripts/dev.sh
+```
+
+macOS：
+
+```bash
+chmod +x scripts/dev.sh
+./scripts/dev.sh
+```
+
+macOS 支持本项目的本地开发运行。需要提前安装 Rust、Node.js 和 npm。
+
+脚本会同时启动：
+
+```text
+后端：http://127.0.0.1:8080
+前端：http://127.0.0.1:5173
+```
+
+默认使用本地 SQLite：
+
+```text
+backend/data/app.db
+```
+
+默认首次登录：
+
+```text
+admin / admin123456
+```
+
+可通过环境变量覆盖端口和数据库：
+
+```bash
+BACKEND_PORT=18080 FRONTEND_PORT=15173 DATABASE_URL=sqlite://data/dev.db ./scripts/dev.sh
+```
+
+Windows PowerShell：
+
+```powershell
+.\scripts\dev.ps1 -BackendPort 18080 -FrontendPort 15173 -DatabaseUrl "sqlite://data/dev.db"
+```
 
 ## Docker 快速部署
 
@@ -222,28 +288,6 @@ docker compose down
 docker compose pull && docker compose up -d
 ```
 
-## 本地开发
-
-后端：
-
-```powershell
-cd backend
-cargo run
-```
-
-前端：
-
-```powershell
-cd frontend
-npm install
-npm run dev -- --host 127.0.0.1 --port 5173
-```
-
-默认地址：
-
-- 前端：http://127.0.0.1:5173
-- 后端：http://127.0.0.1:8080
-
 ## Mihomo 内核
 
 真实链路测速依赖 Mihomo/Clash Meta 内核。
@@ -275,6 +319,6 @@ backend/mihomo/
 
 ## License
 
-本项目使用 [MIT License](LICENSE)。
+本项目使用 [AGPL-3.0-or-later](LICENSE)，不允许闭源二次分发、闭源衍生版本或基于本项目的闭源托管服务。
 
-本项目基于 [gooaclok819/sublinkX](https://github.com/gooaclok819/sublinkX) 二次修改与重构。感谢原作者的开源贡献；使用、修改或分发本项目时，请保留本项目和原项目的版权与许可证声明。
+本项目基于 [gooaclok819/sublinkX](https://github.com/gooaclok819/sublinkX) 二次修改与重构。原项目采用 MIT License。感谢原作者的开源贡献；使用、修改或分发本项目时，请保留本项目和原项目的版权与许可证声明。
