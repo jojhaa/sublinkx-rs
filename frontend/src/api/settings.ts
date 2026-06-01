@@ -1,6 +1,7 @@
 import apiClient from './client'
 
 export interface AppSettings {
+  public_base_url: string
   latency_auto_enabled: boolean
   latency_interval_minutes: number
   latency_core_path: string

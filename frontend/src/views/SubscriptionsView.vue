@@ -22,6 +22,7 @@ import {
   type GroupItem,
 } from '../api/groups'
 import { readStoredPageSize, storePageSize } from '../utils/pagination'
+import { getSettings } from '../api/settings'
 
 const { t } = useI18n()
 
@@ -147,6 +148,7 @@ const successMessage = ref('')
 const exportMode = ref<ExportMode>('strict')
 const compatibilityDetail = ref<{ title: string; message: string; nodes: NodeItem[] } | null>(null)
 const exportConsole = ref<SubscriptionItem | null>(null)
+const publicBaseUrl = ref('')
 
 const form = reactive({
   name: '',
@@ -329,6 +331,10 @@ function openExportConsole(item: SubscriptionItem) {
 }
 
 function subscriptionBaseUrl() {
+  if (publicBaseUrl.value) {
+    return publicBaseUrl.value.replace(/\/$/, '')
+  }
+
   const configuredBase = import.meta.env.VITE_API_BASE_URL
   if (import.meta.env.DEV && configuredBase) {
     return configuredBase.replace(/\/$/, '')
@@ -678,12 +684,13 @@ async function load() {
   loading.value = true
   errorMessage.value = ''
 
-  const [nodeResponse, subscriptionResponse, templateResponse, groupResponse, nodeGroupResponse] = await Promise.allSettled([
+  const [nodeResponse, subscriptionResponse, templateResponse, groupResponse, nodeGroupResponse, settingsResponse] = await Promise.allSettled([
     listNodes(),
     listSubscriptions(),
     listTemplates(),
     listSubscriptionGroups(),
     listNodeGroups(),
+    getSettings(),
   ])
 
   if (nodeResponse.status === 'fulfilled') {
@@ -702,7 +709,10 @@ async function load() {
     nodeGroups.value = nodeGroupResponse.value.data
     page.value = Math.min(page.value, pageCount.value)
   }
-  const failure = [nodeResponse, subscriptionResponse, templateResponse, groupResponse, nodeGroupResponse].find(
+  if (settingsResponse.status === 'fulfilled') {
+    publicBaseUrl.value = settingsResponse.value.data.public_base_url
+  }
+  const failure = [nodeResponse, subscriptionResponse, templateResponse, groupResponse, nodeGroupResponse, settingsResponse].find(
     (result) => result.status === 'rejected',
   )
   if (failure?.status === 'rejected') {

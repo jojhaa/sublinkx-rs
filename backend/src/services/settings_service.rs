@@ -11,6 +11,7 @@ use crate::{
 
 use super::auth_service;
 
+const PUBLIC_BASE_URL: &str = "site.public_base_url";
 const LATENCY_AUTO_ENABLED: &str = "latency.auto_enabled";
 pub(crate) const LATENCY_CORE_PATH: &str = "latency.core_path";
 const LATENCY_INTERVAL_MINUTES: &str = "latency.interval_minutes";
@@ -39,8 +40,10 @@ pub async fn update_settings(
     validate_interval(payload.latency_interval_minutes)?;
     validate_timeout(payload.latency_timeout_secs)?;
     validate_test_url(&payload.latency_test_url)?;
+    validate_public_base_url(&payload.public_base_url)?;
     save_settings(
         state,
+        payload.public_base_url.trim(),
         payload.latency_auto_enabled,
         payload.latency_interval_minutes,
         payload.latency_core_path.trim(),
@@ -63,6 +66,9 @@ pub async fn update_latency_core_path(state: &AppState, core_path: &str) -> Resu
 }
 
 pub async fn load_settings(state: &AppState) -> Result<AppSettingsView, AppError> {
+    let public_base_url = settings_repo::get(&state.db, PUBLIC_BASE_URL)
+        .await?
+        .unwrap_or_default();
     let auto_enabled = settings_repo::get(&state.db, LATENCY_AUTO_ENABLED)
         .await?
         .and_then(|value| value.parse::<bool>().ok())
@@ -84,6 +90,7 @@ pub async fn load_settings(state: &AppState) -> Result<AppSettingsView, AppError
         .unwrap_or(DEFAULT_LATENCY_TIMEOUT_SECS);
 
     Ok(AppSettingsView {
+        public_base_url: trim_trailing_slash(&public_base_url),
         latency_auto_enabled: auto_enabled,
         latency_interval_minutes: interval_minutes.clamp(5, 1440),
         latency_core_path: core_path,
@@ -94,6 +101,7 @@ pub async fn load_settings(state: &AppState) -> Result<AppSettingsView, AppError
 
 async fn save_settings(
     state: &AppState,
+    public_base_url: &str,
     auto_enabled: bool,
     interval_minutes: i64,
     core_path: &str,
@@ -101,6 +109,13 @@ async fn save_settings(
     timeout_secs: i64,
 ) -> Result<(), AppError> {
     let now = now_rfc3339();
+    settings_repo::set(
+        &state.db,
+        PUBLIC_BASE_URL,
+        &trim_trailing_slash(public_base_url),
+        &now,
+    )
+    .await?;
     settings_repo::set(
         &state.db,
         LATENCY_AUTO_ENABLED,
@@ -153,4 +168,21 @@ fn validate_test_url(test_url: &str) -> Result<(), AppError> {
         ));
     }
     Ok(())
+}
+
+fn validate_public_base_url(public_base_url: &str) -> Result<(), AppError> {
+    let value = public_base_url.trim();
+    if value.is_empty() {
+        return Ok(());
+    }
+    if !(value.starts_with("http://") || value.starts_with("https://")) {
+        return Err(AppError::BadRequest(
+            "public base url must start with http:// or https://".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+fn trim_trailing_slash(value: &str) -> String {
+    value.trim().trim_end_matches('/').to_string()
 }

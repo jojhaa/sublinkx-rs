@@ -2,6 +2,7 @@ use serde::Serialize;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct AppSettingsView {
+    pub public_base_url: String,
     pub latency_auto_enabled: bool,
     pub latency_interval_minutes: i64,
     pub latency_core_path: String,

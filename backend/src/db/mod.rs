@@ -198,6 +198,7 @@ async fn init_mysql_schema(pool: &DbPool) -> Result<(), sqlx::Error> {
 
     let now = crate::utils::time::now_rfc3339();
     for (key, value) in [
+        ("site.public_base_url", ""),
         ("latency.auto_enabled", "true"),
         ("latency.interval_minutes", "30"),
         ("latency.core_path", ""),

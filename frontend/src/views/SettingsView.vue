@@ -20,6 +20,7 @@ const successMessage = ref('')
 const mihomoCore = ref<MihomoCoreStatus | null>(null)
 
 const form = reactive({
+  public_base_url: '',
   latency_auto_enabled: true,
   latency_interval_minutes: 30,
   latency_core_path: '',
@@ -32,6 +33,7 @@ async function load() {
   errorMessage.value = ''
   try {
     const response = await getSettings()
+    form.public_base_url = response.data.public_base_url
     form.latency_auto_enabled = response.data.latency_auto_enabled
     form.latency_interval_minutes = response.data.latency_interval_minutes
     form.latency_core_path = response.data.latency_core_path
@@ -51,12 +53,14 @@ async function submit() {
   successMessage.value = ''
   try {
     const response = await updateSettings({
+      public_base_url: form.public_base_url,
       latency_auto_enabled: form.latency_auto_enabled,
       latency_interval_minutes: form.latency_interval_minutes,
       latency_core_path: form.latency_core_path,
       latency_test_url: form.latency_test_url,
       latency_timeout_secs: form.latency_timeout_secs,
     })
+    form.public_base_url = response.data.public_base_url
     form.latency_auto_enabled = response.data.latency_auto_enabled
     form.latency_interval_minutes = response.data.latency_interval_minutes
     form.latency_core_path = response.data.latency_core_path
@@ -193,6 +197,27 @@ onMounted(load)
         <section class="settings-console-panel">
           <div class="settings-panel-title">
             <span class="settings-panel-index">02</span>
+            <div>
+              <strong>{{ t('siteAccess') }}</strong>
+              <div class="hint">{{ t('siteAccessHint') }}</div>
+            </div>
+          </div>
+
+          <div>
+            <label class="field-label" for="public-base-url">{{ t('publicBaseUrl') }}</label>
+            <input
+              id="public-base-url"
+              v-model.trim="form.public_base_url"
+              class="input"
+              placeholder="https://example.com"
+            />
+            <div class="hint template-kind-hint">{{ t('publicBaseUrlHint') }}</div>
+          </div>
+        </section>
+
+        <section class="settings-console-panel">
+          <div class="settings-panel-title">
+            <span class="settings-panel-index">03</span>
             <div>
               <strong>{{ t('scheduler') }}</strong>
               <div class="hint">{{ t('schedulerHint') }}</div>
