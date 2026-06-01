@@ -437,6 +437,10 @@ button {
   margin-top: 12px;
 }
 
+.brand-block .sidebar-user-card {
+  margin-top: 8px;
+}
+
 .nav-list {
   display: grid;
   gap: 7px;
@@ -470,8 +474,7 @@ button {
 
 .sidebar-footer {
   margin-top: auto;
-  display: grid;
-  gap: 8px;
+  min-height: 1px;
 }
 
 .language-switch {
@@ -562,17 +565,18 @@ button {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
-  gap: 9px;
-  padding: 9px;
-  border-radius: 18px;
+  gap: 8px;
+  padding: 7px 8px;
+  border-radius: 16px;
   background:
-    linear-gradient(135deg, rgba(255, 255, 255, 0.76), rgba(224, 241, 243, 0.68)),
-    rgba(255, 255, 255, 0.64);
+    linear-gradient(135deg, rgba(255, 255, 255, 0.7), rgba(226, 241, 243, 0.5)),
+    rgba(255, 255, 255, 0.5);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.72);
 }
 
 .user-status-dot {
-  width: 9px;
-  height: 9px;
+  width: 8px;
+  height: 8px;
   border-radius: 999px;
   background: var(--accent);
   box-shadow: 0 0 0 4px rgba(11, 143, 149, 0.12);
@@ -580,7 +584,7 @@ button {
 
 .user-card-main {
   min-width: 0;
-  line-height: 1.15;
+  line-height: 1.12;
 }
 
 .user-card-main strong,
@@ -593,15 +597,15 @@ button {
 
 .user-card-main .hint {
   margin-bottom: 2px;
-  font-size: 10px;
+  font-size: 9px;
   letter-spacing: 0.04em;
 }
 
 .sidebar-logout {
-  min-height: 30px;
-  padding: 5px 9px;
+  min-height: 28px;
+  padding: 4px 8px;
   border-radius: 999px;
-  font-size: var(--fs-xs);
+  font-size: 11px;
   white-space: nowrap;
 }
 
@@ -2038,6 +2042,11 @@ button {
     display: none;
   }
 
+  .brand-block .sidebar-language,
+  .brand-block .sidebar-user-card {
+    display: none;
+  }
+
   .sidebar .eyebrow {
     padding: 3px 7px;
     font-size: 10px;
@@ -2065,17 +2074,6 @@ button {
     display: flex;
     align-items: center;
     margin-top: 0;
-  }
-
-  .sidebar-footer .language-switch,
-  .sidebar-footer .user-card {
-    display: none;
-  }
-
-  .sidebar-footer > .button {
-    min-width: max-content;
-    min-height: 34px;
-    padding-inline: 10px;
   }
 
   .stat-card {

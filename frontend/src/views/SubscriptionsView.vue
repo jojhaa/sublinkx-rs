@@ -100,11 +100,6 @@ const TARGET_LABELS: Record<ExportTarget, string> = {
   mixed: 'Mixed',
 }
 
-const MODE_LABELS: Record<ExportMode, string> = {
-  strict: 'Strict',
-  best_effort: 'Best Effort',
-}
-
 const TARGET_SUPPORT: Record<ExportTarget, Set<string>> = {
   clash: new Set(['shadowsocks', 'vmess', 'vless', 'trojan', 'hysteria2', 'tuic', 'wireguard', 'anytls']),
   mihomo: new Set(['shadowsocks', 'vmess', 'vless', 'trojan', 'hysteria2', 'tuic', 'wireguard', 'anytls']),
@@ -144,7 +139,7 @@ const nodeHealthFilter = ref<'all' | 'ok'>('all')
 const nodeSearch = ref('')
 const selectedIds = ref<number[]>([])
 const batchGroupId = ref<number | null>(null)
-const displayMode = ref<'detailed' | 'minimal'>('detailed')
+const displayMode = ref<'detailed' | 'minimal'>('minimal')
 const detailSubscription = ref<SubscriptionItem | null>(null)
 const page = ref(1)
 const pageSize = ref(readStoredPageSize(PAGE_SIZE_STORAGE_KEY, PAGE_SIZE_OPTIONS))
@@ -228,7 +223,9 @@ const selectedNodeCount = computed(() => form.node_ids.length)
 const isEditing = computed(() => editingId.value !== null)
 const isEditingGroup = computed(() => editingGroupId.value !== null)
 const currentTargetLabel = computed(() => TARGET_LABELS[form.default_client])
-const currentModeLabel = computed(() => MODE_LABELS[exportMode.value])
+const currentModeLabel = computed(() => (
+  exportMode.value === 'strict' ? t('exportModeStrict') : t('exportModeBestEffort')
+))
 const selectedNodes = computed(() => nodes.value.filter((item) => form.node_ids.includes(item.id)))
 const selectedFormNodes = computed(() => {
   const byId = new Map(nodes.value.map((item) => [item.id, item]))
@@ -852,8 +849,8 @@ onMounted(load)
           <option v-for="group in groups" :key="group.id" :value="group.id">{{ group.name }}</option>
         </select>
         <select v-model="exportMode" class="select toolbar-select" :aria-label="t('exportStrategy')">
-          <option value="strict">strict</option>
-          <option value="best_effort">best_effort</option>
+          <option value="strict">{{ t('exportModeStrict') }}</option>
+          <option value="best_effort">{{ t('exportModeBestEffort') }}</option>
         </select>
         <button class="button button-ghost mobile-secondary-action" type="button" :disabled="loading" @click="load">
           {{ loading ? t('refreshing') : t('refresh') }}
