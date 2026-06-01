@@ -409,11 +409,46 @@ function setExpiryDays(days: number) {
 }
 
 async function copyText(text: string, message: string) {
+  errorMessage.value = ''
+  successMessage.value = ''
+
   try {
-    await navigator.clipboard.writeText(text)
+    if (navigator.clipboard?.writeText && window.isSecureContext) {
+      await navigator.clipboard.writeText(text)
+    } else {
+      copyTextFallback(text)
+    }
     successMessage.value = message
   } catch {
-    errorMessage.value = t('copyFailed')
+    try {
+      copyTextFallback(text)
+      successMessage.value = message
+    } catch {
+      errorMessage.value = t('copyFailed')
+    }
+  }
+}
+
+function copyTextFallback(text: string) {
+  const textarea = document.createElement('textarea')
+  textarea.value = text
+  textarea.setAttribute('readonly', 'true')
+  textarea.style.position = 'fixed'
+  textarea.style.left = '-9999px'
+  textarea.style.top = '0'
+  textarea.style.opacity = '0'
+  document.body.appendChild(textarea)
+  textarea.focus()
+  textarea.select()
+  textarea.setSelectionRange(0, textarea.value.length)
+
+  try {
+    const copied = document.execCommand('copy')
+    if (!copied) {
+      throw new Error('copy command returned false')
+    }
+  } finally {
+    document.body.removeChild(textarea)
   }
 }
 
