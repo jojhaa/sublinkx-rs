@@ -1940,15 +1940,18 @@ fn parse_yaml_template(
 }
 
 fn built_in_clash_routing_template() -> Result<&'static str, AppError> {
-    let section_start = CLASH_ROUTING_TEMPLATE_DOC
+    let section = CLASH_ROUTING_TEMPLATE_DOC
         .find("## ACL4SSR-Style Full Routing Template")
-        .ok_or(AppError::Internal)?;
-    let section = &CLASH_ROUTING_TEMPLATE_DOC[section_start..];
+        .map(|section_start| &CLASH_ROUTING_TEMPLATE_DOC[section_start..])
+        .unwrap_or(CLASH_ROUTING_TEMPLATE_DOC);
     let yaml_start_marker = "```yaml";
-    let yaml_start =
-        section.find(yaml_start_marker).ok_or(AppError::Internal)? + yaml_start_marker.len();
+    let yaml_start = section.find(yaml_start_marker).ok_or_else(|| {
+        AppError::BadRequest("built-in Clash routing template is missing a YAML block".to_string())
+    })? + yaml_start_marker.len();
     let yaml_section = &section[yaml_start..];
-    let yaml_end = yaml_section.find("```").ok_or(AppError::Internal)?;
+    let yaml_end = yaml_section.find("```").ok_or_else(|| {
+        AppError::BadRequest("built-in Clash routing template YAML block is not closed".to_string())
+    })?;
 
     Ok(yaml_section[..yaml_end].trim())
 }
