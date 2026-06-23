@@ -7,10 +7,12 @@ services:
       APP_PORT: 8080
       SUBLINKX_RUNTIME_MODE: docker
       DATABASE_URL: ${DATABASE_URL:-sqlite:///app/data/app.db}
-      JWT_SECRET: ${JWT_SECRET:-change-me-in-production}
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET is required and must be a non-default value of at least 32 characters}
       JWT_EXP_HOURS: ${JWT_EXP_HOURS:-24}
-      BOOTSTRAP_ADMIN_USERNAME: ${BOOTSTRAP_ADMIN_USERNAME:-admin}
-      BOOTSTRAP_ADMIN_PASSWORD: ${BOOTSTRAP_ADMIN_PASSWORD:-admin123456}
+      AUTH_COOKIE_SECURE: ${AUTH_COOKIE_SECURE:-true}
+      BOOTSTRAP_ADMIN_USERNAME: ${BOOTSTRAP_ADMIN_USERNAME:?BOOTSTRAP_ADMIN_USERNAME is required for first production bootstrap}
+      BOOTSTRAP_ADMIN_PASSWORD: ${BOOTSTRAP_ADMIN_PASSWORD:?BOOTSTRAP_ADMIN_PASSWORD is required and must not use the default first-login password}
+      TRUST_PROXY_HEADERS: ${TRUST_PROXY_HEADERS:-true}
     volumes:
       - ${BACKEND_DATA_DIR:-./docker-data/backend}:/app/data
       - ${MIHOMO_CORE_DIR:-./docker-data/mihomo}:/app/mihomo
@@ -20,6 +22,12 @@ services:
       - "host.docker.internal:host-gateway"
     networks:
       - sublinkx_net
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8080/healthz >/dev/null || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
 
   mysql:
     image: ${MYSQL_IMAGE:-mysql:8.4}
@@ -29,8 +37,8 @@ services:
     environment:
       MYSQL_DATABASE: ${MYSQL_DATABASE:-sublinkx}
       MYSQL_USER: ${MYSQL_USER:-sublinkx}
-      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-sublinkx_password}
-      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-sublinkx_root_password}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:?MYSQL_PASSWORD is required when the mysql profile is enabled}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?MYSQL_ROOT_PASSWORD is required when the mysql profile is enabled}
     command:
       - --character-set-server=utf8mb4
       - --collation-server=utf8mb4_unicode_ci
@@ -43,7 +51,8 @@ services:
     image: ${FRONTEND_IMAGE:-docker.io/jojhaa/sublinkx-rs-frontend:latest}
     restart: unless-stopped
     depends_on:
-      - backend
+      backend:
+        condition: service_healthy
     ports:
       - "${FRONTEND_PORT:-3000}:80"
     networks:

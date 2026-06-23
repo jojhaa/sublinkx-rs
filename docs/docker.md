@@ -42,14 +42,14 @@ http://localhost:3000
 默认首次登录账号：
 
 ```text
-admin / admin123456
+使用你在 `.env` 中配置的 `BOOTSTRAP_ADMIN_USERNAME` / `BOOTSTRAP_ADMIN_PASSWORD`
 ```
 
 首次登录后必须修改用户名和密码。密码会使用 Argon2 哈希后保存到 SQLite。
 
 ## 配置文件
 
-复制 `.env.example` 后至少修改 `JWT_SECRET`：
+复制 `.env.example` 后至少修改 `JWT_SECRET` 和首次引导管理员凭据：
 
 ```env
 FRONTEND_PORT=3000
@@ -59,17 +59,23 @@ FRONTEND_IMAGE=docker.io/jojhaa/sublinkx-rs-frontend:latest
 BACKEND_DATA_DIR=./docker-data/backend
 MIHOMO_CORE_DIR=./docker-data/mihomo
 DATABASE_URL=sqlite:///app/data/app.db
-JWT_SECRET=change-me-in-production
+JWT_SECRET=请改成至少 32 位随机长密钥
 JWT_EXP_HOURS=24
-BOOTSTRAP_ADMIN_USERNAME=admin
-BOOTSTRAP_ADMIN_PASSWORD=admin123456
+AUTH_COOKIE_SECURE=true
+TRUST_PROXY_HEADERS=true
+BOOTSTRAP_ADMIN_USERNAME=请改成自定义管理员用户名
+BOOTSTRAP_ADMIN_PASSWORD=请改成强首次登录密码
 ```
 
 生产部署建议：
 
 ```env
-JWT_SECRET=请改成一串随机长密钥
+JWT_SECRET=请改成至少 32 位随机长密钥
+AUTH_COOKIE_SECURE=true
 ```
+
+`AUTH_COOKIE_SECURE=true` 是生产默认值，需要 HTTPS。仅本地纯 HTTP 开发时才设置为 `false`。
+`TRUST_PROXY_HEADERS=true` 只能在后端仅能通过可信反向代理或前端容器代理访问时启用。
 
 ## 本地数据映射
 
@@ -132,7 +138,7 @@ MIHOMO_CORE_DIR/
 
 ```env
 COMPOSE_PROFILES=mysql
-DATABASE_URL=mysql://sublinkx:sublinkx_password@mysql:3306/sublinkx
+DATABASE_URL=mysql://sublinkx:<mysql_password>@mysql:3306/sublinkx
 MYSQL_IMAGE=mysql:8.4
 MYSQL_DATABASE=sublinkx
 MYSQL_USER=sublinkx
@@ -211,6 +217,13 @@ ports:
 /healthz  -> backend:8080/healthz
 ```
 
+Compose 会对后端执行 `/healthz` 健康检查，前端只在后端健康后启动。如果前端日志出现 `backend could not be resolved`，优先检查后端是否启动失败：
+
+```bash
+docker compose ps
+docker compose logs --tail=200 backend
+```
+
 如果使用 Nginx Proxy Manager、1Panel、宝塔或 Caddy，反代：
 
 ```text
@@ -221,16 +234,33 @@ http://127.0.0.1:3000
 
 宝塔仍然转发到前端 `3000`，让前端容器内部再转发到后端。不要把外层 Nginx 的 `/api/` 直接转发到 `127.0.0.1:8080`，因为默认 Compose 中后端只 `expose` 给 Docker 内部网络，并没有映射到宿主机端口。
 
+运行时 Nginx CSP 使用 `connect-src 'self'`。生产部署应保持前端和 API 同源，并通过前端容器或等价的同源反代规则代理 `/api/`、`/s/`、`/healthz`。
+
 如果需要在宝塔里单独写 `/api/` 规则，也应该转发到 `3000`，并关闭缓存：
 
 ```nginx
+location = /api/v1/nodes/test-latency-stream {
+    proxy_pass http://127.0.0.1:3000;
+    proxy_buffering off;
+    proxy_cache off;
+    proxy_no_cache 1;
+    proxy_cache_bypass 1;
+
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $remote_addr;
+    proxy_set_header X-Forwarded-Proto $scheme;
+
+    add_header Cache-Control "no-store" always;
+}
+
 location ^~ /api/ {
     proxy_pass http://127.0.0.1:3000;
 
     proxy_set_header Host $host;
     proxy_set_header X-Real-IP $remote_addr;
     proxy_set_header X-Real-Port $remote_port;
-    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-For $remote_addr;
     proxy_set_header X-Forwarded-Proto $scheme;
     proxy_set_header X-Forwarded-Host $host;
     proxy_set_header X-Forwarded-Port $server_port;
@@ -254,6 +284,27 @@ location ^~ /api/ {
 }
 ```
 
+如果你在外层 Nginx / 宝塔里单独配置 `/s/` 订阅入口，建议关闭该 location 的访问日志，避免订阅 token 写入反代日志：
+
+```nginx
+location ^~ /s/ {
+    access_log off;
+    proxy_pass http://127.0.0.1:3000;
+
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $remote_addr;
+    proxy_set_header X-Forwarded-Proto $scheme;
+
+    proxy_cache off;
+    proxy_no_cache 1;
+    proxy_cache_bypass 1;
+
+    add_header Cache-Control "no-store, no-cache, must-revalidate, max-age=0" always;
+    add_header Referrer-Policy "no-referrer" always;
+}
+```
+
 前端页面也建议禁用 HTML 缓存，避免浏览器一直加载旧的 `index-*.js`：
 
 ```nginx
@@ -262,7 +313,7 @@ location ^~ / {
 
     proxy_set_header Host $host;
     proxy_set_header X-Real-IP $remote_addr;
-    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-For $remote_addr;
     proxy_set_header X-Forwarded-Proto $scheme;
 
     proxy_cache off;

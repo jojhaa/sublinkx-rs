@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from 'vue'
+import QRCode from 'qrcode'
 import { extractApiError } from '../api/client'
 import { useI18n } from '../i18n'
 import { listNodes, type NodeItem } from '../api/nodes'
@@ -7,6 +8,7 @@ import { listTemplates, type TemplateItem } from '../api/templates'
 import {
   createSubscription,
   deleteSubscription,
+  fetchSubscriptionExport,
   listSubscriptions,
   renewSubscription,
   rotateSubscriptionToken,
@@ -148,6 +150,7 @@ const successMessage = ref('')
 const exportMode = ref<ExportMode>('strict')
 const compatibilityDetail = ref<{ title: string; message: string; nodes: NodeItem[] } | null>(null)
 const exportConsole = ref<SubscriptionItem | null>(null)
+const qrDialog = ref<{ title: string; link: string; dataUrl: string } | null>(null)
 const publicBaseUrl = ref('')
 
 const form = reactive({
@@ -352,12 +355,224 @@ function subscriptionBaseUrl() {
   return 'http://127.0.0.1:8080'
 }
 
-function exportLink(token: string, target: ExportTarget) {
+function publicExportLink(token: string, target: ExportTarget) {
   return `${subscriptionBaseUrl()}/s/${token}?target=${target}&mode=${exportMode.value}`
 }
 
-function autoSubscriptionLink(item: SubscriptionItem) {
+function publicSubscriptionLink(item: SubscriptionItem) {
   return `${subscriptionBaseUrl()}/s/${item.token}?mode=${exportMode.value}`
+}
+
+async function openSubscriptionQr(item: SubscriptionItem) {
+  const link = publicSubscriptionLink(item)
+  try {
+    const dataUrl = await createBrandedQrCode(link)
+    qrDialog.value = {
+      title: item.name,
+      link,
+      dataUrl,
+    }
+  } catch (error) {
+    errorMessage.value = extractApiError(error)
+  }
+}
+
+async function createBrandedQrCode(value: string) {
+  const qr = QRCode.create(value, { errorCorrectionLevel: 'H' })
+  const modules = qr.modules
+  const moduleCount = modules.size
+  const quietZone = 3
+  const canvasSize = 340
+  const cellSize = canvasSize / (moduleCount + quietZone * 2)
+  const canvas = document.createElement('canvas')
+  canvas.width = canvasSize
+  canvas.height = canvasSize
+  const context = canvas.getContext('2d')
+  if (!context) {
+    return QRCode.toDataURL(value, {
+      color: {
+        dark: '#10272d',
+        light: '#ffffff',
+      },
+      errorCorrectionLevel: 'H',
+      margin: 2,
+      width: canvasSize,
+    })
+  }
+
+  context.fillStyle = '#ffffff'
+  context.fillRect(0, 0, canvasSize, canvasSize)
+
+  const moduleGradient = context.createLinearGradient(0, 0, canvasSize, canvasSize)
+  moduleGradient.addColorStop(0, '#10272d')
+  moduleGradient.addColorStop(0.68, '#13212a')
+  moduleGradient.addColorStop(1, '#075f66')
+  context.fillStyle = moduleGradient
+
+  for (let row = 0; row < moduleCount; row += 1) {
+    for (let col = 0; col < moduleCount; col += 1) {
+      if (!modules.get(row, col) || isFinderZone(row, col, moduleCount)) {
+        continue
+      }
+
+      const x = (col + quietZone) * cellSize
+      const y = (row + quietZone) * cellSize
+      const inset = Math.max(0.8, cellSize * 0.13)
+      roundedRect(context, x + inset, y + inset, cellSize - inset * 2, cellSize - inset * 2, cellSize * 0.28)
+      context.fill()
+    }
+  }
+
+  drawFinderPattern(context, quietZone * cellSize, quietZone * cellSize, cellSize)
+  drawFinderPattern(context, (quietZone + moduleCount - 7) * cellSize, quietZone * cellSize, cellSize)
+  drawFinderPattern(context, quietZone * cellSize, (quietZone + moduleCount - 7) * cellSize, cellSize)
+  drawQrMatrixMonogram(context, canvas.width, canvas.height, cellSize)
+  return canvas.toDataURL('image/png')
+}
+
+function isFinderZone(row: number, col: number, moduleCount: number) {
+  const inTop = row < 8
+  const inBottom = row >= moduleCount - 8
+  const inLeft = col < 8
+  const inRight = col >= moduleCount - 8
+  return (inTop && inLeft) || (inTop && inRight) || (inBottom && inLeft)
+}
+
+function drawFinderPattern(context: CanvasRenderingContext2D, x: number, y: number, cellSize: number) {
+  const size = cellSize * 7
+  const radius = cellSize * 1.1
+
+  context.save()
+  context.fillStyle = '#ffffff'
+  roundedRect(context, x - cellSize * 0.55, y - cellSize * 0.55, size + cellSize * 1.1, size + cellSize * 1.1, radius)
+  context.fill()
+
+  const finderGradient = context.createLinearGradient(x, y, x + size, y + size)
+  finderGradient.addColorStop(0, '#13212a')
+  finderGradient.addColorStop(1, '#075f66')
+  context.fillStyle = finderGradient
+  roundedRect(context, x, y, size, size, radius)
+  context.fill()
+
+  context.fillStyle = '#ffffff'
+  roundedRect(context, x + cellSize * 1.35, y + cellSize * 1.35, size - cellSize * 2.7, size - cellSize * 2.7, radius * 0.72)
+  context.fill()
+
+  context.fillStyle = finderGradient
+  roundedRect(context, x + cellSize * 2.35, y + cellSize * 2.35, size - cellSize * 4.7, size - cellSize * 4.7, radius * 0.42)
+  context.fill()
+  context.restore()
+}
+
+function drawQrMatrixMonogram(context: CanvasRenderingContext2D, width: number, height: number, cellSize: number) {
+  const pattern = [
+    '11110.11111',
+    '10001.10000',
+    '10001.10000',
+    '11110.11110',
+    '10100.00001',
+    '10010.00001',
+    '10001.11110',
+  ]
+  const rows = pattern.length
+  const cols = pattern[0].length
+  const dotSize = Math.max(4, cellSize * 1.08)
+  const gap = Math.max(1, dotSize * 0.16)
+  const pitch = dotSize + gap
+  const markWidth = cols * pitch - gap
+  const markHeight = rows * pitch - gap
+  const x = Math.round((width - markWidth) / 2)
+  const y = Math.round((height - markHeight) / 2)
+  const clearPadX = Math.round(pitch * 1.15)
+  const clearPadY = Math.round(pitch * 1.05)
+
+  context.save()
+  context.fillStyle = '#ffffff'
+  context.fillRect(x - clearPadX, y - clearPadY, markWidth + clearPadX * 2, markHeight + clearPadY * 2)
+
+  const gradient = context.createLinearGradient(x, y, x + markWidth, y + markHeight)
+  gradient.addColorStop(0, '#10272d')
+  gradient.addColorStop(0.58, '#13212a')
+  gradient.addColorStop(1, '#0b8f95')
+  context.fillStyle = gradient
+
+  pattern.forEach((line, rowIndex) => {
+    Array.from(line).forEach((cell, colIndex) => {
+      if (cell !== '1') {
+        return
+      }
+      const dotX = x + colIndex * pitch
+      const dotY = y + rowIndex * pitch
+      roundedRect(context, dotX, dotY, dotSize, dotSize, dotSize * 0.28)
+      context.fill()
+    })
+  })
+
+  context.fillStyle = 'rgba(11, 143, 149, 0.72)'
+  const accentDotSize = dotSize * 0.58
+  const accentDots = [
+    [x - pitch * 0.72, y - pitch * 0.72],
+    [x + markWidth + pitch * 0.18, y - pitch * 0.72],
+    [x - pitch * 0.72, y + markHeight + pitch * 0.18],
+    [x + markWidth + pitch * 0.18, y + markHeight + pitch * 0.18],
+  ]
+
+  accentDots.forEach(([dotX, dotY]) => {
+    roundedRect(context, dotX, dotY, accentDotSize, accentDotSize, accentDotSize * 0.3)
+    context.fill()
+  })
+
+  context.restore()
+}
+
+function roundedRect(
+  context: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+  radius: number,
+) {
+  context.beginPath()
+  context.moveTo(x + radius, y)
+  context.lineTo(x + width - radius, y)
+  context.quadraticCurveTo(x + width, y, x + width, y + radius)
+  context.lineTo(x + width, y + height - radius)
+  context.quadraticCurveTo(x + width, y + height, x + width - radius, y + height)
+  context.lineTo(x + radius, y + height)
+  context.quadraticCurveTo(x, y + height, x, y + height - radius)
+  context.lineTo(x, y + radius)
+  context.quadraticCurveTo(x, y, x + radius, y)
+  context.closePath()
+}
+
+function maskedToken(token: string) {
+  if (token.length <= 8) {
+    return '********'
+  }
+  return `${token.slice(0, 4)}...${token.slice(-4)}`
+}
+
+async function openAdminExport(item: SubscriptionItem, target?: ExportTarget) {
+  try {
+    const { blob, contentType } = await fetchSubscriptionExport(item.id, target ?? null, exportMode.value)
+    const previewBlob = new Blob([blob], { type: contentType ?? (blob.type || 'text/plain;charset=utf-8') })
+    const objectUrl = URL.createObjectURL(previewBlob)
+    openObjectUrlInNewTab(objectUrl)
+    window.setTimeout(() => URL.revokeObjectURL(objectUrl), 60_000)
+  } catch (error) {
+    errorMessage.value = extractApiError(error)
+  }
+}
+
+function openObjectUrlInNewTab(objectUrl: string) {
+  const link = document.createElement('a')
+  link.href = objectUrl
+  link.target = '_blank'
+  link.rel = 'noopener noreferrer'
+  document.body.appendChild(link)
+  link.click()
+  link.remove()
 }
 
 function subscriptionStatus(item: SubscriptionItem) {
@@ -1022,7 +1237,7 @@ onMounted(load)
                 </div>
                 <div class="subscription-inline-meta">
                   <span>{{ item.description || t('noDescription') }}</span>
-                  <code class="compact-token">{{ item.token }}</code>
+                  <code class="compact-token">{{ maskedToken(item.token) }}</code>
                 </div>
                 <div class="subscription-chip-rail">
                   <span class="status-badge status-badge-neutral">{{ groupName(item.group_id) }}</span>
@@ -1042,8 +1257,11 @@ onMounted(load)
                   <span v-if="warningExportCount(item) > 0" class="status-badge status-badge-warn">
                     {{ t('warnings', { count: warningExportCount(item) }) }}
                   </span>
-                  <button class="button button-ghost button-compact" type="button" @click="copyText(autoSubscriptionLink(item), t('autoLinkCopied'))">
+                  <button class="button button-ghost button-compact" type="button" @click="copyText(publicSubscriptionLink(item), t('autoLinkCopied'))">
                     {{ t('copy') }}
+                  </button>
+                  <button class="button button-ghost button-compact" type="button" @click="openSubscriptionQr(item)">
+                    {{ t('qrCode') }}
                   </button>
                   <button class="button button-accent button-compact" type="button" @click="openExportConsole(item)">
                     {{ t('export') }}
@@ -1095,7 +1313,8 @@ onMounted(load)
             <div><span>{{ t('defaultClientLabel') }}</span><strong>{{ TARGET_LABELS[defaultTarget(detailSubscription)] }}</strong></div>
           </div>
           <div class="modal-actions">
-            <button class="button button-ghost" type="button" @click="copyText(autoSubscriptionLink(detailSubscription), t('autoLinkCopied'))">{{ t('copyAutoLink') }}</button>
+            <button class="button button-ghost" type="button" @click="copyText(publicSubscriptionLink(detailSubscription), t('autoLinkCopied'))">{{ t('copyAutoLink') }}</button>
+            <button class="button button-ghost" type="button" @click="openSubscriptionQr(detailSubscription)">{{ t('qrCode') }}</button>
             <button class="button button-accent" type="button" @click="openExportConsole(detailSubscription); detailSubscription = null">{{ t('export') }}</button>
             <button class="button button-ghost" type="button" @click="startEdit(detailSubscription); detailSubscription = null">{{ t('edit') }}</button>
           </div>
@@ -1330,17 +1549,22 @@ onMounted(load)
           <div class="export-console-hero">
             <div>
               <div class="hint">{{ t('autoDetectSubscription') }}</div>
-              <a class="token-link export-console-auto-link" :href="autoSubscriptionLink(exportConsole)" target="_blank" rel="noreferrer">
-                {{ autoSubscriptionLink(exportConsole) }}
-              </a>
+              <button class="button button-ghost token-link export-console-auto-link" type="button" @click="openAdminExport(exportConsole)">
+                {{ t('preview') }}
+              </button>
             </div>
-            <button
-              class="button button-accent"
-              type="button"
-              @click="copyText(autoSubscriptionLink(exportConsole), t('autoLinkCopied'))"
-            >
-              {{ t('copyAutoLink') }}
-            </button>
+            <div class="inline-actions">
+              <button
+                class="button button-accent"
+                type="button"
+                @click="copyText(publicSubscriptionLink(exportConsole), t('autoLinkCopied'))"
+              >
+                {{ t('copyAutoLink') }}
+              </button>
+              <button class="button button-ghost" type="button" @click="openSubscriptionQr(exportConsole)">
+                {{ t('qrCode') }}
+              </button>
+            </div>
           </div>
 
           <div class="export-console-grid">
@@ -1357,14 +1581,14 @@ onMounted(load)
                   {{ subscriptionCompatibility(exportConsole, target).supportedCount }}/{{ subscriptionCompatibility(exportConsole, target).totalCount }}
                 </span>
               </div>
-              <a class="token-link export-console-link" :href="exportLink(exportConsole.token, target)" target="_blank" rel="noreferrer">
-                {{ exportLink(exportConsole.token, target) }}
-              </a>
+              <button class="button button-ghost token-link export-console-link" type="button" @click="openAdminExport(exportConsole, target)">
+                {{ t('preview') }}
+              </button>
               <div class="export-console-actions">
                 <button
                   class="button button-ghost button-compact"
                   type="button"
-                  @click="copyText(exportLink(exportConsole.token, target), t('targetLinkCopied', { target: TARGET_LABELS[target] }))"
+                  @click="copyText(publicExportLink(exportConsole.token, target), t('targetLinkCopied', { target: TARGET_LABELS[target] }))"
                 >
                   {{ t('copyLink') }}
                 </button>
@@ -1378,6 +1602,39 @@ onMounted(load)
                 </button>
               </div>
             </article>
+          </div>
+        </section>
+      </div>
+    </Teleport>
+
+    <Teleport to="body">
+      <div v-if="qrDialog" class="modal-backdrop" @click.self="qrDialog = null">
+        <section class="modal-panel qr-modal-panel">
+          <header class="modal-header">
+            <div>
+              <span class="eyebrow">{{ t('subscriptionQrCode') }}</span>
+              <h3>{{ qrDialog.title }}</h3>
+            </div>
+            <button class="icon-button" type="button" :aria-label="t('close')" @click="qrDialog = null">x</button>
+          </header>
+
+          <div class="qr-card">
+            <div class="qr-visual-shell">
+              <span class="qr-corner qr-corner-tl"></span>
+              <span class="qr-corner qr-corner-tr"></span>
+              <span class="qr-corner qr-corner-bl"></span>
+              <span class="qr-corner qr-corner-br"></span>
+              <img class="qr-image" :src="qrDialog.dataUrl" :alt="t('subscriptionQrCode')" />
+            </div>
+            <div class="qr-card-meta">
+              <span class="eyebrow">{{ t('autoDetectSubscription') }}</span>
+              <code class="qr-link">{{ qrDialog.link }}</code>
+            </div>
+          </div>
+
+          <div class="modal-actions">
+            <button class="button button-ghost" type="button" @click="copyText(qrDialog.link, t('autoLinkCopied'))">{{ t('copyAutoLink') }}</button>
+            <button class="button button-accent" type="button" @click="qrDialog = null">{{ t('close') }}</button>
           </div>
         </section>
       </div>

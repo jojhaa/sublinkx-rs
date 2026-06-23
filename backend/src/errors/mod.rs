@@ -17,6 +17,10 @@ pub enum AppError {
     Unauthorized,
     #[error("forbidden: {0}")]
     Forbidden(String),
+    #[error("too many requests: {0}")]
+    TooManyRequests(String),
+    #[error("{0}")]
+    LatencyAutoRunning(String),
     #[error("internal server error")]
     Internal,
 }
@@ -30,21 +34,26 @@ struct ErrorBody {
 
 impl IntoResponse for AppError {
     fn into_response(self) -> Response {
-        let status = match self {
+        let status = match &self {
             AppError::BadRequest(_) => StatusCode::BAD_REQUEST,
             AppError::NotFound(_) => StatusCode::NOT_FOUND,
             AppError::Unauthorized => StatusCode::UNAUTHORIZED,
             AppError::Forbidden(_) => StatusCode::FORBIDDEN,
+            AppError::TooManyRequests(_) => StatusCode::TOO_MANY_REQUESTS,
+            AppError::LatencyAutoRunning(_) => StatusCode::CONFLICT,
             AppError::Internal => StatusCode::INTERNAL_SERVER_ERROR,
         };
+        let code = match &self {
+            AppError::BadRequest(_) => "bad_request",
+            AppError::NotFound(_) => "not_found",
+            AppError::Unauthorized => "unauthorized",
+            AppError::Forbidden(_) => "forbidden",
+            AppError::TooManyRequests(_) => "too_many_requests",
+            AppError::LatencyAutoRunning(_) => "latency_auto_running",
+            AppError::Internal => "internal_error",
+        };
         let body = Json(ErrorBody {
-            code: match status {
-                StatusCode::BAD_REQUEST => "bad_request",
-                StatusCode::NOT_FOUND => "not_found",
-                StatusCode::UNAUTHORIZED => "unauthorized",
-                StatusCode::FORBIDDEN => "forbidden",
-                _ => "internal_error",
-            },
+            code,
             message: self.to_string(),
         });
 

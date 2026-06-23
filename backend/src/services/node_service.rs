@@ -1,15 +1,21 @@
-use axum::http::HeaderMap;
+use axum::{
+    body::{Body, Bytes},
+    http::HeaderMap,
+};
 use base64::{Engine as _, engine::general_purpose};
 use percent_encoding::{NON_ALPHANUMERIC, utf8_percent_encode};
 use serde_yaml::{Mapping, Value};
 use sha2::{Digest, Sha256};
 use std::{
+    collections::HashSet,
+    convert::Infallible,
     fs,
     net::TcpListener,
     path::PathBuf,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
-use tokio::{process::Command, task::JoinSet, time::sleep};
+use tokio::{process::Command, sync::mpsc, task::JoinSet, time::sleep};
+use tokio_stream::wrappers::ReceiverStream;
 
 use crate::{
     domain::node::NodeView,
@@ -25,13 +31,19 @@ use crate::{
         node_repo::{self, NewNodeRecord, UpdateNodeRecord},
         template_repo,
     },
-    state::AppState,
+    state::{AppState, LatencyManualBeginError},
     utils::time::now_rfc3339,
 };
 
 use super::{
     auth_service, export_service, mihomo_core_service, protocol_parser_service, settings_service,
+    url_safety,
 };
+
+const MAX_SUBSCRIPTION_BODY_BYTES: usize = 5 * 1024 * 1024;
+const MAX_IMPORT_SUBSCRIPTION_NODES: usize = 1000;
+const MAX_LATENCY_BATCH_SIZE: usize = 50;
+const LATENCY_RUN_COOLDOWN: Duration = Duration::from_secs(20);
 
 pub async fn require_auth(state: &AppState, headers: &HeaderMap) -> Result<(), AppError> {
     auth_service::require_user(state, headers).await.map(|_| ())
@@ -74,11 +86,13 @@ pub async fn create_node(
     let parsed =
         protocol_parser_service::parse_raw_link(&payload.raw_link, payload.name.as_deref())?;
     ensure_group_exists(state, payload.group_id).await?;
-    if node_repo::find_by_fingerprint(&state.db, &parsed.fingerprint)
+    if node_repo::find_by_fingerprint_in_group(&state.db, &parsed.fingerprint, payload.group_id)
         .await?
         .is_some()
     {
-        return Err(AppError::BadRequest("node already exists".to_string()));
+        return Err(AppError::BadRequest(
+            "node already exists in this group".to_string(),
+        ));
     }
 
     let now = now_rfc3339();
@@ -93,6 +107,7 @@ pub async fn create_node(
             port: i64::from(parsed.port),
             enabled: bool_to_db(true),
             group_id: payload.group_id,
+            fingerprint_scope: node_repo::fingerprint_scope(payload.group_id),
             source_type: "manual",
             source_ref: None,
             fingerprint: &parsed.fingerprint,
@@ -125,18 +140,26 @@ pub async fn import_nodes_from_subscription(
 
     let body = fetch_subscription_body(url).await?;
     let fidelity_warnings = check_mihomo_conversion_fidelity(&body);
-    let saved_template = save_upstream_template_if_mihomo_yaml(state, url, &body).await?;
+    let saved_template =
+        save_upstream_template_if_mihomo_yaml(state, url, &body, payload.group_id).await?;
     let raw_links = extract_subscription_links(&body)?;
     if raw_links.is_empty() {
         return Err(AppError::BadRequest(
             "no supported node links found in subscription".to_string(),
         ));
     }
+    if raw_links.len() > MAX_IMPORT_SUBSCRIPTION_NODES {
+        return Err(AppError::BadRequest(format!(
+            "at most {MAX_IMPORT_SUBSCRIPTION_NODES} nodes can be imported at once"
+        )));
+    }
 
     let now = now_rfc3339();
     let mut imported = Vec::new();
     let mut failures = Vec::new();
     let mut skipped = 0usize;
+    let mut parsed_links = Vec::new();
+    let mut seen_fingerprints = HashSet::new();
 
     for raw_link in raw_links {
         match protocol_parser_service::parse_raw_link(&raw_link, None) {
@@ -146,50 +169,61 @@ pub async fn import_nodes_from_subscription(
                     continue;
                 }
 
-                match node_repo::find_by_fingerprint(&state.db, &parsed.fingerprint).await {
-                    Ok(Some(_)) => {
-                        skipped += 1;
-                    }
-                    Ok(None) => {
-                        let settings_json = serde_json::to_string(&parsed.settings)
-                            .map_err(|_| AppError::Internal)?;
-                        match node_repo::insert(
-                            &state.db,
-                            &NewNodeRecord {
-                                name: &parsed.name,
-                                protocol: parsed.protocol.as_str(),
-                                raw_link: raw_link.trim(),
-                                server: &parsed.server,
-                                port: i64::from(parsed.port),
-                                enabled: bool_to_db(true),
-                                group_id: payload.group_id,
-                                source_type: "upstream_subscription",
-                                source_ref: Some(url),
-                                fingerprint: &parsed.fingerprint,
-                                settings_json: &settings_json,
-                                remark: payload.remark.as_deref().unwrap_or(""),
-                                created_at: &now,
-                                updated_at: &now,
-                            },
-                        )
-                        .await
-                        {
-                            Ok(record) => {
-                                let view =
-                                    NodeView::try_from(record).map_err(|_| AppError::Internal)?;
-                                imported.push(view);
-                            }
-                            Err(error) => failures.push(NodeImportFailure {
-                                source: truncate_source(&raw_link),
-                                reason: error.to_string(),
-                            }),
-                        }
-                    }
-                    Err(error) => failures.push(NodeImportFailure {
-                        source: truncate_source(&raw_link),
-                        reason: error.to_string(),
-                    }),
+                if !seen_fingerprints.insert(parsed.fingerprint.clone()) {
+                    skipped += 1;
+                    continue;
                 }
+
+                parsed_links.push((raw_link, parsed));
+            }
+            Err(error) => failures.push(NodeImportFailure {
+                source: truncate_source(&raw_link),
+                reason: error.to_string(),
+            }),
+        }
+    }
+
+    let fingerprints = parsed_links
+        .iter()
+        .map(|(_, parsed)| parsed.fingerprint.clone())
+        .collect::<Vec<_>>();
+    let existing_fingerprints =
+        node_repo::existing_fingerprints_in_group(&state.db, &fingerprints, payload.group_id)
+            .await?;
+
+    for (raw_link, parsed) in parsed_links {
+        if existing_fingerprints.contains(&parsed.fingerprint) {
+            skipped += 1;
+            continue;
+        }
+
+        let settings_json =
+            serde_json::to_string(&parsed.settings).map_err(|_| AppError::Internal)?;
+        match node_repo::insert(
+            &state.db,
+            &NewNodeRecord {
+                name: &parsed.name,
+                protocol: parsed.protocol.as_str(),
+                raw_link: raw_link.trim(),
+                server: &parsed.server,
+                port: i64::from(parsed.port),
+                enabled: bool_to_db(true),
+                group_id: payload.group_id,
+                fingerprint_scope: node_repo::fingerprint_scope(payload.group_id),
+                source_type: "upstream_subscription",
+                source_ref: Some(url),
+                fingerprint: &parsed.fingerprint,
+                settings_json: &settings_json,
+                remark: payload.remark.as_deref().unwrap_or(""),
+                created_at: &now,
+                updated_at: &now,
+            },
+        )
+        .await
+        {
+            Ok(record) => {
+                let view = NodeView::try_from(record).map_err(|_| AppError::Internal)?;
+                imported.push(view);
             }
             Err(error) => failures.push(NodeImportFailure {
                 source: truncate_source(&raw_link),
@@ -225,10 +259,14 @@ pub async fn update_node(
         protocol_parser_service::parse_raw_link(&payload.raw_link, payload.name.as_deref())?;
     ensure_group_exists(state, payload.group_id).await?;
 
-    if let Some(duplicate) = node_repo::find_by_fingerprint(&state.db, &parsed.fingerprint).await?
+    if let Some(duplicate) =
+        node_repo::find_by_fingerprint_in_group(&state.db, &parsed.fingerprint, payload.group_id)
+            .await?
         && duplicate.id != id
     {
-        return Err(AppError::BadRequest("node already exists".to_string()));
+        return Err(AppError::BadRequest(
+            "node already exists in this group".to_string(),
+        ));
     }
 
     let settings_json = serde_json::to_string(&parsed.settings).map_err(|_| AppError::Internal)?;
@@ -243,6 +281,7 @@ pub async fn update_node(
             port: i64::from(parsed.port),
             enabled: payload.enabled.map(bool_to_db).unwrap_or(existing.enabled),
             group_id: payload.group_id,
+            fingerprint_scope: node_repo::fingerprint_scope(payload.group_id),
             fingerprint: &parsed.fingerprint,
             settings_json: &settings_json,
             remark: payload.remark.as_deref().unwrap_or(&existing.remark),
@@ -259,12 +298,22 @@ pub async fn update_node(
 }
 
 pub async fn test_node_latency(state: &AppState, id: i64) -> Result<NodeLatencyResponse, AppError> {
+    begin_latency_run(state).await?;
+    let result = test_node_latency_inner(state, id).await;
+    state.finish_manual_latency_run().await;
+    result
+}
+
+async fn test_node_latency_inner(
+    state: &AppState,
+    id: i64,
+) -> Result<NodeLatencyResponse, AppError> {
     let node = node_repo::find_by_id(&state.db, id)
         .await?
         .ok_or_else(|| AppError::NotFound("node not found".to_string()))?;
     let settings = settings_service::load_settings(state).await?;
     ensure_mihomo_core_ready(&settings).await?;
-    let data = real_latency_for_node(&node, &settings).await;
+    let data = real_latency_for_node(state, &node, &settings).await;
     persist_latency_result(state, &data).await?;
     Ok(NodeLatencyResponse {
         code: "00000",
@@ -311,16 +360,26 @@ pub async fn test_node_latency_batch(
     state: &AppState,
     payload: NodeLatencyBatchRequest,
 ) -> Result<NodeLatencyBatchResponse, AppError> {
+    begin_latency_run(state).await?;
+    let result = test_node_latency_batch_inner(state, payload).await;
+    state.finish_manual_latency_run().await;
+    result
+}
+
+async fn test_node_latency_batch_inner(
+    state: &AppState,
+    payload: NodeLatencyBatchRequest,
+) -> Result<NodeLatencyBatchResponse, AppError> {
     if payload.ids.is_empty() {
         return Ok(NodeLatencyBatchResponse {
             code: "00000",
             data: Vec::new(),
         });
     }
-    if payload.ids.len() > 200 {
-        return Err(AppError::BadRequest(
-            "at most 200 nodes can be tested at once".to_string(),
-        ));
+    if payload.ids.len() > MAX_LATENCY_BATCH_SIZE {
+        return Err(AppError::BadRequest(format!(
+            "at most {MAX_LATENCY_BATCH_SIZE} nodes can be tested at once"
+        )));
     }
 
     let settings = settings_service::load_settings(state).await?;
@@ -331,13 +390,20 @@ pub async fn test_node_latency_batch(
     }
 
     let mut indexed_results = Vec::with_capacity(prepared.len());
-    for chunk in prepared.chunks(6) {
+    for chunk in prepared.chunks(latency_concurrency(&settings)) {
         let mut tasks = JoinSet::new();
         for (index, id, node) in chunk.iter().cloned() {
             let settings = settings.clone();
+            let permit = state
+                .latency_test_semaphore
+                .clone()
+                .acquire_owned()
+                .await
+                .map_err(|_| AppError::Internal)?;
             tasks.spawn(async move {
+                let _permit = permit;
                 let result = match node {
-                    Some(node) => real_latency_for_node(&node, &settings).await,
+                    Some(node) => real_latency_for_node_with_settings(&node, &settings).await,
                     None => NodeLatencyResult {
                         id,
                         status: "error".to_string(),
@@ -368,21 +434,205 @@ pub async fn test_node_latency_batch(
     })
 }
 
+pub async fn test_node_latency_batch_stream(
+    state: AppState,
+    payload: NodeLatencyBatchRequest,
+) -> Result<Body, AppError> {
+    begin_latency_run(&state).await?;
+    let prepared = match prepare_latency_batch(&state, payload).await {
+        Ok(prepared) => prepared,
+        Err(error) => {
+            state.finish_manual_latency_run().await;
+            return Err(error);
+        }
+    };
+    let settings = match settings_service::load_settings(&state).await {
+        Ok(settings) => settings,
+        Err(error) => {
+            state.finish_manual_latency_run().await;
+            return Err(error);
+        }
+    };
+    if let Err(error) = ensure_mihomo_core_ready(&settings).await {
+        state.finish_manual_latency_run().await;
+        return Err(error);
+    }
+
+    let (sender, receiver) = mpsc::channel::<Result<Bytes, Infallible>>(16);
+    tokio::spawn(async move {
+        for chunk in prepared.chunks(latency_concurrency(&settings)) {
+            let mut tasks = JoinSet::new();
+            for (index, id, node) in chunk.iter().cloned() {
+                let settings = settings.clone();
+                let permit = match state.latency_test_semaphore.clone().acquire_owned().await {
+                    Ok(permit) => permit,
+                    Err(_) => {
+                        let result = NodeLatencyResult {
+                            id,
+                            status: "error".to_string(),
+                            latency_ms: None,
+                            message: Some("latency test limiter is unavailable".to_string()),
+                            tested_at: now_rfc3339(),
+                        };
+                        tasks.spawn(async move { (index, result) });
+                        continue;
+                    }
+                };
+                tasks.spawn(async move {
+                    let _permit = permit;
+                    let result = match node {
+                        Some(node) => real_latency_for_node_with_settings(&node, &settings).await,
+                        None => NodeLatencyResult {
+                            id,
+                            status: "error".to_string(),
+                            latency_ms: None,
+                            message: Some("node not found".to_string()),
+                            tested_at: now_rfc3339(),
+                        },
+                    };
+                    (index, result)
+                });
+            }
+
+            while let Some(joined) = tasks.join_next().await {
+                let Ok((_, result)) = joined else {
+                    continue;
+                };
+                let _ = persist_latency_result(&state, &result).await;
+                let Ok(line) = serde_json::to_string(&result).map(|value| format!("{value}\n"))
+                else {
+                    continue;
+                };
+                if sender.send(Ok(Bytes::from(line))).await.is_err() {
+                    state.finish_manual_latency_run().await;
+                    return;
+                }
+            }
+        }
+
+        state.finish_manual_latency_run().await;
+    });
+
+    Ok(Body::from_stream(ReceiverStream::new(receiver)))
+}
+
+async fn prepare_latency_batch(
+    state: &AppState,
+    payload: NodeLatencyBatchRequest,
+) -> Result<Vec<(usize, i64, Option<crate::domain::node::NodeRecord>)>, AppError> {
+    if payload.ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    if payload.ids.len() > MAX_LATENCY_BATCH_SIZE {
+        return Err(AppError::BadRequest(format!(
+            "at most {MAX_LATENCY_BATCH_SIZE} nodes can be tested at once"
+        )));
+    }
+
+    let mut prepared = Vec::with_capacity(payload.ids.len());
+    for (index, id) in payload.ids.into_iter().enumerate() {
+        prepared.push((index, id, node_repo::find_by_id(&state.db, id).await?));
+    }
+    Ok(prepared)
+}
+
 pub async fn test_all_enabled_node_latencies(
+    state: &AppState,
+) -> Result<Vec<NodeLatencyResult>, AppError> {
+    if !state.try_begin_auto_latency_run().await {
+        return Err(AppError::TooManyRequests(
+            "latency testing is already running".to_string(),
+        ));
+    }
+
+    let result = test_all_enabled_node_latencies_inner(state).await;
+    state.finish_auto_latency_run().await;
+    result
+}
+
+async fn test_all_enabled_node_latencies_inner(
     state: &AppState,
 ) -> Result<Vec<NodeLatencyResult>, AppError> {
     let settings = settings_service::load_settings(state).await?;
     ensure_mihomo_core_ready(&settings).await?;
     let nodes = node_repo::list_enabled(&state.db).await?;
-    let mut results = Vec::with_capacity(nodes.len());
+    let mut indexed_results = Vec::with_capacity(nodes.len());
 
-    for node in nodes {
-        let result = real_latency_for_node(&node, &settings).await;
-        persist_latency_result(state, &result).await?;
-        results.push(result);
+    for chunk in nodes
+        .into_iter()
+        .enumerate()
+        .collect::<Vec<_>>()
+        .chunks(latency_concurrency(&settings))
+    {
+        if state.is_auto_latency_cancel_requested().await {
+            break;
+        }
+
+        let mut tasks = JoinSet::new();
+        for (index, node) in chunk.iter().cloned() {
+            let settings = settings.clone();
+            let state = state.clone();
+            let permit = state
+                .latency_test_semaphore
+                .clone()
+                .acquire_owned()
+                .await
+                .map_err(|_| AppError::Internal)?;
+            tasks.spawn(async move {
+                let _permit = permit;
+                let result = real_latency_for_auto_node(&state, &node, &settings).await;
+                (index, result)
+            });
+        }
+
+        while let Some(joined) = tasks.join_next().await {
+            let (index, result) = joined.map_err(|_| AppError::Internal)?;
+            if let Some(result) = result {
+                persist_latency_result(state, &result).await?;
+                indexed_results.push((index, result));
+            }
+        }
     }
 
-    Ok(results)
+    indexed_results.sort_by_key(|(index, _)| *index);
+    Ok(indexed_results
+        .into_iter()
+        .map(|(_, result)| result)
+        .collect())
+}
+
+async fn begin_latency_run(state: &AppState) -> Result<(), AppError> {
+    state
+        .try_begin_manual_latency_run(LATENCY_RUN_COOLDOWN)
+        .await
+        .map_err(|error| match error {
+            LatencyManualBeginError::AutoRunning => {
+                AppError::LatencyAutoRunning("background latency testing is running".to_string())
+            }
+            LatencyManualBeginError::ManualRunning => {
+                AppError::TooManyRequests("latency testing is already running".to_string())
+            }
+            LatencyManualBeginError::Cooldown => AppError::TooManyRequests(
+                "latency testing was started recently; try again later".to_string(),
+            ),
+        })
+}
+
+pub async fn cancel_auto_latency_run(state: &AppState) -> Result<serde_json::Value, AppError> {
+    let cancelled = state.request_cancel_auto_latency_run().await;
+    Ok(serde_json::json!({
+        "code": "00000",
+        "cancelled": cancelled,
+    }))
+}
+
+fn latency_concurrency(settings: &crate::domain::settings::AppSettingsView) -> usize {
+    usize::try_from(
+        settings
+            .latency_concurrency
+            .clamp(1, settings_service::MAX_LATENCY_CONCURRENCY),
+    )
+    .unwrap_or(1)
 }
 
 async fn ensure_mihomo_core_ready(
@@ -446,6 +696,24 @@ async fn persist_latency_result(
 }
 
 async fn real_latency_for_node(
+    state: &AppState,
+    node: &crate::domain::node::NodeRecord,
+    settings: &crate::domain::settings::AppSettingsView,
+) -> NodeLatencyResult {
+    let Ok(permit) = state.latency_test_semaphore.clone().acquire_owned().await else {
+        return NodeLatencyResult {
+            id: node.id,
+            status: "error".to_string(),
+            latency_ms: None,
+            message: Some("latency test limiter is unavailable".to_string()),
+            tested_at: now_rfc3339(),
+        };
+    };
+    let _permit = permit;
+    real_latency_for_node_with_settings(node, settings).await
+}
+
+async fn real_latency_for_node_with_settings(
     node: &crate::domain::node::NodeRecord,
     settings: &crate::domain::settings::AppSettingsView,
 ) -> NodeLatencyResult {
@@ -459,7 +727,7 @@ async fn real_latency_for_node(
         };
     }
 
-    match mihomo_real_latency_for_node(node, settings).await {
+    match mihomo_real_latency_for_node(node, settings, None).await {
         Ok(delay) => NodeLatencyResult {
             id: node.id,
             status: "ok".to_string(),
@@ -481,14 +749,61 @@ async fn real_latency_for_node(
     }
 }
 
+async fn real_latency_for_auto_node(
+    state: &AppState,
+    node: &crate::domain::node::NodeRecord,
+    settings: &crate::domain::settings::AppSettingsView,
+) -> Option<NodeLatencyResult> {
+    if state.is_auto_latency_cancel_requested().await {
+        return None;
+    }
+
+    let result = match mihomo_real_latency_for_node(node, settings, Some(state)).await {
+        Ok(delay) => NodeLatencyResult {
+            id: node.id,
+            status: "ok".to_string(),
+            latency_ms: Some(delay),
+            message: None,
+            tested_at: now_rfc3339(),
+        },
+        Err(message) => {
+            if state.is_auto_latency_cancel_requested().await {
+                return None;
+            }
+
+            NodeLatencyResult {
+                id: node.id,
+                status: if message.contains("timed out") {
+                    "timeout".to_string()
+                } else {
+                    "error".to_string()
+                },
+                latency_ms: None,
+                message: Some(message),
+                tested_at: now_rfc3339(),
+            }
+        }
+    };
+
+    Some(result)
+}
+
 async fn mihomo_real_latency_for_node(
     node: &crate::domain::node::NodeRecord,
     settings: &crate::domain::settings::AppSettingsView,
+    cancel_state: Option<&AppState>,
 ) -> Result<u128, String> {
+    if let Some(state) = cancel_state
+        && state.is_auto_latency_cancel_requested().await
+    {
+        return Err("latency test cancelled".to_string());
+    }
+
     let binary = resolve_mihomo_binary(settings)?;
     let mixed_port = allocate_local_port().map_err(|error| error.to_string())?;
     let controller_port = allocate_local_port().map_err(|error| error.to_string())?;
     let config_path = write_mihomo_latency_config(node, mixed_port, controller_port)?;
+    let _config_guard = TempFileGuard(config_path.clone());
     let timeout_ms = settings.latency_timeout_secs.clamp(3, 60) * 1000;
 
     let mut child = Command::new(&binary)
@@ -503,6 +818,13 @@ async fn mihomo_real_latency_for_node(
                 error
             )
         })?;
+
+    if let Some(state) = cancel_state
+        && state.is_auto_latency_cancel_requested().await
+    {
+        let _ = child.kill().await;
+        return Err("latency test cancelled".to_string());
+    }
 
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(
@@ -523,7 +845,25 @@ async fn mihomo_real_latency_for_node(
         let mut last_error = String::new();
         let mut response = None;
         for _ in 0..30 {
-            match client.get(&delay_url).send().await {
+            let request = client.get(&delay_url).send();
+            tokio::pin!(request);
+            let request_result = loop {
+                tokio::select! {
+                    result = &mut request => {
+                        break result;
+                    }
+                    _ = sleep(Duration::from_millis(200)), if cancel_state.is_some() => {
+                        if let Some(state) = cancel_state
+                            && state.is_auto_latency_cancel_requested().await
+                        {
+                            let _ = child.kill().await;
+                            return Err("latency test cancelled".to_string());
+                        }
+                    }
+                }
+            };
+
+            match request_result {
                 Ok(value) => {
                     response = Some(value);
                     break;
@@ -540,7 +880,6 @@ async fn mihomo_real_latency_for_node(
     let status = response.status();
     let body = response.text().await.map_err(|error| error.to_string())?;
     let _ = child.kill().await;
-    let _ = fs::remove_file(&config_path);
 
     if !status.is_success() {
         return Err(format!("mihomo delay api returned {status}: {body}"));
@@ -642,6 +981,14 @@ fn allocate_local_port() -> Result<u16, std::io::Error> {
         .and_then(|listener| listener.local_addr().map(|addr| addr.port()))
 }
 
+struct TempFileGuard(PathBuf);
+
+impl Drop for TempFileGuard {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.0);
+    }
+}
+
 fn yaml_safe_proxy_name(node: &crate::domain::node::NodeRecord) -> String {
     format!(
         "node-{}-{}",
@@ -651,29 +998,17 @@ fn yaml_safe_proxy_name(node: &crate::domain::node::NodeRecord) -> String {
 }
 
 async fn fetch_subscription_body(url: &str) -> Result<String, AppError> {
-    match fetch_subscription_body_with_tls_policy(url, false).await {
-        Ok(body) => Ok(body),
-        Err(error) if url.starts_with("https://") => {
-            fetch_subscription_body_with_tls_policy(url, true)
-                .await
-                .map_err(|_| error)
-        }
-        Err(error) => Err(error),
-    }
-}
+    let validated_url = url_safety::validate_public_http_url(url, "subscription url").await?;
 
-async fn fetch_subscription_body_with_tls_policy(
-    url: &str,
-    accept_invalid_certs: bool,
-) -> Result<String, AppError> {
-    let client = reqwest::Client::builder()
+    let client = validated_url
+        .pin_reqwest_resolver(reqwest::Client::builder())
         .timeout(Duration::from_secs(25))
         .user_agent("SublinkX-RS/0.1 Mihomo")
-        .danger_accept_invalid_certs(accept_invalid_certs)
+        .redirect(reqwest::redirect::Policy::none())
         .build()
         .map_err(|_| AppError::Internal)?;
     let response = client
-        .get(url)
+        .get(validated_url.as_str())
         .header(
             reqwest::header::USER_AGENT,
             "Clash.Meta/1.19.0 mihomo/1.19.0",
@@ -685,16 +1020,43 @@ async fn fetch_subscription_body_with_tls_policy(
         .send()
         .await
         .map_err(|error| AppError::BadRequest(format!("failed to fetch subscription: {error}")))?;
+    if response.status().is_redirection() {
+        return Err(AppError::BadRequest(
+            "upstream subscription redirects are not allowed".to_string(),
+        ));
+    }
     if !response.status().is_success() {
         return Err(AppError::BadRequest(format!(
             "upstream subscription returned {}",
             response.status()
         )));
     }
-    response
-        .text()
+    if let Some(length) = response.content_length()
+        && length > MAX_SUBSCRIPTION_BODY_BYTES as u64
+    {
+        return Err(AppError::BadRequest(
+            "upstream subscription is too large".to_string(),
+        ));
+    }
+
+    let mut response = response;
+    let mut body = Vec::new();
+    while let Some(chunk) = response
+        .chunk()
         .await
-        .map_err(|error| AppError::BadRequest(format!("failed to read subscription: {error}")))
+        .map_err(|error| AppError::BadRequest(format!("failed to read subscription: {error}")))?
+    {
+        if body.len() + chunk.len() > MAX_SUBSCRIPTION_BODY_BYTES {
+            return Err(AppError::BadRequest(
+                "upstream subscription is too large".to_string(),
+            ));
+        }
+        body.extend_from_slice(&chunk);
+    }
+
+    String::from_utf8(body).map_err(|_| {
+        AppError::BadRequest("upstream subscription is not valid UTF-8 text".to_string())
+    })
 }
 
 fn extract_subscription_links(body: &str) -> Result<Vec<String>, AppError> {
@@ -1196,6 +1558,7 @@ async fn save_upstream_template_if_mihomo_yaml(
     state: &AppState,
     url: &str,
     body: &str,
+    group_id: Option<i64>,
 ) -> Result<Option<crate::domain::template::TemplateRecord>, AppError> {
     let template_body = if is_mihomo_profile_yaml(body) {
         sanitize_mihomo_profile_yaml(body)?
@@ -1208,7 +1571,7 @@ async fn save_upstream_template_if_mihomo_yaml(
     };
 
     let now = now_rfc3339();
-    let name = unique_upstream_template_name(state, url).await?;
+    let name = unique_upstream_template_name(state, url, group_id).await?;
     let content = mark_upstream_template(&template_body);
     let template = template_repo::insert(
         &state.db,
@@ -1225,9 +1588,14 @@ async fn save_upstream_template_if_mihomo_yaml(
     Ok(Some(template))
 }
 
-async fn unique_upstream_template_name(state: &AppState, url: &str) -> Result<String, AppError> {
+async fn unique_upstream_template_name(
+    state: &AppState,
+    url: &str,
+    group_id: Option<i64>,
+) -> Result<String, AppError> {
     let digest = &hex::encode(Sha256::digest(url.as_bytes()))[..8];
-    let base = format!("Upstream Mihomo {digest}");
+    let group_name = upstream_template_group_name(state, group_id).await?;
+    let base = truncate_template_name_base(&format!("Upstream Mihomo {group_name} {digest}"));
     if template_repo::find_by_name(&state.db, &base)
         .await?
         .is_none()
@@ -1246,6 +1614,52 @@ async fn unique_upstream_template_name(state: &AppState, url: &str) -> Result<St
     }
 
     Err(AppError::Internal)
+}
+
+async fn upstream_template_group_name(
+    state: &AppState,
+    group_id: Option<i64>,
+) -> Result<String, AppError> {
+    let Some(group_id) = group_id else {
+        return Ok("Ungrouped".to_string());
+    };
+
+    let group = group_repo::find_by_id(&state.db, GroupTable::Node, group_id)
+        .await?
+        .ok_or_else(|| AppError::BadRequest(format!("node group not found: {group_id}")))?;
+    Ok(sanitize_template_name_part(&group.name))
+}
+
+fn sanitize_template_name_part(value: &str) -> String {
+    let sanitized = value
+        .chars()
+        .map(|character| {
+            if character.is_control()
+                || matches!(
+                    character,
+                    '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|'
+                )
+            {
+                ' '
+            } else {
+                character
+            }
+        })
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+
+    if sanitized.is_empty() {
+        "Group".to_string()
+    } else {
+        sanitized
+    }
+}
+
+fn truncate_template_name_base(value: &str) -> String {
+    const MAX_BASE_CHARS: usize = 170;
+    value.chars().take(MAX_BASE_CHARS).collect()
 }
 
 fn mark_upstream_template(body: &str) -> String {
@@ -1308,6 +1722,8 @@ fn sanitize_mihomo_profile_yaml(body: &str) -> Result<String, AppError> {
     if !removed_names.is_empty() {
         remove_proxy_group_members(mapping, &removed_names);
     }
+
+    export_service::dedupe_mihomo_proxy_names(mapping);
 
     serde_yaml::to_string(&root).map_err(|_| AppError::Internal)
 }
@@ -1669,9 +2085,34 @@ fn bool_to_db(value: bool) -> i64 {
     if value { 1 } else { 0 }
 }
 
+pub async fn delete_node(state: &AppState, id: i64) -> Result<(), AppError> {
+    let existing = node_repo::find_by_id(&state.db, id)
+        .await?
+        .ok_or_else(|| AppError::NotFound("node not found".to_string()))?;
+    node_repo::delete(&state.db, existing.id).await?;
+    Ok(())
+}
+
+async fn ensure_group_exists(state: &AppState, group_id: Option<i64>) -> Result<(), AppError> {
+    if let Some(group_id) = group_id
+        && group_repo::find_by_id(&state.db, GroupTable::Node, group_id)
+            .await?
+            .is_none()
+    {
+        return Err(AppError::BadRequest(format!(
+            "node group not found: {}",
+            group_id
+        )));
+    }
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
-    use super::check_mihomo_conversion_fidelity;
+    use super::{check_mihomo_conversion_fidelity, sanitize_mihomo_profile_yaml};
+    use crate::services::url_safety::validate_public_http_url;
+    use serde_yaml::Value;
 
     #[test]
     fn checks_vless_reality_across_client_renderers_without_missing_fields() {
@@ -1733,27 +2174,53 @@ proxies:
             "unexpected fidelity warnings: {warnings:#?}"
         );
     }
-}
 
-pub async fn delete_node(state: &AppState, id: i64) -> Result<(), AppError> {
-    let existing = node_repo::find_by_id(&state.db, id)
-        .await?
-        .ok_or_else(|| AppError::NotFound("node not found".to_string()))?;
-    node_repo::delete(&state.db, existing.id).await?;
-    Ok(())
-}
+    #[tokio::test]
+    async fn rejects_local_subscription_fetch_url() {
+        let result =
+            validate_public_http_url("http://127.0.0.1:8080/sub", "subscription url").await;
 
-async fn ensure_group_exists(state: &AppState, group_id: Option<i64>) -> Result<(), AppError> {
-    if let Some(group_id) = group_id
-        && group_repo::find_by_id(&state.db, GroupTable::Node, group_id)
-            .await?
-            .is_none()
-    {
-        return Err(AppError::BadRequest(format!(
-            "node group not found: {}",
-            group_id
-        )));
+        assert!(result.is_err());
     }
 
-    Ok(())
+    #[test]
+    fn sanitizes_saved_mihomo_template_duplicate_proxy_names() {
+        let yaml = r#"
+proxies:
+  - name: JP 日本01[HY2]
+    type: hysteria2
+    server: one.example
+    port: 443
+  - name: JP 日本01[HY2]
+    type: hysteria2
+    server: two.example
+    port: 443
+proxy-groups:
+  - name: AUTO
+    type: select
+    proxies:
+      - JP 日本01[HY2]
+"#;
+
+        let sanitized = sanitize_mihomo_profile_yaml(yaml).unwrap();
+        let root = serde_yaml::from_str::<Value>(&sanitized).unwrap();
+        let mapping = root.as_mapping().unwrap();
+        let names = mapping
+            .get(Value::String("proxies".to_string()))
+            .and_then(Value::as_sequence)
+            .unwrap()
+            .iter()
+            .map(|proxy| {
+                proxy
+                    .as_mapping()
+                    .unwrap()
+                    .get(Value::String("name".to_string()))
+                    .and_then(Value::as_str)
+                    .unwrap()
+                    .to_string()
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(names, vec!["JP 日本01[HY2]", "JP 日本01[HY2] #2"]);
+    }
 }

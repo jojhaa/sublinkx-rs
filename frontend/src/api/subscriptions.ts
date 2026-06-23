@@ -75,3 +75,17 @@ export async function renewSubscription(id: number, days: number) {
   )
   return data
 }
+
+export async function fetchSubscriptionExport(id: number, target: string | null, mode: string) {
+  const { data, headers } = await apiClient.get<Blob>(`/api/v1/subscriptions/${id}/export`, {
+    params: {
+      ...(target ? { target } : {}),
+      mode,
+    },
+    responseType: 'blob',
+  })
+  return {
+    blob: data,
+    contentType: headers['content-type'] as string | undefined,
+  }
+}

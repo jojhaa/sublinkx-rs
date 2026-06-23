@@ -1,35 +1,25 @@
-use axum::{Json, extract::State};
+use axum::{Json, extract::State, http::HeaderMap};
 use serde::{Deserialize, Serialize};
-use std::time::Duration;
-use time::{OffsetDateTime, UtcOffset, format_description::well_known::Rfc3339};
+use std::{
+    sync::OnceLock,
+    time::{Duration, Instant},
+};
+use tokio::sync::Mutex;
 
-use crate::state::AppState;
+use crate::{errors::AppError, services::auth_service, state::AppState};
 
 const RELEASE_API_URL: &str = "https://api.github.com/repos/jojhaa/sublinkx-rs/releases/latest";
 const RELEASE_PAGE_URL: &str = "https://github.com/jojhaa/sublinkx-rs/releases";
+const UPDATE_CHECK_CACHE_TTL: Duration = Duration::from_secs(10 * 60);
 
 #[derive(Serialize)]
 pub struct VersionResponse {
     pub name: &'static str,
     pub version: &'static str,
     pub api_version: &'static str,
-    pub environment: String,
     pub repository: &'static str,
     pub license: &'static str,
-    pub server_time: String,
-    pub server_timezone: String,
-    pub uptime_seconds: u64,
-    pub system: SystemInfo,
-    pub runtime_mode: &'static str,
     pub developer: DeveloperInfo,
-}
-
-#[derive(Serialize)]
-pub struct SystemInfo {
-    pub os: &'static str,
-    pub family: &'static str,
-    pub arch: &'static str,
-    pub display: String,
 }
 
 #[derive(Serialize)]
@@ -38,7 +28,7 @@ pub struct DeveloperInfo {
     pub url: String,
 }
 
-#[derive(Serialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct UpdateCheckResponse {
     pub checked: bool,
     pub update_available: bool,
@@ -57,27 +47,48 @@ struct GithubRelease {
     published_at: Option<String>,
 }
 
-pub async fn version(State(state): State<AppState>) -> Json<VersionResponse> {
-    let (server_time, server_timezone) = server_clock();
-
+pub async fn version(State(_state): State<AppState>) -> Json<VersionResponse> {
     Json(VersionResponse {
         name: "sublinkx-rs-backend",
         version: env!("CARGO_PKG_VERSION"),
         api_version: "v1",
-        environment: state.config.server.environment.clone(),
         repository: "https://github.com/jojhaa/sublinkx-rs",
         license: "AGPL-3.0-or-later",
-        server_time,
-        server_timezone,
-        uptime_seconds: state.started_at.elapsed().as_secs(),
-        system: system_info(),
-        runtime_mode: runtime_mode(),
         developer: developer_info(),
     })
 }
 
-pub async fn update_check() -> Json<UpdateCheckResponse> {
-    Json(check_latest_release(env!("CARGO_PKG_VERSION")).await)
+pub async fn update_check(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<UpdateCheckResponse>, AppError> {
+    auth_service::require_user(&state, &headers).await?;
+    Ok(Json(cached_update_check(env!("CARGO_PKG_VERSION")).await))
+}
+
+#[derive(Clone)]
+struct CachedUpdateCheck {
+    checked_at: Instant,
+    response: UpdateCheckResponse,
+}
+
+static UPDATE_CHECK_CACHE: OnceLock<Mutex<Option<CachedUpdateCheck>>> = OnceLock::new();
+
+async fn cached_update_check(current_version: &str) -> UpdateCheckResponse {
+    let cache = UPDATE_CHECK_CACHE.get_or_init(|| Mutex::new(None));
+    let mut cache = cache.lock().await;
+    if let Some(cached) = cache.as_ref()
+        && cached.checked_at.elapsed() < UPDATE_CHECK_CACHE_TTL
+    {
+        return cached.response.clone();
+    }
+
+    let response = check_latest_release(current_version).await;
+    *cache = Some(CachedUpdateCheck {
+        checked_at: Instant::now(),
+        response: response.clone(),
+    });
+    response
 }
 
 async fn check_latest_release(current_version: &str) -> UpdateCheckResponse {
@@ -155,52 +166,6 @@ fn version_parts(version: &str) -> Vec<u64> {
         .filter(|part| !part.is_empty())
         .filter_map(|part| part.parse::<u64>().ok())
         .collect()
-}
-
-fn server_clock() -> (String, String) {
-    let local_offset = UtcOffset::current_local_offset().unwrap_or(UtcOffset::UTC);
-    let now = OffsetDateTime::now_utc().to_offset(local_offset);
-    let server_time = now
-        .format(&Rfc3339)
-        .unwrap_or_else(|_| OffsetDateTime::now_utc().unix_timestamp().to_string());
-
-    let timezone_name = std::env::var("TZ")
-        .ok()
-        .filter(|value| !value.trim().is_empty());
-    let server_timezone = match timezone_name {
-        Some(name) => format!("{} ({})", name, local_offset),
-        None => local_offset.to_string(),
-    };
-
-    (server_time, server_timezone)
-}
-
-fn system_info() -> SystemInfo {
-    let os = std::env::consts::OS;
-    let family = std::env::consts::FAMILY;
-    let arch = std::env::consts::ARCH;
-    let display = format!("{os}/{arch}");
-
-    SystemInfo {
-        os,
-        family,
-        arch,
-        display,
-    }
-}
-
-fn runtime_mode() -> &'static str {
-    if std::env::var("SUBLINKX_RUNTIME_MODE")
-        .ok()
-        .as_deref()
-        .is_some_and(|value| value.eq_ignore_ascii_case("docker"))
-        || std::path::Path::new("/.dockerenv").exists()
-        || std::env::var("container").is_ok()
-    {
-        "docker"
-    } else {
-        "local"
-    }
 }
 
 fn developer_info() -> DeveloperInfo {

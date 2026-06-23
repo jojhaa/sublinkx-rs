@@ -1,6 +1,6 @@
 use axum::{
     Router,
-    http::{HeaderValue, Method, header},
+    http::{HeaderName, HeaderValue, Method, Request, Uri, header},
     routing::get,
 };
 use tower_http::{cors::CorsLayer, set_header::SetResponseHeaderLayer, trace::TraceLayer};
@@ -27,7 +27,10 @@ pub fn build_app(state: AppState) -> Router {
             header::CACHE_CONTROL,
             header::CONTENT_TYPE,
             header::PRAGMA,
-        ]);
+            HeaderName::from_static("x-csrf-token"),
+        ])
+        .expose_headers([HeaderName::from_static("x-csrf-token")])
+        .allow_credentials(true);
 
     Router::new()
         .route("/healthz", get(api::health::healthz))
@@ -50,6 +53,10 @@ pub fn build_app(state: AppState) -> Router {
             axum::routing::post(api::settings::download_mihomo_core),
         )
         .route("/api/v1/auth/login", axum::routing::post(api::auth::login))
+        .route(
+            "/api/v1/auth/logout",
+            axum::routing::post(api::auth::logout),
+        )
         .route("/api/v1/auth/me", get(api::auth::me))
         .route(
             "/api/v1/auth/change-credentials",
@@ -70,6 +77,14 @@ pub fn build_app(state: AppState) -> Router {
         .route(
             "/api/v1/nodes/test-latency",
             axum::routing::post(api::nodes::test_latency_batch),
+        )
+        .route(
+            "/api/v1/nodes/test-latency-stream",
+            axum::routing::post(api::nodes::test_latency_batch_stream),
+        )
+        .route(
+            "/api/v1/nodes/auto-latency/cancel",
+            axum::routing::post(api::nodes::cancel_auto_latency),
         )
         .route(
             "/api/v1/nodes/{id}/test-latency",
@@ -103,6 +118,10 @@ pub fn build_app(state: AppState) -> Router {
         .route(
             "/api/v1/subscriptions/{id}/rotate-token",
             axum::routing::post(api::subscriptions::rotate_token),
+        )
+        .route(
+            "/api/v1/subscriptions/{id}/export",
+            get(api::subscriptions::export),
         )
         .route(
             "/api/v1/subscriptions/{id}/renew",
@@ -140,6 +159,44 @@ pub fn build_app(state: AppState) -> Router {
             HeaderValue::from_static("0"),
         ))
         .layer(cors)
-        .layer(TraceLayer::new_for_http())
+        .layer(
+            TraceLayer::new_for_http().make_span_with(|request: &Request<_>| {
+                tracing::info_span!(
+                    "request",
+                    method = %request.method(),
+                    path = %redacted_request_path(request.uri()),
+                )
+            }),
+        )
         .with_state(state)
+}
+
+fn redacted_request_path(uri: &Uri) -> String {
+    let path = uri.path();
+    if path == "/s" || path.starts_with("/s/") {
+        "/s/<redacted>".to_string()
+    } else {
+        path.to_string()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use axum::http::Uri;
+
+    use super::redacted_request_path;
+
+    #[test]
+    fn redacts_subscription_token_from_trace_path() {
+        let uri = Uri::from_static("/s/secret-token?target=mihomo");
+
+        assert_eq!(redacted_request_path(&uri), "/s/<redacted>");
+    }
+
+    #[test]
+    fn drops_query_from_non_subscription_trace_path() {
+        let uri = Uri::from_static("/api/v1/nodes?token=accidental");
+
+        assert_eq!(redacted_request_path(&uri), "/api/v1/nodes");
+    }
 }

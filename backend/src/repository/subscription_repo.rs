@@ -84,10 +84,13 @@ pub async fn find_by_token(
     .await
 }
 
-pub async fn insert(
+pub async fn insert_with_nodes(
     pool: &DbPool,
     item: &NewSubscriptionRecord<'_>,
+    node_ids: &[i64],
 ) -> Result<SubscriptionRecord, sqlx::Error> {
+    let mut tx = pool.begin().await?;
+
     sqlx::query(
         r#"
         INSERT INTO subscriptions (
@@ -105,12 +108,25 @@ pub async fn insert(
     .bind(item.expires_at)
     .bind(item.created_at)
     .bind(item.updated_at)
-    .execute(pool)
+    .execute(&mut *tx)
     .await?;
 
-    find_by_token(pool, item.token)
-        .await?
-        .ok_or(sqlx::Error::RowNotFound)
+    let record = sqlx::query_as::<_, SubscriptionRecord>(
+        r#"
+        SELECT id, name, token, description, default_client, template_id, group_id, enabled + 0 AS enabled, expires_at, created_at, updated_at
+        FROM subscriptions
+        WHERE token = ?
+        "#,
+    )
+    .bind(item.token)
+    .fetch_optional(&mut *tx)
+    .await?
+    .ok_or(sqlx::Error::RowNotFound)?;
+
+    replace_subscription_nodes_in_tx(&mut tx, record.id, node_ids).await?;
+    tx.commit().await?;
+
+    Ok(record)
 }
 
 pub async fn update(
@@ -149,6 +165,60 @@ pub async fn update(
     find_by_id(pool, id).await?.ok_or(sqlx::Error::RowNotFound)
 }
 
+pub async fn update_with_nodes(
+    pool: &DbPool,
+    id: i64,
+    item: &UpdateSubscriptionRecord<'_>,
+    node_ids: &[i64],
+) -> Result<SubscriptionRecord, sqlx::Error> {
+    let mut tx = pool.begin().await?;
+
+    sqlx::query(
+        r#"
+        UPDATE subscriptions
+        SET name = ?,
+            token = ?,
+            description = ?,
+            default_client = ?,
+            template_id = ?,
+            group_id = ?,
+            enabled = ?,
+            expires_at = ?,
+            updated_at = ?
+        WHERE id = ?
+        "#,
+    )
+    .bind(item.name)
+    .bind(item.token)
+    .bind(item.description)
+    .bind(item.default_client)
+    .bind(item.template_id)
+    .bind(item.group_id)
+    .bind(item.enabled)
+    .bind(item.expires_at)
+    .bind(item.updated_at)
+    .bind(id)
+    .execute(&mut *tx)
+    .await?;
+
+    replace_subscription_nodes_in_tx(&mut tx, id, node_ids).await?;
+
+    let record = sqlx::query_as::<_, SubscriptionRecord>(
+        r#"
+        SELECT id, name, token, description, default_client, template_id, group_id, enabled + 0 AS enabled, expires_at, created_at, updated_at
+        FROM subscriptions
+        WHERE id = ?
+        "#,
+    )
+    .bind(id)
+    .fetch_optional(&mut *tx)
+    .await?
+    .ok_or(sqlx::Error::RowNotFound)?;
+
+    tx.commit().await?;
+    Ok(record)
+}
+
 pub async fn delete(pool: &DbPool, id: i64) -> Result<(), sqlx::Error> {
     sqlx::query("DELETE FROM subscriptions WHERE id = ?")
         .bind(id)
@@ -174,16 +244,14 @@ pub async fn list_subscription_nodes(
     .await
 }
 
-pub async fn replace_subscription_nodes(
-    pool: &DbPool,
+async fn replace_subscription_nodes_in_tx(
+    tx: &mut sqlx::Transaction<'_, sqlx::Any>,
     subscription_id: i64,
     node_ids: &[i64],
 ) -> Result<(), sqlx::Error> {
-    let mut tx = pool.begin().await?;
-
     sqlx::query("DELETE FROM subscription_nodes WHERE subscription_id = ?")
         .bind(subscription_id)
-        .execute(&mut *tx)
+        .execute(&mut **tx)
         .await?;
 
     for (sort_order, node_id) in node_ids.iter().enumerate() {
@@ -196,11 +264,10 @@ pub async fn replace_subscription_nodes(
         .bind(subscription_id)
         .bind(*node_id)
         .bind(sort_order as i64)
-        .execute(&mut *tx)
+        .execute(&mut **tx)
         .await?;
     }
 
-    tx.commit().await?;
     Ok(())
 }
 

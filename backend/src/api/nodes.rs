@@ -1,7 +1,8 @@
 use axum::{
     Json,
     extract::{Path, State},
-    http::HeaderMap,
+    http::{HeaderMap, header},
+    response::{IntoResponse, Response},
 };
 
 use crate::{
@@ -81,6 +82,32 @@ pub async fn test_latency_batch(
 ) -> Result<Json<NodeLatencyBatchResponse>, AppError> {
     node_service::require_auth(&state, &headers).await?;
     let response = node_service::test_node_latency_batch(&state, payload).await?;
+    Ok(Json(response))
+}
+
+pub async fn test_latency_batch_stream(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<NodeLatencyBatchRequest>,
+) -> Result<Response, AppError> {
+    node_service::require_auth(&state, &headers).await?;
+    let body = node_service::test_node_latency_batch_stream(state, payload).await?;
+    Ok((
+        [
+            (header::CONTENT_TYPE, "application/x-ndjson"),
+            (header::CACHE_CONTROL, "no-store"),
+        ],
+        body,
+    )
+        .into_response())
+}
+
+pub async fn cancel_auto_latency(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<serde_json::Value>, AppError> {
+    node_service::require_auth(&state, &headers).await?;
+    let response = node_service::cancel_auto_latency_run(&state).await?;
     Ok(Json(response))
 }
 

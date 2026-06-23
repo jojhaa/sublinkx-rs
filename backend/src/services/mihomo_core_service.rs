@@ -9,6 +9,7 @@ use flate2::read::GzDecoder;
 use reqwest::Client;
 use serde::Deserialize;
 use tokio::{process::Command, time};
+use url::Url;
 use zip::ZipArchive;
 
 use crate::{
@@ -23,6 +24,7 @@ use crate::{
 use super::settings_service;
 
 const LATEST_RELEASE_API: &str = "https://api.github.com/repos/MetaCubeX/mihomo/releases/latest";
+const MAX_MIHOMO_ASSET_BYTES: u64 = 128 * 1024 * 1024;
 
 #[derive(Debug, Deserialize)]
 struct GitHubRelease {
@@ -101,16 +103,40 @@ pub async fn download_latest(state: &AppState) -> Result<MihomoCoreDownloadRespo
             target.os, target.arch, release.tag_name
         ))
     })?;
-    let bytes = client
+    if asset.size > MAX_MIHOMO_ASSET_BYTES {
+        return Err(AppError::BadRequest(format!(
+            "Mihomo asset is too large: {} bytes",
+            asset.size
+        )));
+    }
+    validate_asset_download_url(&asset.browser_download_url)?;
+
+    let response = client
         .get(&asset.browser_download_url)
         .send()
         .await
         .map_err(|error| AppError::BadRequest(format!("failed to download Mihomo core: {error}")))?
         .error_for_status()
-        .map_err(|error| AppError::BadRequest(format!("failed to download Mihomo core: {error}")))?
+        .map_err(|error| {
+            AppError::BadRequest(format!("failed to download Mihomo core: {error}"))
+        })?;
+    if let Some(length) = response.content_length()
+        && length > MAX_MIHOMO_ASSET_BYTES
+    {
+        return Err(AppError::BadRequest(format!(
+            "Mihomo download is too large: {length} bytes"
+        )));
+    }
+    let bytes = response
         .bytes()
         .await
         .map_err(|error| AppError::BadRequest(format!("failed to read Mihomo core: {error}")))?;
+    if bytes.len() as u64 > MAX_MIHOMO_ASSET_BYTES {
+        return Err(AppError::BadRequest(format!(
+            "Mihomo download is too large: {} bytes",
+            bytes.len()
+        )));
+    }
 
     let install_dir = preferred_install_dir()?;
     fs::create_dir_all(&install_dir).map_err(|_| AppError::Internal)?;
@@ -135,7 +161,7 @@ pub(crate) fn resolve_existing_binary(configured_path: &str) -> Option<PathBuf> 
     let configured = configured_path.trim();
     if !configured.is_empty() {
         let path = PathBuf::from(configured);
-        if path.exists() {
+        if is_allowed_mihomo_binary_path(&path) && path.exists() {
             return Some(path);
         }
     }
@@ -152,6 +178,18 @@ pub(crate) fn resolve_existing_binary(configured_path: &str) -> Option<PathBuf> 
 
 pub(crate) fn fallback_binary_path() -> PathBuf {
     PathBuf::from("mihomo")
+}
+
+pub(crate) fn is_allowed_mihomo_binary_path(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|value| value.to_str())
+        .is_some_and(|name| {
+            name.eq_ignore_ascii_case("mihomo")
+                || name.eq_ignore_ascii_case("mihomo.exe")
+                || candidate_names()
+                    .iter()
+                    .any(|candidate| name.eq_ignore_ascii_case(candidate))
+        })
 }
 
 fn select_asset(release: &GitHubRelease, target: &Target) -> Option<GitHubAsset> {
@@ -198,6 +236,22 @@ fn asset_rank(name: &str, target: &Target) -> u8 {
     7
 }
 
+fn validate_asset_download_url(value: &str) -> Result<(), AppError> {
+    let url = Url::parse(value)
+        .map_err(|_| AppError::BadRequest("Mihomo asset download URL is invalid".to_string()))?;
+    if url.scheme() != "https"
+        || url.host_str() != Some("github.com")
+        || !url
+            .path()
+            .starts_with("/MetaCubeX/mihomo/releases/download/")
+    {
+        return Err(AppError::BadRequest(
+            "Mihomo asset download URL is not from the expected GitHub release path".to_string(),
+        ));
+    }
+    Ok(())
+}
+
 fn extract_binary(asset_name: &str, bytes: &[u8], install_dir: &Path) -> Result<PathBuf, AppError> {
     let output_name = if cfg!(windows) {
         "mihomo.exe"
@@ -207,11 +261,8 @@ fn extract_binary(asset_name: &str, bytes: &[u8], install_dir: &Path) -> Result<
     let output_path = install_dir.join(output_name);
 
     if asset_name.ends_with(".gz") {
-        let mut decoder = GzDecoder::new(Cursor::new(bytes));
-        let mut output = Vec::new();
-        decoder.read_to_end(&mut output).map_err(|error| {
-            AppError::BadRequest(format!("failed to decompress Mihomo core: {error}"))
-        })?;
+        let decoder = GzDecoder::new(Cursor::new(bytes));
+        let output = read_limited(decoder, "decompressed Mihomo core")?;
         fs::write(&output_path, output).map_err(|_| AppError::Internal)?;
         return Ok(output_path);
     }
@@ -220,7 +271,7 @@ fn extract_binary(asset_name: &str, bytes: &[u8], install_dir: &Path) -> Result<
         let mut archive = ZipArchive::new(Cursor::new(bytes))
             .map_err(|error| AppError::BadRequest(format!("failed to open Mihomo zip: {error}")))?;
         for index in 0..archive.len() {
-            let mut file = archive.by_index(index).map_err(|error| {
+            let file = archive.by_index(index).map_err(|error| {
                 AppError::BadRequest(format!("failed to read Mihomo zip: {error}"))
             })?;
             let Some(name) = Path::new(file.name())
@@ -235,10 +286,7 @@ fn extract_binary(asset_name: &str, bytes: &[u8], install_dir: &Path) -> Result<
                 name == "mihomo" || name.starts_with("mihomo-")
             };
             if is_binary {
-                let mut output = Vec::new();
-                file.read_to_end(&mut output).map_err(|error| {
-                    AppError::BadRequest(format!("failed to extract Mihomo zip: {error}"))
-                })?;
+                let output = read_limited(file, "extracted Mihomo core")?;
                 fs::write(&output_path, output).map_err(|_| AppError::Internal)?;
                 return Ok(output_path);
             }
@@ -251,6 +299,20 @@ fn extract_binary(asset_name: &str, bytes: &[u8], install_dir: &Path) -> Result<
     Err(AppError::BadRequest(format!(
         "unsupported Mihomo asset format: {asset_name}"
     )))
+}
+
+fn read_limited<R: Read>(reader: R, label: &str) -> Result<Vec<u8>, AppError> {
+    let mut limited = reader.take(MAX_MIHOMO_ASSET_BYTES + 1);
+    let mut output = Vec::new();
+    limited
+        .read_to_end(&mut output)
+        .map_err(|error| AppError::BadRequest(format!("failed to read {label}: {error}")))?;
+    if output.len() as u64 > MAX_MIHOMO_ASSET_BYTES {
+        return Err(AppError::BadRequest(format!(
+            "{label} is too large: more than {MAX_MIHOMO_ASSET_BYTES} bytes"
+        )));
+    }
+    Ok(output)
 }
 
 async fn read_mihomo_version(path: &Path) -> Option<String> {
@@ -317,6 +379,51 @@ fn candidate_names() -> &'static [&'static str] {
         ]
     } else {
         &["mihomo", "mihomo-linux-amd64", "clash-meta"]
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+
+    use super::{is_allowed_mihomo_binary_path, validate_asset_download_url};
+
+    #[test]
+    fn rejects_non_mihomo_configured_binary_names() {
+        assert!(!is_allowed_mihomo_binary_path(Path::new("cmd.exe")));
+        assert!(!is_allowed_mihomo_binary_path(Path::new("/bin/sh")));
+    }
+
+    #[test]
+    fn accepts_known_mihomo_binary_names() {
+        assert!(is_allowed_mihomo_binary_path(Path::new("mihomo")));
+        if cfg!(windows) {
+            assert!(is_allowed_mihomo_binary_path(Path::new("mihomo.exe")));
+        } else {
+            assert!(is_allowed_mihomo_binary_path(Path::new(
+                "mihomo-linux-amd64"
+            )));
+        }
+    }
+
+    #[test]
+    fn rejects_unexpected_mihomo_download_hosts() {
+        assert!(
+            validate_asset_download_url(
+                "https://example.com/MetaCubeX/mihomo/releases/download/v1/mihomo.gz"
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn accepts_expected_mihomo_github_release_path() {
+        assert!(
+            validate_asset_download_url(
+                "https://github.com/MetaCubeX/mihomo/releases/download/v1.0/mihomo-linux-amd64.gz"
+            )
+            .is_ok()
+        );
     }
 }
 

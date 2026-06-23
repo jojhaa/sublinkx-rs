@@ -23,8 +23,9 @@ const form = reactive({
   public_base_url: '',
   latency_auto_enabled: true,
   latency_interval_minutes: 30,
+  latency_concurrency: 2,
   latency_core_path: '',
-  latency_test_url: 'https://www.gstatic.com/generate_204',
+  latency_test_url: 'https://cp.cloudflare.com/generate_204',
   latency_timeout_secs: 10,
 })
 
@@ -36,6 +37,7 @@ async function load() {
     form.public_base_url = response.data.public_base_url
     form.latency_auto_enabled = response.data.latency_auto_enabled
     form.latency_interval_minutes = response.data.latency_interval_minutes
+    form.latency_concurrency = response.data.latency_concurrency
     form.latency_core_path = response.data.latency_core_path
     form.latency_test_url = response.data.latency_test_url
     form.latency_timeout_secs = response.data.latency_timeout_secs
@@ -56,6 +58,7 @@ async function submit() {
       public_base_url: form.public_base_url,
       latency_auto_enabled: form.latency_auto_enabled,
       latency_interval_minutes: form.latency_interval_minutes,
+      latency_concurrency: form.latency_concurrency,
       latency_core_path: form.latency_core_path,
       latency_test_url: form.latency_test_url,
       latency_timeout_secs: form.latency_timeout_secs,
@@ -63,6 +66,7 @@ async function submit() {
     form.public_base_url = response.data.public_base_url
     form.latency_auto_enabled = response.data.latency_auto_enabled
     form.latency_interval_minutes = response.data.latency_interval_minutes
+    form.latency_concurrency = response.data.latency_concurrency
     form.latency_core_path = response.data.latency_core_path
     form.latency_test_url = response.data.latency_test_url
     form.latency_timeout_secs = response.data.latency_timeout_secs
@@ -263,6 +267,21 @@ onMounted(load)
                 <span class="metric-chip">{{ t('second') }}</span>
               </div>
             </label>
+
+            <label>
+              <span class="field-label" for="latency-concurrency">{{ t('latencyConcurrency') }}</span>
+              <div class="settings-inline-field">
+                <input
+                  id="latency-concurrency"
+                  v-model.number="form.latency_concurrency"
+                  class="input"
+                  max="8"
+                  min="1"
+                  type="number"
+                />
+                <span class="metric-chip">{{ t('concurrent') }}</span>
+              </div>
+            </label>
           </div>
 
           <div>
@@ -271,7 +290,7 @@ onMounted(load)
               id="latency-test-url"
               v-model.trim="form.latency_test_url"
               class="input"
-              placeholder="https://www.gstatic.com/generate_204"
+              placeholder="https://cp.cloudflare.com/generate_204"
             />
             <div class="hint template-kind-hint">{{ t('testUrlHint') }}</div>
           </div>

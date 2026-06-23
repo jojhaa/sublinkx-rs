@@ -2,9 +2,16 @@ use crate::db::DbPool;
 use argon2::{Argon2, PasswordHasher, password_hash::SaltString};
 use tracing::warn;
 
-use crate::{config::SecurityConfig, domain::user::User};
+use crate::{
+    config::{
+        AppConfig, DEFAULT_BOOTSTRAP_ADMIN_PASSWORD, DEFAULT_BOOTSTRAP_ADMIN_USERNAME,
+        is_production_env,
+    },
+    domain::user::User,
+};
 
-pub async fn bootstrap_admin(pool: &DbPool, security: &SecurityConfig) -> Result<(), sqlx::Error> {
+pub async fn bootstrap_admin(pool: &DbPool, config: &AppConfig) -> Result<(), sqlx::Error> {
+    let security = &config.security;
     let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM users")
         .fetch_one(pool)
         .await?;
@@ -13,6 +20,8 @@ pub async fn bootstrap_admin(pool: &DbPool, security: &SecurityConfig) -> Result
         if let Some(user) = find_by_username(pool, &security.bootstrap_admin_username).await?
             && user.must_change_credentials != 0
         {
+            reject_default_production_bootstrap(config)?;
+
             let password_hash =
                 hash_password(&security.bootstrap_admin_password).map_err(|_| {
                     sqlx::Error::Protocol("failed to hash bootstrap admin password".into())
@@ -22,14 +31,16 @@ pub async fn bootstrap_admin(pool: &DbPool, security: &SecurityConfig) -> Result
         return Ok(());
     }
 
+    reject_default_production_bootstrap(config)?;
+
     let password_hash = hash_password(&security.bootstrap_admin_password)
         .map_err(|_| sqlx::Error::Protocol("failed to hash bootstrap admin password".into()))?;
     let now = crate::utils::time::now_rfc3339();
 
     sqlx::query(
         r#"
-        INSERT INTO users (username, password_hash, nickname, role, status, must_change_credentials, created_at, updated_at)
-        VALUES (?, ?, ?, 'admin', 'active', 1, ?, ?)
+        INSERT INTO users (username, password_hash, nickname, role, status, must_change_credentials, token_version, created_at, updated_at)
+        VALUES (?, ?, ?, 'admin', 'active', 1, 0, ?, ?)
         "#,
     )
     .bind(&security.bootstrap_admin_username)
@@ -48,10 +59,28 @@ pub async fn bootstrap_admin(pool: &DbPool, security: &SecurityConfig) -> Result
     Ok(())
 }
 
+fn reject_default_production_bootstrap(config: &AppConfig) -> Result<(), sqlx::Error> {
+    if !is_production_env(&config.server.environment) {
+        return Ok(());
+    }
+
+    let security = &config.security;
+    if security.bootstrap_admin_username == DEFAULT_BOOTSTRAP_ADMIN_USERNAME
+        || security.bootstrap_admin_password == DEFAULT_BOOTSTRAP_ADMIN_PASSWORD
+    {
+        return Err(sqlx::Error::Protocol(
+            "BOOTSTRAP_ADMIN_USERNAME and BOOTSTRAP_ADMIN_PASSWORD must be changed from defaults before creating or resetting the first production admin"
+                .into(),
+        ));
+    }
+
+    Ok(())
+}
+
 pub async fn find_by_username(pool: &DbPool, username: &str) -> Result<Option<User>, sqlx::Error> {
     sqlx::query_as::<_, User>(
         r#"
-        SELECT id, username, password_hash, nickname, role, status, must_change_credentials, created_at, updated_at
+        SELECT id, username, password_hash, nickname, role, status, must_change_credentials, token_version, created_at, updated_at
         FROM users
         WHERE username = ?
         "#,
@@ -64,7 +93,7 @@ pub async fn find_by_username(pool: &DbPool, username: &str) -> Result<Option<Us
 pub async fn find_by_id(pool: &DbPool, id: i64) -> Result<Option<User>, sqlx::Error> {
     sqlx::query_as::<_, User>(
         r#"
-        SELECT id, username, password_hash, nickname, role, status, must_change_credentials, created_at, updated_at
+        SELECT id, username, password_hash, nickname, role, status, must_change_credentials, token_version, created_at, updated_at
         FROM users
         WHERE id = ?
         "#,
@@ -109,6 +138,7 @@ pub async fn update_credentials(
             password_hash = ?,
             nickname = ?,
             must_change_credentials = 0,
+            token_version = token_version + 1,
             updated_at = ?
         WHERE id = ?
         "#,
@@ -136,6 +166,7 @@ async fn reset_bootstrap_admin_password(
         UPDATE users
         SET password_hash = ?,
             must_change_credentials = 1,
+            token_version = token_version + 1,
             updated_at = ?
         WHERE id = ?
         "#,

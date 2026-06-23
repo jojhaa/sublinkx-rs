@@ -26,7 +26,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let config = AppConfig::from_env()?;
     let pool = new_database_pool(&config.database.url).await?;
-    repository::user_repo::bootstrap_admin(&pool, &config.security).await?;
+    repository::user_repo::bootstrap_admin(&pool, &config).await?;
     services::template_seed_service::seed_default_templates(&pool).await?;
     let state = AppState::new(config.clone(), pool);
     services::latency_scheduler_service::spawn_auto_latency_tester(state.clone());
@@ -37,9 +37,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     info!("backend listening on http://{}", addr);
 
-    axum::serve(listener, app)
-        .with_graceful_shutdown(utils::shutdown::graceful_shutdown())
-        .await?;
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .with_graceful_shutdown(utils::shutdown::graceful_shutdown())
+    .await?;
 
     Ok(())
 }

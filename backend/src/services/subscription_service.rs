@@ -1,5 +1,6 @@
 use axum::http::HeaderMap;
 use rand::{Rng, distr::Alphanumeric};
+use std::collections::HashSet;
 use time::{Duration, OffsetDateTime, format_description::well_known::Rfc3339};
 
 use crate::{
@@ -78,16 +79,16 @@ pub async fn create_subscription(
         ));
     }
 
+    let node_ids = dedupe_node_ids(payload.node_ids);
     let token = generate_unique_token(state).await?;
-    ensure_nodes_exist(state, &payload.node_ids).await?;
+    ensure_nodes_exist(state, &node_ids).await?;
     ensure_template_exists(state, payload.template_id).await?;
     ensure_group_exists(state, payload.group_id).await?;
     validate_expires_at(payload.expires_at.as_deref())?;
-    ensure_subscription_has_nodes_or_raw_template(state, &payload.node_ids, payload.template_id)
-        .await?;
+    ensure_subscription_has_nodes_or_raw_template(state, &node_ids, payload.template_id).await?;
 
     let now = now_rfc3339();
-    let record = subscription_repo::insert(
+    let record = subscription_repo::insert_with_nodes(
         &state.db,
         &subscription_repo::NewSubscriptionRecord {
             name: payload.name.trim(),
@@ -101,10 +102,9 @@ pub async fn create_subscription(
             created_at: &now,
             updated_at: &now,
         },
+        &node_ids,
     )
     .await?;
-
-    subscription_repo::replace_subscription_nodes(&state.db, record.id, &payload.node_ids).await?;
 
     let data = build_view(state, record).await?;
     Ok(SubscriptionResponse {
@@ -132,14 +132,14 @@ pub async fn update_subscription(
         ));
     }
 
-    ensure_nodes_exist(state, &payload.node_ids).await?;
+    let node_ids = dedupe_node_ids(payload.node_ids);
+    ensure_nodes_exist(state, &node_ids).await?;
     ensure_template_exists(state, payload.template_id).await?;
     ensure_group_exists(state, payload.group_id).await?;
     validate_expires_at(payload.expires_at.as_deref())?;
-    ensure_subscription_has_nodes_or_raw_template(state, &payload.node_ids, payload.template_id)
-        .await?;
+    ensure_subscription_has_nodes_or_raw_template(state, &node_ids, payload.template_id).await?;
 
-    let record = subscription_repo::update(
+    let record = subscription_repo::update_with_nodes(
         &state.db,
         id,
         &subscription_repo::UpdateSubscriptionRecord {
@@ -153,10 +153,9 @@ pub async fn update_subscription(
             expires_at: payload.expires_at.as_deref(),
             updated_at: &now_rfc3339(),
         },
+        &node_ids,
     )
     .await?;
-
-    subscription_repo::replace_subscription_nodes(&state.db, id, &payload.node_ids).await?;
 
     let data = build_view(state, record).await?;
     Ok(SubscriptionResponse {
@@ -362,6 +361,11 @@ fn validate_subscription_name(name: &str) -> Result<(), AppError> {
         return Err(AppError::BadRequest("name is required".to_string()));
     }
     Ok(())
+}
+
+fn dedupe_node_ids(node_ids: Vec<i64>) -> Vec<i64> {
+    let mut seen = HashSet::new();
+    node_ids.into_iter().filter(|id| seen.insert(*id)).collect()
 }
 
 pub fn subscription_is_expired(subscription: &SubscriptionView) -> bool {

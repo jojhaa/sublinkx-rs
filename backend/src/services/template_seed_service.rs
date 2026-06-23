@@ -11,34 +11,196 @@ struct DefaultTemplate {
     content: &'static str,
 }
 
-const CLASH_TEMPLATE: &str = r#"mixed-port: 7890
+pub(crate) const CLASH_TEMPLATE: &str = r#"mixed-port: 7890
 allow-lan: true
 mode: rule
 log-level: info
+ipv6: false
 profile:
   store-selected: true
   store-fake-ip: true
 dns:
   enable: true
   ipv6: false
+  listen: 0.0.0.0:1053
+  enhanced-mode: fake-ip
+  nameserver:
+    - https://223.5.5.5/dns-query
+    - https://doh.pub/dns-query
 proxy-groups:
   - name: 节点选择
     type: select
-    include-all-proxies: true
     proxies:
       - 自动选择
+      - 手动切换
       - DIRECT
+  - name: 手动切换
+    type: select
+    include-all-proxies: true
   - name: 自动选择
     type: url-test
     include-all-proxies: true
-    url: https://www.gstatic.com/generate_204
+    url: https://cp.cloudflare.com/generate_204
     interval: 300
+    tolerance: 50
+  - name: Ai平台
+    type: select
+    proxies:
+      - 节点选择
+      - 自动选择
+      - 手动切换
+      - DIRECT
+  - name: 油管视频
+    type: select
+    proxies:
+      - 节点选择
+      - 自动选择
+      - 手动切换
+  - name: 奈飞视频
+    type: select
+    proxies:
+      - 节点选择
+      - 自动选择
+      - 手动切换
+  - name: 电报消息
+    type: select
+    proxies:
+      - 节点选择
+      - 自动选择
+      - 手动切换
+      - DIRECT
+  - name: 微软服务
+    type: select
+    proxies:
+      - DIRECT
+      - 节点选择
+      - 手动切换
+  - name: 苹果服务
+    type: select
+    proxies:
+      - DIRECT
+      - 节点选择
+      - 手动切换
+  - name: 全球直连
+    type: select
+    proxies:
+      - DIRECT
+      - 节点选择
+  - name: 广告拦截
+    type: select
+    proxies:
+      - REJECT
+      - DIRECT
+  - name: 漏网之鱼
+    type: select
+    proxies:
+      - 节点选择
+      - 自动选择
+      - DIRECT
+rule-providers:
+  localarea:
+    type: http
+    behavior: classical
+    url: https://raw.githubusercontent.com/ACL4SSR/ACL4SSR/master/Clash/LocalAreaNetwork.list
+    path: ./ruleset/localarea.yaml
+    interval: 86400
+  unban:
+    type: http
+    behavior: classical
+    url: https://raw.githubusercontent.com/ACL4SSR/ACL4SSR/master/Clash/UnBan.list
+    path: ./ruleset/unban.yaml
+    interval: 86400
+  banad:
+    type: http
+    behavior: classical
+    url: https://raw.githubusercontent.com/ACL4SSR/ACL4SSR/master/Clash/BanAD.list
+    path: ./ruleset/banad.yaml
+    interval: 86400
+  googlecn:
+    type: http
+    behavior: classical
+    url: https://raw.githubusercontent.com/ACL4SSR/ACL4SSR/master/Clash/GoogleCN.list
+    path: ./ruleset/googlecn.yaml
+    interval: 86400
+  apple:
+    type: http
+    behavior: classical
+    url: https://raw.githubusercontent.com/ACL4SSR/ACL4SSR/master/Clash/Apple.list
+    path: ./ruleset/apple.yaml
+    interval: 86400
+  microsoft:
+    type: http
+    behavior: classical
+    url: https://raw.githubusercontent.com/ACL4SSR/ACL4SSR/master/Clash/Microsoft.list
+    path: ./ruleset/microsoft.yaml
+    interval: 86400
+  telegram:
+    type: http
+    behavior: classical
+    url: https://raw.githubusercontent.com/ACL4SSR/ACL4SSR/master/Clash/Telegram.list
+    path: ./ruleset/telegram.yaml
+    interval: 86400
+  ai:
+    type: http
+    behavior: classical
+    url: https://raw.githubusercontent.com/ACL4SSR/ACL4SSR/master/Clash/Ruleset/AI.list
+    path: ./ruleset/ai.yaml
+    interval: 86400
+  openai:
+    type: http
+    behavior: classical
+    url: https://raw.githubusercontent.com/ACL4SSR/ACL4SSR/master/Clash/Ruleset/OpenAi.list
+    path: ./ruleset/openai.yaml
+    interval: 86400
+  youtube:
+    type: http
+    behavior: classical
+    url: https://raw.githubusercontent.com/ACL4SSR/ACL4SSR/master/Clash/Ruleset/YouTube.list
+    path: ./ruleset/youtube.yaml
+    interval: 86400
+  netflix:
+    type: http
+    behavior: classical
+    url: https://raw.githubusercontent.com/ACL4SSR/ACL4SSR/master/Clash/Ruleset/Netflix.list
+    path: ./ruleset/netflix.yaml
+    interval: 86400
+  proxygfw:
+    type: http
+    behavior: classical
+    url: https://raw.githubusercontent.com/ACL4SSR/ACL4SSR/master/Clash/ProxyGFWlist.list
+    path: ./ruleset/proxygfw.yaml
+    interval: 86400
+  chinadomain:
+    type: http
+    behavior: classical
+    url: https://raw.githubusercontent.com/ACL4SSR/ACL4SSR/master/Clash/ChinaDomain.list
+    path: ./ruleset/chinadomain.yaml
+    interval: 86400
+  download:
+    type: http
+    behavior: classical
+    url: https://raw.githubusercontent.com/ACL4SSR/ACL4SSR/master/Clash/Download.list
+    path: ./ruleset/download.yaml
+    interval: 86400
 rules:
-  - GEOIP,CN,DIRECT
-  - MATCH,节点选择
+  - RULE-SET,localarea,全球直连
+  - RULE-SET,unban,全球直连
+  - RULE-SET,banad,广告拦截
+  - RULE-SET,googlecn,全球直连
+  - RULE-SET,apple,苹果服务
+  - RULE-SET,microsoft,微软服务
+  - RULE-SET,telegram,电报消息
+  - RULE-SET,ai,Ai平台
+  - RULE-SET,openai,Ai平台
+  - RULE-SET,youtube,油管视频
+  - RULE-SET,netflix,奈飞视频
+  - RULE-SET,proxygfw,节点选择
+  - RULE-SET,chinadomain,全球直连
+  - RULE-SET,download,全球直连
+  - MATCH,漏网之鱼
 "#;
 
-const MIHOMO_TEMPLATE: &str = r#"mixed-port: 7890
+pub(crate) const MIHOMO_TEMPLATE: &str = r#"mixed-port: 7890
 allow-lan: true
 mode: rule
 log-level: info
@@ -46,21 +208,244 @@ unified-delay: true
 tcp-concurrent: true
 profile:
   store-selected: true
+dns:
+  enable: true
+  listen: 0.0.0.0:1053
+  ipv6: true
+  enhanced-mode: fake-ip
+  fake-ip-filter:
+    - rule-set:private_domain
+  fake-ip-filter-mode: blacklist
+  default-nameserver:
+    - 223.5.5.5
+    - 119.29.29.29
+  nameserver:
+    - https://1.1.1.1/dns-query
+    - https://8.8.8.8/dns-query
+  proxy-server-nameserver:
+    - https://dns.alidns.com/dns-query
+    - https://doh.pub/dns-query
+  respect-rules: true
+  direct-nameserver:
+    - https://dns.alidns.com/dns-query
+    - https://doh.pub/dns-query
+  direct-nameserver-follow-policy: true
 proxy-groups:
   - name: PROXY
     type: select
-    include-all-proxies: true
     proxies:
       - AUTO
+      - MANUAL
       - DIRECT
+  - name: MANUAL
+    type: select
+    include-all-proxies: true
   - name: AUTO
     type: url-test
     include-all-proxies: true
-    url: https://www.gstatic.com/generate_204
+    url: https://cp.cloudflare.com/generate_204
     interval: 300
+    tolerance: 50
+  - name: AI
+    type: select
+    proxies:
+      - PROXY
+      - AUTO
+      - MANUAL
+      - DIRECT
+  - name: YOUTUBE
+    type: select
+    proxies:
+      - PROXY
+      - AUTO
+      - MANUAL
+  - name: NETFLIX
+    type: select
+    proxies:
+      - PROXY
+      - AUTO
+      - MANUAL
+  - name: TELEGRAM
+    type: select
+    proxies:
+      - PROXY
+      - AUTO
+      - MANUAL
+      - DIRECT
+  - name: MICROSOFT
+    type: select
+    proxies:
+      - DIRECT
+      - PROXY
+      - MANUAL
+  - name: APPLE
+    type: select
+    proxies:
+      - DIRECT
+      - PROXY
+      - MANUAL
+  - name: MEDIA
+    type: select
+    proxies:
+      - PROXY
+      - AUTO
+      - MANUAL
+  - name: FINAL
+    type: select
+    proxies:
+      - PROXY
+      - AUTO
+      - DIRECT
+rule-providers:
+  private_domain:
+    type: http
+    interval: 86400
+    behavior: domain
+    format: mrs
+    url: https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/meta/geo/geosite/private.mrs
+  private_ip:
+    type: http
+    interval: 86400
+    behavior: ipcidr
+    format: mrs
+    url: https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/meta/geo/geoip/private.mrs
+  ai:
+    type: http
+    interval: 86400
+    behavior: domain
+    format: mrs
+    url: https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/meta/geo/geosite/category-ai-!cn.mrs
+  github_domain:
+    type: http
+    interval: 86400
+    behavior: domain
+    format: mrs
+    url: https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/meta/geo/geosite/github.mrs
+  youtube_domain:
+    type: http
+    interval: 86400
+    behavior: domain
+    format: mrs
+    url: https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/meta/geo/geosite/youtube.mrs
+  google_domain:
+    type: http
+    interval: 86400
+    behavior: domain
+    format: mrs
+    url: https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/meta/geo/geosite/google.mrs
+  telegram_domain:
+    type: http
+    interval: 86400
+    behavior: domain
+    format: mrs
+    url: https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/meta/geo/geosite/telegram.mrs
+  telegram_ip:
+    type: http
+    interval: 86400
+    behavior: ipcidr
+    format: mrs
+    url: https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/meta/geo/geoip/telegram.mrs
+  netflix_domain:
+    type: http
+    interval: 86400
+    behavior: domain
+    format: mrs
+    url: https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/meta/geo/geosite/netflix.mrs
+  netflix_ip:
+    type: http
+    interval: 86400
+    behavior: ipcidr
+    format: mrs
+    url: https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/meta/geo/geoip/netflix.mrs
+  bilibili_domain:
+    type: http
+    interval: 86400
+    behavior: domain
+    format: mrs
+    url: https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/meta/geo/geosite/bilibili.mrs
+  spotify_domain:
+    type: http
+    interval: 86400
+    behavior: domain
+    format: mrs
+    url: https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/meta/geo/geosite/spotify.mrs
+  steam_domain:
+    type: http
+    interval: 86400
+    behavior: domain
+    format: mrs
+    url: https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/meta/geo/geosite/steam.mrs
+  paypal_domain:
+    type: http
+    interval: 86400
+    behavior: domain
+    format: mrs
+    url: https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/meta/geo/geosite/paypal.mrs
+  onedrive_domain:
+    type: http
+    interval: 86400
+    behavior: domain
+    format: mrs
+    url: https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/meta/geo/geosite/onedrive.mrs
+  microsoft_domain:
+    type: http
+    interval: 86400
+    behavior: domain
+    format: mrs
+    url: https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/meta/geo/geosite/microsoft.mrs
+  apple_domain:
+    type: http
+    interval: 86400
+    behavior: domain
+    format: mrs
+    url: https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/meta/geo/geosite/apple.mrs
+  apple_ip:
+    type: http
+    interval: 86400
+    behavior: ipcidr
+    format: mrs
+    url: https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/meta/geo-lite/geoip/apple.mrs
+  geolocation-not-cn:
+    type: http
+    interval: 86400
+    behavior: domain
+    format: mrs
+    url: https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/meta/geo/geosite/geolocation-!cn.mrs
+  cn_domain:
+    type: http
+    interval: 86400
+    behavior: domain
+    format: mrs
+    url: https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/meta/geo/geosite/cn.mrs
+  cn_ip:
+    type: http
+    interval: 86400
+    behavior: ipcidr
+    format: mrs
+    url: https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/meta/geo/geoip/cn.mrs
 rules:
-  - GEOIP,CN,DIRECT
-  - MATCH,PROXY
+  - RULE-SET,private_ip,DIRECT,no-resolve
+  - RULE-SET,private_domain,DIRECT
+  - RULE-SET,ai,AI
+  - RULE-SET,github_domain,PROXY
+  - RULE-SET,youtube_domain,YOUTUBE
+  - RULE-SET,google_domain,PROXY
+  - RULE-SET,telegram_domain,TELEGRAM
+  - RULE-SET,telegram_ip,TELEGRAM,no-resolve
+  - RULE-SET,netflix_domain,NETFLIX
+  - RULE-SET,netflix_ip,NETFLIX,no-resolve
+  - RULE-SET,bilibili_domain,MEDIA
+  - RULE-SET,spotify_domain,MEDIA
+  - RULE-SET,steam_domain,MEDIA
+  - RULE-SET,paypal_domain,PROXY
+  - RULE-SET,onedrive_domain,MICROSOFT
+  - RULE-SET,microsoft_domain,MICROSOFT
+  - RULE-SET,apple_domain,APPLE
+  - RULE-SET,apple_ip,APPLE,no-resolve
+  - RULE-SET,geolocation-not-cn,PROXY
+  - RULE-SET,cn_domain,DIRECT
+  - RULE-SET,cn_ip,DIRECT,no-resolve
+  - MATCH,FINAL
 "#;
 
 const SING_BOX_TEMPLATE: &str = r#"{
@@ -230,7 +615,6 @@ proxy-groups:
     proxies:
       - DIRECT
 rules:
-  - GEOIP,CN,DIRECT
   - MATCH,PROXY
 "#;
 
@@ -245,7 +629,6 @@ proxy-groups:
     proxies:
       - DIRECT
 rules:
-  - GEOIP,CN,DIRECT
   - MATCH,PROXY
 "#;
 

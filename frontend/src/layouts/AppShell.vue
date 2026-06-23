@@ -21,7 +21,7 @@ const navItems = [
 const userLabel = computed(() => auth.user?.nickname || auth.user?.username || t('admin'))
 
 async function logout() {
-  auth.clearAuth()
+  await auth.logout()
   await router.replace('/login')
 }
 

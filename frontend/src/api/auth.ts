@@ -16,8 +16,7 @@ export interface ChangeCredentialsPayload {
 interface LoginApiResponse {
   code: string
   data: {
-    access_token: string
-    token_type: string
+    csrf_token: string
     expires_in_hours: number
     user: AuthUser
   }
@@ -41,4 +40,8 @@ export async function fetchMeRequest() {
 export async function changeCredentialsRequest(payload: ChangeCredentialsPayload) {
   const { data } = await apiClient.post<MeApiResponse>('/api/v1/auth/change-credentials', payload)
   return data
+}
+
+export async function logoutRequest() {
+  await apiClient.post('/api/v1/auth/logout')
 }

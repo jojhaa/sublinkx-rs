@@ -42,7 +42,7 @@ http://localhost:3000
 Default first login:
 
 ```text
-admin / admin123456
+the `BOOTSTRAP_ADMIN_USERNAME` / `BOOTSTRAP_ADMIN_PASSWORD` values configured in `.env`
 ```
 
 The first login must change both username and password. Passwords are stored in SQLite as Argon2 hashes.
@@ -59,17 +59,23 @@ FRONTEND_IMAGE=docker.io/jojhaa/sublinkx-rs-frontend:latest
 BACKEND_DATA_DIR=./docker-data/backend
 MIHOMO_CORE_DIR=./docker-data/mihomo
 DATABASE_URL=sqlite:///app/data/app.db
-JWT_SECRET=change-me-in-production
+JWT_SECRET=replace-with-at-least-32-random-characters
 JWT_EXP_HOURS=24
-BOOTSTRAP_ADMIN_USERNAME=admin
-BOOTSTRAP_ADMIN_PASSWORD=admin123456
+AUTH_COOKIE_SECURE=true
+TRUST_PROXY_HEADERS=true
+BOOTSTRAP_ADMIN_USERNAME=replace-with-a-custom-admin-username
+BOOTSTRAP_ADMIN_PASSWORD=replace-with-a-strong-first-login-password
 ```
 
 Production recommendation:
 
 ```env
-JWT_SECRET=use-a-long-random-secret
+JWT_SECRET=replace-with-at-least-32-random-characters
+AUTH_COOKIE_SECURE=true
 ```
+
+`AUTH_COOKIE_SECURE=true` is the production default and requires HTTPS. Only set it to `false` for local plain-HTTP development.
+`TRUST_PROXY_HEADERS=true` must only be used when the backend is reachable only through a trusted reverse proxy or the frontend container proxy.
 
 ## Local Data Mapping
 
@@ -132,12 +138,12 @@ Edit `.env`:
 
 ```env
 COMPOSE_PROFILES=mysql
-DATABASE_URL=mysql://sublinkx:sublinkx_password@mysql:3306/sublinkx
+DATABASE_URL=mysql://sublinkx:<mysql_password>@mysql:3306/sublinkx
 MYSQL_IMAGE=mysql:8.4
 MYSQL_DATABASE=sublinkx
 MYSQL_USER=sublinkx
-MYSQL_PASSWORD=change-this-password
-MYSQL_ROOT_PASSWORD=change-this-password
+MYSQL_PASSWORD=replace-with-a-strong-mysql-password
+MYSQL_ROOT_PASSWORD=replace-with-a-different-strong-root-password
 MYSQL_DATA_DIR=./docker-data/mysql
 ```
 
@@ -160,13 +166,13 @@ If MySQL already runs on the host or another server, do not enable `COMPOSE_PROF
 Host MySQL example:
 
 ```env
-DATABASE_URL=mysql://sublinkx:change-this-password@host.docker.internal:3306/sublinkx
+DATABASE_URL=mysql://sublinkx:<mysql_password>@host.docker.internal:3306/sublinkx
 ```
 
 External MySQL example:
 
 ```env
-DATABASE_URL=mysql://sublinkx:change-this-password@192.168.1.10:3306/sublinkx
+DATABASE_URL=mysql://sublinkx:<mysql_password>@192.168.1.10:3306/sublinkx
 ```
 
 This Compose file maps `host.docker.internal` to `host-gateway` for Linux Docker. Docker Desktop already provides the same hostname. Make sure the MySQL user can connect from the Docker subnet and that the target database exists.
@@ -211,6 +217,13 @@ The backend is only reachable inside the Docker network. The frontend Nginx cont
 /healthz  -> backend:8080/healthz
 ```
 
+Compose checks backend `/healthz`, and the frontend starts only after the backend is healthy. If the frontend log shows `backend could not be resolved`, check whether the backend failed first:
+
+```bash
+docker compose ps
+docker compose logs --tail=200 backend
+```
+
 For Nginx Proxy Manager, 1Panel, BT Panel, or Caddy, reverse proxy:
 
 ```text
@@ -221,16 +234,33 @@ http://127.0.0.1:3000
 
 Keep the outer reverse proxy pointed at the frontend port `3000`. The frontend container will proxy backend requests to the backend container internally. Do not point an outer `/api/` location directly at `127.0.0.1:8080` unless you intentionally expose the backend port yourself.
 
+The runtime Nginx config uses `connect-src 'self'` in its CSP. This is intentional: production deployments should keep the browser-facing frontend and API same-origin, with `/api/`, `/s/`, and `/healthz` proxied by the frontend container or by an equivalent same-origin reverse proxy rule.
+
 If you need a separate `/api/` location in BT Panel or Nginx, proxy it to `3000` and disable cache:
 
 ```nginx
+location = /api/v1/nodes/test-latency-stream {
+    proxy_pass http://127.0.0.1:3000;
+    proxy_buffering off;
+    proxy_cache off;
+    proxy_no_cache 1;
+    proxy_cache_bypass 1;
+
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $remote_addr;
+    proxy_set_header X-Forwarded-Proto $scheme;
+
+    add_header Cache-Control "no-store" always;
+}
+
 location ^~ /api/ {
     proxy_pass http://127.0.0.1:3000;
 
     proxy_set_header Host $host;
     proxy_set_header X-Real-IP $remote_addr;
     proxy_set_header X-Real-Port $remote_port;
-    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-For $remote_addr;
     proxy_set_header X-Forwarded-Proto $scheme;
     proxy_set_header X-Forwarded-Host $host;
     proxy_set_header X-Forwarded-Port $server_port;
@@ -254,6 +284,27 @@ location ^~ /api/ {
 }
 ```
 
+If you configure a separate `/s/` subscription location, disable access logs for that location so subscription tokens are not written to reverse-proxy logs:
+
+```nginx
+location ^~ /s/ {
+    access_log off;
+    proxy_pass http://127.0.0.1:3000;
+
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $remote_addr;
+    proxy_set_header X-Forwarded-Proto $scheme;
+
+    proxy_cache off;
+    proxy_no_cache 1;
+    proxy_cache_bypass 1;
+
+    add_header Cache-Control "no-store, no-cache, must-revalidate, max-age=0" always;
+    add_header Referrer-Policy "no-referrer" always;
+}
+```
+
 It is also recommended to disable HTML cache for the frontend page, so browsers do not keep loading an old `index-*.js` bundle after upgrades:
 
 ```nginx
@@ -262,7 +313,7 @@ location ^~ / {
 
     proxy_set_header Host $host;
     proxy_set_header X-Real-IP $remote_addr;
-    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-For $remote_addr;
     proxy_set_header X-Forwarded-Proto $scheme;
 
     proxy_cache off;

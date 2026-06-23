@@ -9,3 +9,4 @@ pub mod settings_service;
 pub mod subscription_service;
 pub mod template_seed_service;
 pub mod template_service;
+pub mod url_safety;

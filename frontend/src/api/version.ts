@@ -14,18 +14,18 @@ export interface VersionInfo {
   name: string
   version: string
   api_version: string
-  environment: string
+  environment?: string
   repository: string
   license: string
-  server_time: string
-  server_timezone: string
-  uptime_seconds: number
-  runtime_mode: 'local' | 'docker' | string
+  server_time?: string
+  server_timezone?: string
+  uptime_seconds?: number
+  runtime_mode?: 'local' | 'docker' | string
   developer?: {
     name: string
     url: string
   }
-  system: {
+  system?: {
     os: string
     family: string
     arch: string

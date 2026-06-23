@@ -263,18 +263,6 @@ const checkingAny = computed(() => loading.value || checkingUpdate.value)
 const userLabel = computed(() => auth.user?.nickname || auth.user?.username || t('unknown'))
 const developerName = computed(() => versionInfo.value?.developer?.name ?? t('unknown'))
 const developerUrl = computed(() => versionInfo.value?.developer?.url ?? versionInfo.value?.repository ?? '#')
-const runtimeModeText = computed(() => {
-  if (versionInfo.value?.runtime_mode === 'docker') {
-    return t('runtimeModeDocker')
-  }
-  if (versionInfo.value?.runtime_mode === 'local') {
-    return t('runtimeModeLocal')
-  }
-  if (versionInfo.value?.environment === 'development') {
-    return t('runtimeModeLocal')
-  }
-  return versionInfo.value?.runtime_mode ?? t('unknown')
-})
 
 const releaseDateText = computed(() => {
   const publishedAt = updateInfo.value?.published_at
@@ -286,17 +274,6 @@ const releaseDateText = computed(() => {
     dateStyle: 'medium',
     timeStyle: 'short',
   }).format(new Date(publishedAt))
-})
-
-const serverTimeText = computed(() => {
-  if (!versionInfo.value?.server_time) {
-    return t('unknown')
-  }
-
-  return new Intl.DateTimeFormat(locale.value, {
-    dateStyle: 'medium',
-    timeStyle: 'medium',
-  }).format(new Date(versionInfo.value.server_time))
 })
 
 function todayKey() {
@@ -389,30 +366,6 @@ function supportClass(value: string) {
   return 'matrix-support-none'
 }
 
-const uptimeText = computed(() => {
-  const seconds = versionInfo.value?.uptime_seconds
-  if (seconds === undefined) {
-    return t('unknown')
-  }
-
-  const days = Math.floor(seconds / 86400)
-  const hours = Math.floor((seconds % 86400) / 3600)
-  const minutes = Math.floor((seconds % 3600) / 60)
-  const remainSeconds = seconds % 60
-  const parts = []
-  if (days > 0) {
-    parts.push(t('daysShort', { count: days }))
-  }
-  if (hours > 0 || parts.length > 0) {
-    parts.push(t('hoursShort', { count: hours }))
-  }
-  if (minutes > 0 || parts.length > 0) {
-    parts.push(t('minutesShort', { count: minutes }))
-  }
-  parts.push(t('secondsShort', { count: remainSeconds }))
-  return parts.join(' ')
-})
-
 async function load() {
   loading.value = true
   errorMessage.value = ''
@@ -493,36 +446,8 @@ onMounted(load)
             <strong>{{ versionInfo?.api_version ?? t('unknown') }}</strong>
           </div>
           <div>
-            <span class="hint">{{ t('runtimeEnvironment') }}</span>
-            <strong>{{ versionInfo?.environment ?? t('unknown') }}</strong>
-          </div>
-          <div>
-            <span class="hint">{{ t('runtimeMode') }}</span>
-            <strong>{{ runtimeModeText }}</strong>
-          </div>
-          <div>
             <span class="hint">{{ t('license') }}</span>
             <strong>{{ versionInfo?.license ?? 'AGPL-3.0-or-later' }}</strong>
-          </div>
-          <div>
-            <span class="hint">{{ t('serverTimezone') }}</span>
-            <strong>{{ versionInfo?.server_timezone ?? t('unknown') }}</strong>
-          </div>
-          <div>
-            <span class="hint">{{ t('serverTime') }}</span>
-            <strong>{{ serverTimeText }}</strong>
-          </div>
-          <div>
-            <span class="hint">{{ t('serverUptime') }}</span>
-            <strong>{{ uptimeText }}</strong>
-          </div>
-          <div>
-            <span class="hint">{{ t('serverSystem') }}</span>
-            <strong>{{ versionInfo?.system.display ?? t('unknown') }}</strong>
-          </div>
-          <div>
-            <span class="hint">{{ t('serverArch') }}</span>
-            <strong>{{ versionInfo?.system.arch ?? t('unknown') }}</strong>
           </div>
           <div>
             <span class="hint">{{ t('currentUsername') }}</span>

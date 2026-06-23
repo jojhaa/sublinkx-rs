@@ -5,7 +5,7 @@ Clash/Mihomo 的分流配置主要由两部分组成：
 - `proxy-groups`：策略组，用于决定最终使用哪个出站节点。
 - `rules`：按顺序匹配的规则，把流量分配到策略组、`DIRECT` 或 `REJECT`。
 
-在 `sublinkx-rs` 中，导出器会把真实节点注入到 `proxies`，然后追加一个 `AUTO` 策略组和最终的 `MATCH,AUTO` 兜底规则。Clash 模板可以在兜底规则之前定义额外的策略组、规则集、DNS 和分流规则。
+在 `sublinkx-rs` 中，导出器会把真实节点注入到 `proxies`，并把 `include-all-proxies: true` 的策略组展开为当前订阅节点。模板可以定义额外的策略组、规则集、DNS 和分流规则；如果模板已有 `rules`，需要在模板里显式写最终 `MATCH` 兜底。
 
 ## 最小分流模板
 
@@ -25,12 +25,6 @@ dns:
   nameserver:
     - https://223.5.5.5/dns-query
     - https://doh.pub/dns-query
-  fallback:
-    - https://1.1.1.1/dns-query
-    - https://8.8.8.8/dns-query
-  fallback-filter:
-    geoip: true
-    geoip-code: CN
 
 proxy-groups:
   - name: PROXY
@@ -114,7 +108,6 @@ rules:
   - RULE-SET,google,PROXY
   - RULE-SET,proxy,PROXY
   - RULE-SET,direct,DIRECT
-  - GEOIP,CN,DIRECT
 ```
 
 ## 匹配机制
@@ -133,7 +126,7 @@ rules:
 rules:
   - DOMAIN-SUFFIX,openai.com,AI
   - DOMAIN-SUFFIX,google.com,PROXY
-  - GEOIP,CN,DIRECT
+  - RULE-SET,direct,DIRECT
 ```
 
 ## ACL4SSR 风格完整分流模板
@@ -165,12 +158,6 @@ dns:
   nameserver:
     - https://223.5.5.5/dns-query
     - https://doh.pub/dns-query
-  fallback:
-    - https://1.1.1.1/dns-query
-    - https://8.8.8.8/dns-query
-  fallback-filter:
-    geoip: true
-    geoip-code: CN
 
 proxy-groups:
   - name: 节点选择
@@ -193,7 +180,7 @@ proxy-groups:
   - name: 自动选择
     type: url-test
     include-all-proxies: true
-    url: https://www.gstatic.com/generate_204
+    url: https://cp.cloudflare.com/generate_204
     interval: 300
     tolerance: 50
 
@@ -349,7 +336,7 @@ proxy-groups:
     type: url-test
     include-all-proxies: true
     filter: "(?i)港|hk|hong kong|hongkong"
-    url: https://www.gstatic.com/generate_204
+    url: https://cp.cloudflare.com/generate_204
     interval: 300
     tolerance: 50
 
@@ -357,7 +344,7 @@ proxy-groups:
     type: url-test
     include-all-proxies: true
     filter: "(?i)日本|东京|大阪|jp|japan"
-    url: https://www.gstatic.com/generate_204
+    url: https://cp.cloudflare.com/generate_204
     interval: 300
     tolerance: 50
 
@@ -365,7 +352,7 @@ proxy-groups:
     type: url-test
     include-all-proxies: true
     filter: "(?i)美|us|united states|america|los angeles|san jose|seattle"
-    url: https://www.gstatic.com/generate_204
+    url: https://cp.cloudflare.com/generate_204
     interval: 300
     tolerance: 150
 
@@ -373,7 +360,7 @@ proxy-groups:
     type: url-test
     include-all-proxies: true
     filter: "(?i)新加坡|狮城|sg|singapore"
-    url: https://www.gstatic.com/generate_204
+    url: https://cp.cloudflare.com/generate_204
     interval: 300
     tolerance: 50
 
@@ -381,7 +368,7 @@ proxy-groups:
     type: url-test
     include-all-proxies: true
     filter: "(?i)台|tw|taiwan"
-    url: https://www.gstatic.com/generate_204
+    url: https://cp.cloudflare.com/generate_204
     interval: 300
     tolerance: 50
 
@@ -389,7 +376,7 @@ proxy-groups:
     type: url-test
     include-all-proxies: true
     filter: "(?i)韩|kr|korea|seoul"
-    url: https://www.gstatic.com/generate_204
+    url: https://cp.cloudflare.com/generate_204
     interval: 300
     tolerance: 50
 
@@ -534,7 +521,7 @@ rules:
   - RULE-SET,proxygfw,节点选择
   - RULE-SET,chinadomain,全球直连
   - RULE-SET,download,全球直连
-  - GEOIP,CN,全球直连
+  - MATCH,漏网之鱼
 ```
 
-导出器会追加真实 `proxies`、`AUTO` 组和 `MATCH,AUTO`。如果你希望 ACL4SSR 风格的 `漏网之鱼` 作为最终兜底，可以在模板末尾加入 `- MATCH,漏网之鱼`。后续导出器可以增加选项，用于禁用或忽略自动生成的 `MATCH,AUTO` 兜底。
+导出器会追加真实 `proxies`，并把 `include-all-proxies: true` 的策略组展开为当前订阅节点。如果模板已有 `rules`，导出器会保留模板规则，不再强行追加 `MATCH,AUTO`，因此完整模板末尾应保留 `- MATCH,漏网之鱼`。

@@ -49,6 +49,7 @@ pub async fn new_database_pool(database_url: &str) -> Result<DbPool, sqlx::Error
         DbKind::Sqlite => {
             configure_sqlite(&pool).await?;
             sqlx::migrate!("./migrations").run(&pool).await?;
+            apply_builtin_template_content_upgrades(&pool).await?;
         }
         DbKind::MySql => {
             init_mysql_schema(&pool).await?;
@@ -81,6 +82,7 @@ async fn init_mysql_schema(pool: &DbPool) -> Result<(), sqlx::Error> {
           role VARCHAR(64) NOT NULL DEFAULT 'admin',
           status VARCHAR(64) NOT NULL DEFAULT 'active',
           must_change_credentials BIGINT NOT NULL DEFAULT 1,
+          token_version BIGINT NOT NULL DEFAULT 0,
           created_at VARCHAR(64) NOT NULL,
           updated_at VARCHAR(64) NOT NULL
         )
@@ -107,6 +109,7 @@ async fn init_mysql_schema(pool: &DbPool) -> Result<(), sqlx::Error> {
           source_type VARCHAR(64) NOT NULL DEFAULT 'manual',
           source_ref VARCHAR(2048) NULL,
           fingerprint VARCHAR(191) NOT NULL,
+          fingerprint_scope BIGINT NOT NULL DEFAULT 0,
           settings_json VARCHAR(4096) NOT NULL,
           remark VARCHAR(1024) NOT NULL,
           last_latency_ms BIGINT NULL,
@@ -115,7 +118,7 @@ async fn init_mysql_schema(pool: &DbPool) -> Result<(), sqlx::Error> {
           last_latency_tested_at VARCHAR(64) NULL,
           created_at VARCHAR(64) NOT NULL,
           updated_at VARCHAR(64) NOT NULL,
-          UNIQUE KEY idx_nodes_fingerprint (fingerprint),
+          UNIQUE KEY idx_nodes_fingerprint_scope (fingerprint, fingerprint_scope),
           KEY idx_nodes_protocol (protocol),
           KEY idx_nodes_group_id (group_id),
           KEY idx_nodes_last_latency_status (last_latency_status),
@@ -196,13 +199,17 @@ async fn init_mysql_schema(pool: &DbPool) -> Result<(), sqlx::Error> {
         pool.execute(statement).await?;
     }
 
+    apply_mysql_schema_upgrades(pool).await?;
+    apply_builtin_template_content_upgrades(pool).await?;
+
     let now = crate::utils::time::now_rfc3339();
     for (key, value) in [
         ("site.public_base_url", ""),
         ("latency.auto_enabled", "true"),
         ("latency.interval_minutes", "30"),
+        ("latency.concurrency", "2"),
         ("latency.core_path", ""),
-        ("latency.test_url", "https://www.gstatic.com/generate_204"),
+        ("latency.test_url", "https://cp.cloudflare.com/generate_204"),
         ("latency.timeout_secs", "10"),
     ] {
         sqlx::query(
@@ -219,6 +226,249 @@ async fn init_mysql_schema(pool: &DbPool) -> Result<(), sqlx::Error> {
     }
 
     Ok(())
+}
+
+async fn apply_builtin_template_content_upgrades(pool: &DbPool) -> Result<(), sqlx::Error> {
+    let now = crate::utils::time::now_rfc3339();
+    for (name, kind, content, old_match) in [
+        (
+            "Built-in Clash ACL4SSR Style",
+            "clash",
+            crate::services::template_seed_service::CLASH_TEMPLATE,
+            "%MATCH,节点选择%",
+        ),
+        (
+            "Built-in Mihomo Rule Base",
+            "mihomo",
+            crate::services::template_seed_service::MIHOMO_TEMPLATE,
+            "%MATCH,PROXY%",
+        ),
+    ] {
+        sqlx::query(
+            r#"
+            UPDATE templates
+            SET content = ?, updated_at = ?
+            WHERE name = ?
+              AND kind = ?
+              AND content NOT LIKE '%rule-providers:%'
+              AND content LIKE ?
+            "#,
+        )
+        .bind(content)
+        .bind(&now)
+        .bind(name)
+        .bind(kind)
+        .bind(old_match)
+        .execute(pool)
+        .await?;
+    }
+
+    Ok(())
+}
+
+async fn apply_mysql_schema_upgrades(pool: &DbPool) -> Result<(), sqlx::Error> {
+    for (table, column, definition) in [
+        (
+            "users",
+            "must_change_credentials",
+            "BIGINT NOT NULL DEFAULT 1",
+        ),
+        ("users", "token_version", "BIGINT NOT NULL DEFAULT 0"),
+        ("nodes", "group_id", "BIGINT NULL"),
+        (
+            "nodes",
+            "source_type",
+            "VARCHAR(64) NOT NULL DEFAULT 'manual'",
+        ),
+        ("nodes", "source_ref", "VARCHAR(2048) NULL"),
+        ("nodes", "fingerprint_scope", "BIGINT NOT NULL DEFAULT 0"),
+        ("nodes", "last_latency_ms", "BIGINT NULL"),
+        ("nodes", "last_latency_status", "VARCHAR(64) NULL"),
+        ("nodes", "last_latency_message", "TEXT NULL"),
+        ("nodes", "last_latency_tested_at", "VARCHAR(64) NULL"),
+        ("subscriptions", "group_id", "BIGINT NULL"),
+        ("subscriptions", "expires_at", "VARCHAR(64) NULL"),
+    ] {
+        mysql_add_column_if_missing(pool, table, column, definition).await?;
+    }
+
+    if mysql_index_exists(pool, "nodes", "idx_nodes_fingerprint").await? {
+        pool.execute("DROP INDEX idx_nodes_fingerprint ON nodes")
+            .await?;
+    }
+    pool.execute("UPDATE nodes SET fingerprint_scope = COALESCE(group_id, 0)")
+        .await?;
+
+    for (table, index, create_sql) in [
+        (
+            "nodes",
+            "idx_nodes_fingerprint_scope",
+            "CREATE UNIQUE INDEX idx_nodes_fingerprint_scope ON nodes(fingerprint, fingerprint_scope)",
+        ),
+        (
+            "nodes",
+            "idx_nodes_protocol",
+            "CREATE INDEX idx_nodes_protocol ON nodes(protocol)",
+        ),
+        (
+            "nodes",
+            "idx_nodes_group_id",
+            "CREATE INDEX idx_nodes_group_id ON nodes(group_id)",
+        ),
+        (
+            "nodes",
+            "idx_nodes_last_latency_status",
+            "CREATE INDEX idx_nodes_last_latency_status ON nodes(last_latency_status)",
+        ),
+        (
+            "subscriptions",
+            "idx_subscriptions_group_id",
+            "CREATE INDEX idx_subscriptions_group_id ON subscriptions(group_id)",
+        ),
+        (
+            "subscriptions",
+            "idx_subscriptions_expires_at",
+            "CREATE INDEX idx_subscriptions_expires_at ON subscriptions(expires_at)",
+        ),
+        (
+            "subscription_nodes",
+            "idx_subscription_nodes_sort",
+            "CREATE INDEX idx_subscription_nodes_sort ON subscription_nodes(subscription_id, sort_order)",
+        ),
+    ] {
+        mysql_add_index_if_missing(pool, table, index, create_sql).await?;
+    }
+
+    pool.execute(
+        r#"
+        UPDATE app_settings
+        SET value = 'https://cp.cloudflare.com/generate_204'
+        WHERE `key` = 'latency.test_url'
+          AND value = 'https://www.gstatic.com/generate_204'
+        "#,
+    )
+    .await?;
+    pool.execute(
+        r#"
+        UPDATE templates
+        SET content = REPLACE(
+                content,
+                'https://www.gstatic.com/generate_204',
+                'https://cp.cloudflare.com/generate_204'
+            )
+        WHERE name IN ('Built-in Clash ACL4SSR Style', 'Built-in Mihomo Rule Base')
+          AND content LIKE '%https://www.gstatic.com/generate_204%'
+        "#,
+    )
+    .await?;
+    pool.execute(
+        r#"
+        UPDATE templates
+        SET content = REPLACE(
+                REPLACE(
+                    REPLACE(
+                        content,
+                        '  fallback:
+    - https://1.1.1.1/dns-query
+    - https://8.8.8.8/dns-query
+  fallback-filter:
+    geoip: true
+    geoip-code: CN
+',
+                        ''
+                    ),
+                    '  - GEOIP,CN,DIRECT
+',
+                    ''
+                ),
+                '  - GEOIP,CN,全球直连
+',
+                ''
+            )
+        WHERE name IN (
+                'Built-in Clash ACL4SSR Style',
+                'Built-in Mihomo Rule Base',
+                'Built-in Mellow Base',
+                'Built-in ClashR Base'
+            )
+          AND (
+                content LIKE '%GEOIP,CN%'
+                OR content LIKE '%fallback-filter:%'
+            )
+        "#,
+    )
+    .await?;
+
+    Ok(())
+}
+
+async fn mysql_add_column_if_missing(
+    pool: &DbPool,
+    table: &str,
+    column: &str,
+    definition: &str,
+) -> Result<(), sqlx::Error> {
+    if mysql_column_exists(pool, table, column).await? {
+        return Ok(());
+    }
+
+    let sql = format!("ALTER TABLE `{table}` ADD COLUMN `{column}` {definition}");
+    pool.execute(sql.as_str()).await?;
+    Ok(())
+}
+
+async fn mysql_add_index_if_missing(
+    pool: &DbPool,
+    table: &str,
+    index: &str,
+    create_sql: &str,
+) -> Result<(), sqlx::Error> {
+    if mysql_index_exists(pool, table, index).await? {
+        return Ok(());
+    }
+
+    pool.execute(create_sql).await?;
+    Ok(())
+}
+
+async fn mysql_column_exists(
+    pool: &DbPool,
+    table: &str,
+    column: &str,
+) -> Result<bool, sqlx::Error> {
+    let count = sqlx::query_scalar::<_, i64>(
+        r#"
+        SELECT COUNT(*)
+        FROM information_schema.columns
+        WHERE table_schema = DATABASE()
+          AND table_name = ?
+          AND column_name = ?
+        "#,
+    )
+    .bind(table)
+    .bind(column)
+    .fetch_one(pool)
+    .await?;
+
+    Ok(count > 0)
+}
+
+async fn mysql_index_exists(pool: &DbPool, table: &str, index: &str) -> Result<bool, sqlx::Error> {
+    let count = sqlx::query_scalar::<_, i64>(
+        r#"
+        SELECT COUNT(*)
+        FROM information_schema.statistics
+        WHERE table_schema = DATABASE()
+          AND table_name = ?
+          AND index_name = ?
+        "#,
+    )
+    .bind(table)
+    .bind(index)
+    .fetch_one(pool)
+    .await?;
+
+    Ok(count > 0)
 }
 
 fn detect_db_kind(database_url: &str) -> DbKind {

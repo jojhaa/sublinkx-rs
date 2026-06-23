@@ -1,12 +1,18 @@
 use axum::{
-    http::{HeaderName, HeaderValue, StatusCode, header},
+    body::{Body, to_bytes},
+    http::{HeaderMap, HeaderName, HeaderValue, StatusCode, header},
     response::{IntoResponse, Response},
 };
 use base64::{Engine as _, engine::general_purpose};
 use percent_encoding::{NON_ALPHANUMERIC, utf8_percent_encode};
 use serde_json::json;
 use serde_yaml::{Mapping, Value};
-use std::collections::HashMap;
+use std::{
+    collections::{HashMap, HashSet},
+    net::IpAddr,
+    time::{Duration, Instant},
+};
+use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
 use crate::{
     domain::{
@@ -18,19 +24,34 @@ use crate::{
     errors::AppError,
     repository::{
         group_repo::{self, GroupTable},
-        template_repo,
+        subscription_repo, template_repo,
     },
-    state::AppState,
+    state::{AppState, PublicExportCacheEntry},
 };
 
-use super::subscription_service;
+use super::{auth_service, subscription_service};
 
 const CLASH_ROUTING_TEMPLATE_DOC: &str = include_str!("../../../docs/clash-routing-template.md");
+const PUBLIC_EXPORT_CACHE_TTL: Duration = Duration::from_secs(30);
+const PUBLIC_EXPORT_CACHE_BODY_LIMIT: usize = 8 * 1024 * 1024;
+const PUBLIC_EXPORT_IP_LIMIT_PER_MINUTE: u32 = 120;
+const PUBLIC_EXPORT_GLOBAL_LIMIT_PER_MINUTE: u32 = 1200;
+const PUBLIC_EXPORT_RATE_WINDOW: Duration = Duration::from_secs(60);
+const MIHOMO_DEFAULT_DELAY_TEST_URL: &str = "https://cp.cloudflare.com/generate_204";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ExportMode {
     Strict,
     BestEffort,
+}
+
+impl ExportMode {
+    fn as_cache_key(self) -> &'static str {
+        match self {
+            ExportMode::Strict => "strict",
+            ExportMode::BestEffort => "best_effort",
+        }
+    }
 }
 
 pub async fn export_subscription(
@@ -39,14 +60,169 @@ pub async fn export_subscription(
     target: Option<&str>,
     mode: Option<&str>,
     user_agent: Option<&str>,
+    headers: &HeaderMap,
+    peer_ip: Option<IpAddr>,
 ) -> Result<Response, AppError> {
-    let mut subscription = subscription_service::get_subscription_by_token(state, token).await?;
+    ensure_public_export_not_limited(state, headers, peer_ip).await?;
+
+    let subscription_record = subscription_repo::find_by_token(&state.db, token)
+        .await?
+        .ok_or_else(|| AppError::NotFound("subscription not found".to_string()))?;
+    if subscription_record.enabled == 0 || subscription_record_is_expired(&subscription_record) {
+        return Err(AppError::NotFound("subscription not found".to_string()));
+    }
+
+    let export_target = target
+        .or_else(|| detect_export_target(user_agent))
+        .or(subscription_record.default_client.as_deref())
+        .unwrap_or("xray")
+        .to_string();
+    let export_mode = parse_export_mode(mode)?;
+    let canonical_target = canonical_export_target(&export_target)?;
+    let template_target = template_target(&export_target, canonical_target).to_string();
+    let cache_key = public_export_cache_key(
+        subscription_record.id,
+        &subscription_record.token,
+        &subscription_record.updated_at,
+        subscription_record.expires_at.as_deref(),
+        &export_target,
+        export_mode,
+    );
+    if let Some(cached) = state
+        .get_public_export_cache(&cache_key, PUBLIC_EXPORT_CACHE_TTL)
+        .await
+    {
+        return Ok(response_from_cached_export(cached));
+    }
+
+    let subscription = subscription_service::get_subscription_by_token(state, token).await?;
     if !subscription.enabled || subscription_service::subscription_is_expired(&subscription) {
         return Err(AppError::NotFound("subscription not found".to_string()));
     }
 
-    sort_subscription_nodes_for_export(state, &mut subscription).await?;
+    let response = export_subscription_view_with_resolved_target(
+        state,
+        subscription,
+        export_target,
+        export_mode,
+        canonical_target,
+        &template_target,
+    )
+    .await?;
+    cache_public_export_response(state, cache_key, response).await
+}
 
+pub async fn export_subscription_by_id(
+    state: &AppState,
+    id: i64,
+    target: Option<&str>,
+    mode: Option<&str>,
+    user_agent: Option<&str>,
+) -> Result<Response, AppError> {
+    let response = subscription_service::get_subscription(state, id).await?;
+    let subscription = response.data;
+    if !subscription.enabled || subscription_service::subscription_is_expired(&subscription) {
+        return Err(AppError::NotFound("subscription not found".to_string()));
+    }
+
+    export_subscription_view(state, subscription, target, mode, user_agent).await
+}
+
+async fn ensure_public_export_not_limited(
+    state: &AppState,
+    headers: &HeaderMap,
+    peer_ip: Option<IpAddr>,
+) -> Result<(), AppError> {
+    let ip = auth_service::request_rate_limit_ip(
+        headers,
+        peer_ip,
+        state.config.security.trust_proxy_headers,
+    );
+    state
+        .check_rate_limit(
+            &format!("public-export:ip:{ip}"),
+            PUBLIC_EXPORT_IP_LIMIT_PER_MINUTE,
+            PUBLIC_EXPORT_RATE_WINDOW,
+        )
+        .await
+        .map_err(|message| AppError::TooManyRequests(message.to_string()))?;
+    state
+        .check_rate_limit(
+            "public-export:global",
+            PUBLIC_EXPORT_GLOBAL_LIMIT_PER_MINUTE,
+            PUBLIC_EXPORT_RATE_WINDOW,
+        )
+        .await
+        .map_err(|message| AppError::TooManyRequests(message.to_string()))?;
+    Ok(())
+}
+
+fn public_export_cache_key(
+    subscription_id: i64,
+    token: &str,
+    updated_at: &str,
+    expires_at: Option<&str>,
+    export_target: &str,
+    export_mode: ExportMode,
+) -> String {
+    format!(
+        "public-export:v1:{subscription_id}:{token}:{updated_at}:{}:{export_target}:{}",
+        expires_at.unwrap_or_default(),
+        export_mode.as_cache_key()
+    )
+}
+
+fn subscription_record_is_expired(
+    record: &crate::domain::subscription::SubscriptionRecord,
+) -> bool {
+    record
+        .expires_at
+        .as_deref()
+        .and_then(|value| OffsetDateTime::parse(value, &Rfc3339).ok())
+        .is_some_and(|expires_at| expires_at <= OffsetDateTime::now_utc())
+}
+
+fn response_from_cached_export(entry: PublicExportCacheEntry) -> Response {
+    let mut response = Response::new(Body::from(entry.body));
+    *response.status_mut() = entry.status;
+    *response.headers_mut() = entry.headers;
+    response
+}
+
+async fn cache_public_export_response(
+    state: &AppState,
+    key: String,
+    response: Response,
+) -> Result<Response, AppError> {
+    let (parts, body) = response.into_parts();
+    let bytes = to_bytes(body, PUBLIC_EXPORT_CACHE_BODY_LIMIT)
+        .await
+        .map_err(|_| AppError::Internal)?;
+    state
+        .set_public_export_cache(
+            key,
+            PublicExportCacheEntry {
+                status: parts.status,
+                headers: parts.headers.clone(),
+                body: bytes.clone(),
+                cached_at: Instant::now(),
+            },
+        )
+        .await;
+
+    let mut response = Response::new(Body::from(bytes));
+    *response.status_mut() = parts.status;
+    *response.headers_mut() = parts.headers;
+    Ok(response)
+}
+
+async fn export_subscription_view(
+    state: &AppState,
+    subscription: SubscriptionView,
+    target: Option<&str>,
+    mode: Option<&str>,
+    user_agent: Option<&str>,
+) -> Result<Response, AppError> {
     let export_target = target
         .or_else(|| detect_export_target(user_agent))
         .or(subscription.default_client.as_deref())
@@ -54,7 +230,27 @@ pub async fn export_subscription(
         .to_string();
     let export_mode = parse_export_mode(mode)?;
     let canonical_target = canonical_export_target(&export_target)?;
-    let template_target = template_target(&export_target, canonical_target);
+    let template_target = template_target(&export_target, canonical_target).to_string();
+    export_subscription_view_with_resolved_target(
+        state,
+        subscription,
+        export_target,
+        export_mode,
+        canonical_target,
+        &template_target,
+    )
+    .await
+}
+
+async fn export_subscription_view_with_resolved_target(
+    state: &AppState,
+    mut subscription: SubscriptionView,
+    export_target: String,
+    export_mode: ExportMode,
+    canonical_target: &'static str,
+    template_target: &str,
+) -> Result<Response, AppError> {
+    sort_subscription_nodes_for_export(state, &mut subscription).await?;
     let template = load_export_template(state, subscription.template_id, template_target).await?;
 
     match canonical_target {
@@ -321,7 +517,8 @@ fn export_mihomo(
             Value::String(subscription.name.clone()),
         );
         yaml_set_profile_name(&mut root, &subscription.name);
-        root.remove(&Value::String("x-sublinkx-upstream-template".to_string()));
+        dedupe_mihomo_proxy_names(&mut root);
+        root.remove(Value::String("x-sublinkx-upstream-template".to_string()));
         let yaml = serde_yaml::to_string(&root).map_err(|_| AppError::Internal)?;
         return text_response(
             yaml,
@@ -332,6 +529,10 @@ fn export_mihomo(
         );
     }
 
+    let mut root = parse_yaml_template(template, target_name)?;
+    dedupe_mihomo_proxy_names(&mut root);
+
+    let mut used_proxy_names = collect_mihomo_proxy_names(&root);
     let mut proxy_items = Vec::with_capacity(subscription.nodes.len());
     let mut proxy_names = Vec::with_capacity(subscription.nodes.len());
     let mut filtered_count = 0usize;
@@ -349,8 +550,13 @@ fn export_mihomo(
             )));
         }
 
-        let rendered = render_mihomo_proxy(node)?;
-        proxy_names.push(Value::String(node.name.clone()));
+        let mut rendered = render_mihomo_proxy(node)?;
+        let proxy_name = unique_mihomo_proxy_name(&node.name, &mut used_proxy_names);
+        rendered.insert(
+            Value::String("name".to_string()),
+            Value::String(proxy_name.clone()),
+        );
+        proxy_names.push(proxy_name);
         proxy_items.push(Value::Mapping(rendered));
     }
 
@@ -360,7 +566,6 @@ fn export_mihomo(
         ));
     }
 
-    let mut root = parse_yaml_template(template, target_name)?;
     yaml_insert_if_missing(
         &mut root,
         "profile-name",
@@ -372,31 +577,9 @@ fn export_mihomo(
     yaml_insert_if_missing(&mut root, "mode", Value::String("rule".to_string()));
     yaml_insert_if_missing(&mut root, "log-level", Value::String("info".to_string()));
     yaml_push_sequence(&mut root, "proxies", proxy_items);
-    yaml_push_sequence(
-        &mut root,
-        "proxy-groups",
-        vec![Value::Mapping({
-            let mut group = Mapping::new();
-            group.insert(
-                Value::String("name".to_string()),
-                Value::String("AUTO".to_string()),
-            );
-            group.insert(
-                Value::String("type".to_string()),
-                Value::String("select".to_string()),
-            );
-            group.insert(
-                Value::String("proxies".to_string()),
-                Value::Sequence(proxy_names),
-            );
-            group
-        })],
-    );
-    yaml_push_sequence(
-        &mut root,
-        "rules",
-        vec![Value::String("MATCH,AUTO".to_string())],
-    );
+    expand_mihomo_include_all_proxy_groups(&mut root, &proxy_names);
+    ensure_mihomo_default_proxy_groups(&mut root, &proxy_names);
+    ensure_mihomo_match_rule(&mut root);
 
     let yaml = serde_yaml::to_string(&root).map_err(|_| AppError::Internal)?;
     text_response(
@@ -877,25 +1060,23 @@ pub(crate) fn render_mihomo_proxy(node: &NodeView) -> Result<Mapping, AppError> 
                 .get("type")
                 .and_then(|v| v.as_str())
                 .is_some_and(|network| network.eq_ignore_ascii_case("grpc"))
-            {
-                if let Some(service_name) = node
+                && let Some(service_name) = node
                     .settings
                     .get("grpc-service-name")
                     .and_then(|v| v.as_str())
-                    && !service_name.is_empty()
-                {
-                    map.insert(
-                        Value::String("grpc-opts".to_string()),
-                        Value::Mapping({
-                            let mut grpc = Mapping::new();
-                            grpc.insert(
-                                Value::String("grpc-service-name".to_string()),
-                                Value::String(service_name.to_string()),
-                            );
-                            grpc
-                        }),
-                    );
-                }
+                && !service_name.is_empty()
+            {
+                map.insert(
+                    Value::String("grpc-opts".to_string()),
+                    Value::Mapping({
+                        let mut grpc = Mapping::new();
+                        grpc.insert(
+                            Value::String("grpc-service-name".to_string()),
+                            Value::String(service_name.to_string()),
+                        );
+                        grpc
+                    }),
+                );
             }
             if let Some(path) = node.settings.get("path").and_then(|v| v.as_str())
                 && !path.is_empty()
@@ -1412,15 +1593,13 @@ pub(crate) fn render_sing_box_outbound(node: &NodeView) -> Result<serde_json::Va
             }
             if let Some(obfs) = node.settings.get("obfs").and_then(|v| v.as_str())
                 && obfs.eq_ignore_ascii_case("salamander")
+                && let Some(password) = node.settings.get("obfs-password").and_then(|v| v.as_str())
+                && !password.is_empty()
             {
-                if let Some(password) = node.settings.get("obfs-password").and_then(|v| v.as_str())
-                    && !password.is_empty()
-                {
-                    outbound["obfs"] = json!({
-                        "type": "salamander",
-                        "password": password
-                    });
-                }
+                outbound["obfs"] = json!({
+                    "type": "salamander",
+                    "password": password
+                });
             }
             apply_tls_config(&mut outbound, &node.settings, &node.server);
         }
@@ -1474,8 +1653,8 @@ pub(crate) fn render_surge_proxy(node: &NodeView) -> Result<SurgeRenderResult, A
 
     match node.protocol.as_str() {
         "shadowsocks" => {
-            let method = required_json_string(&node.settings, "method")?;
-            let password = required_json_string(&node.settings, "password")?;
+            let method = safe_inline_value(required_json_string(&node.settings, "method")?)?;
+            let password = safe_inline_value(required_json_string(&node.settings, "password")?)?;
             let mut line = format!(
                 "{name} = ss, {}, {}, encrypt-method={}, password={}",
                 node.server, node.port, method, password
@@ -1496,7 +1675,7 @@ pub(crate) fn render_surge_proxy(node: &NodeView) -> Result<SurgeRenderResult, A
             })
         }
         "vmess" => {
-            let uuid = required_json_string(&node.settings, "id")?;
+            let uuid = safe_inline_value(required_json_string(&node.settings, "id")?)?;
             let mut line = format!(
                 "{name} = vmess, {}, {}, username={uuid}",
                 node.server, node.port
@@ -1505,6 +1684,7 @@ pub(crate) fn render_surge_proxy(node: &NodeView) -> Result<SurgeRenderResult, A
             if let Some(cipher) = node.settings.get("scy").and_then(|v| v.as_str())
                 && !cipher.is_empty()
             {
+                let cipher = safe_inline_value(cipher)?;
                 line.push_str(&format!(", encrypt-method={cipher}"));
             }
             if let Some(network) = node.settings.get("net").and_then(|v| v.as_str())
@@ -1514,11 +1694,13 @@ pub(crate) fn render_surge_proxy(node: &NodeView) -> Result<SurgeRenderResult, A
                 if let Some(path) = node.settings.get("path").and_then(|v| v.as_str())
                     && !path.is_empty()
                 {
+                    let path = safe_inline_value(path)?;
                     line.push_str(&format!(", ws-path={path}"));
                 }
                 if let Some(host) = node.settings.get("host").and_then(|v| v.as_str())
                     && !host.is_empty()
                 {
+                    let host = safe_inline_value(host)?;
                     line.push_str(&format!(", ws-headers=Host:{host}"));
                 }
             }
@@ -1527,7 +1709,7 @@ pub(crate) fn render_surge_proxy(node: &NodeView) -> Result<SurgeRenderResult, A
             {
                 line.push_str(", vmess-aead=true");
             }
-            append_common_tls_params(&mut line, &node.settings, &node.server);
+            append_common_tls_params(&mut line, &node.settings, &node.server)?;
 
             Ok(SurgeRenderResult {
                 name,
@@ -1536,7 +1718,7 @@ pub(crate) fn render_surge_proxy(node: &NodeView) -> Result<SurgeRenderResult, A
             })
         }
         "vless" => {
-            let uuid = required_json_string(&node.settings, "uuid")?;
+            let uuid = safe_inline_value(required_json_string(&node.settings, "uuid")?)?;
             let mut line = format!(
                 "{name} = vless, {}, {}, username={uuid}",
                 node.server, node.port
@@ -1545,6 +1727,7 @@ pub(crate) fn render_surge_proxy(node: &NodeView) -> Result<SurgeRenderResult, A
             if let Some(flow) = node.settings.get("flow").and_then(|v| v.as_str())
                 && !flow.is_empty()
             {
+                let flow = safe_inline_value(flow)?;
                 line.push_str(&format!(", flow={flow}"));
             }
             if let Some(network) = node.settings.get("type").and_then(|v| v.as_str())
@@ -1554,11 +1737,13 @@ pub(crate) fn render_surge_proxy(node: &NodeView) -> Result<SurgeRenderResult, A
                 if let Some(path) = node.settings.get("path").and_then(|v| v.as_str())
                     && !path.is_empty()
                 {
+                    let path = safe_inline_value(path)?;
                     line.push_str(&format!(", ws-path={path}"));
                 }
                 if let Some(host) = node.settings.get("host").and_then(|v| v.as_str())
                     && !host.is_empty()
                 {
+                    let host = safe_inline_value(host)?;
                     line.push_str(&format!(", ws-headers=Host:{host}"));
                 }
             }
@@ -1570,19 +1755,22 @@ pub(crate) fn render_surge_proxy(node: &NodeView) -> Result<SurgeRenderResult, A
             if let Some(fp) = node.settings.get("fp").and_then(|v| v.as_str())
                 && !fp.is_empty()
             {
+                let fp = safe_inline_value(fp)?;
                 line.push_str(&format!(", client-fingerprint={fp}"));
             }
             if let Some(pbk) = node.settings.get("pbk").and_then(|v| v.as_str())
                 && !pbk.is_empty()
             {
+                let pbk = safe_inline_value(pbk)?;
                 line.push_str(&format!(", reality-public-key={pbk}"));
             }
             if let Some(sid) = node.settings.get("sid").and_then(|v| v.as_str())
                 && !sid.is_empty()
             {
+                let sid = safe_inline_value(sid)?;
                 line.push_str(&format!(", reality-short-id={sid}"));
             }
-            append_common_tls_params(&mut line, &node.settings, &node.server);
+            append_common_tls_params(&mut line, &node.settings, &node.server)?;
 
             Ok(SurgeRenderResult {
                 name,
@@ -1591,7 +1779,7 @@ pub(crate) fn render_surge_proxy(node: &NodeView) -> Result<SurgeRenderResult, A
             })
         }
         "trojan" => {
-            let password = required_json_string(&node.settings, "password")?;
+            let password = safe_inline_value(required_json_string(&node.settings, "password")?)?;
             let mut line = format!(
                 "{name} = trojan, {}, {}, password={password}",
                 node.server, node.port
@@ -1603,15 +1791,17 @@ pub(crate) fn render_surge_proxy(node: &NodeView) -> Result<SurgeRenderResult, A
                 if let Some(path) = node.settings.get("path").and_then(|v| v.as_str())
                     && !path.is_empty()
                 {
+                    let path = safe_inline_value(path)?;
                     line.push_str(&format!(", ws-path={path}"));
                 }
                 if let Some(host) = node.settings.get("host").and_then(|v| v.as_str())
                     && !host.is_empty()
                 {
+                    let host = safe_inline_value(host)?;
                     line.push_str(&format!(", ws-headers=Host:{host}"));
                 }
             }
-            append_common_tls_params(&mut line, &node.settings, &node.server);
+            append_common_tls_params(&mut line, &node.settings, &node.server)?;
 
             Ok(SurgeRenderResult {
                 name,
@@ -1620,7 +1810,7 @@ pub(crate) fn render_surge_proxy(node: &NodeView) -> Result<SurgeRenderResult, A
             })
         }
         "hysteria2" => {
-            let password = required_json_string(&node.settings, "password")?;
+            let password = safe_inline_value(required_json_string(&node.settings, "password")?)?;
             let mut line = format!(
                 "{name} = hysteria2, {}, {}, password={password}",
                 node.server, node.port
@@ -1630,15 +1820,14 @@ pub(crate) fn render_surge_proxy(node: &NodeView) -> Result<SurgeRenderResult, A
             }
             if let Some(obfs) = node.settings.get("obfs").and_then(|v| v.as_str())
                 && obfs.eq_ignore_ascii_case("salamander")
-            {
-                if let Some(obfs_password) =
+                && let Some(obfs_password) =
                     node.settings.get("obfs-password").and_then(|v| v.as_str())
-                    && !obfs_password.is_empty()
-                {
-                    line.push_str(&format!(", salamander-password={obfs_password}"));
-                }
+                && !obfs_password.is_empty()
+            {
+                let obfs_password = safe_inline_value(obfs_password)?;
+                line.push_str(&format!(", salamander-password={obfs_password}"));
             }
-            append_common_tls_params(&mut line, &node.settings, &node.server);
+            append_common_tls_params(&mut line, &node.settings, &node.server)?;
 
             Ok(SurgeRenderResult {
                 name,
@@ -1647,7 +1836,7 @@ pub(crate) fn render_surge_proxy(node: &NodeView) -> Result<SurgeRenderResult, A
             })
         }
         "tuic" => {
-            let token = required_json_string(&node.settings, "password")?;
+            let token = safe_inline_value(required_json_string(&node.settings, "password")?)?;
             let mut line = format!(
                 "{name} = tuic, {}, {}, token={token}",
                 node.server, node.port
@@ -1655,9 +1844,10 @@ pub(crate) fn render_surge_proxy(node: &NodeView) -> Result<SurgeRenderResult, A
             if let Some(alpn) = node.settings.get("alpn").and_then(|v| v.as_str())
                 && !alpn.is_empty()
             {
+                let alpn = safe_inline_value(alpn)?;
                 line.push_str(&format!(", alpn={alpn}"));
             }
-            append_common_tls_params(&mut line, &node.settings, &node.server);
+            append_common_tls_params(&mut line, &node.settings, &node.server)?;
 
             Ok(SurgeRenderResult {
                 name,
@@ -1667,8 +1857,10 @@ pub(crate) fn render_surge_proxy(node: &NodeView) -> Result<SurgeRenderResult, A
         }
         "wireguard" => {
             let section_name = format!("WG_{}", sanitize_section_name(&name));
-            let private_key = required_json_string(&node.settings, "private-key")?;
-            let public_key = required_json_string(&node.settings, "public-key")?;
+            let private_key =
+                safe_line_value(required_json_string(&node.settings, "private-key")?)?;
+            let public_key =
+                safe_inline_value(required_json_string(&node.settings, "public-key")?)?;
             let self_ip = node
                 .settings
                 .get("ip")
@@ -1690,9 +1882,11 @@ pub(crate) fn render_surge_proxy(node: &NodeView) -> Result<SurgeRenderResult, A
             let mut section = format!("[WireGuard {section_name}]\nprivate-key = {private_key}\n");
 
             if !self_ip.is_empty() {
+                let self_ip = safe_line_value(self_ip)?;
                 section.push_str(&format!("self-ip = {self_ip}\n"));
             }
             if !self_ipv6.is_empty() {
+                let self_ipv6 = safe_line_value(self_ipv6)?;
                 section.push_str(&format!("self-ip-v6 = {self_ipv6}\n"));
             }
             if let Some(mtu) = node.settings.get("mtu").and_then(json_to_i64) {
@@ -1730,8 +1924,8 @@ pub(crate) fn render_quantumult_x_proxy(node: &NodeView) -> Result<String, AppEr
             "shadowsocks={}, {}, method={}, password={}, tag={}",
             node.server,
             node.port,
-            required_json_string(&node.settings, "method")?,
-            required_json_string(&node.settings, "password")?,
+            safe_inline_value(required_json_string(&node.settings, "method")?)?,
+            safe_inline_value(required_json_string(&node.settings, "password")?)?,
             tag
         )),
         "vmess" => {
@@ -1739,10 +1933,10 @@ pub(crate) fn render_quantumult_x_proxy(node: &NodeView) -> Result<String, AppEr
                 "vmess={}, {}, method=none, password={}, tag={}",
                 node.server,
                 node.port,
-                required_json_string(&node.settings, "id")?,
+                safe_inline_value(required_json_string(&node.settings, "id")?)?,
                 tag
             );
-            append_quanx_v2ray_options(&mut line, &node.settings, &node.server);
+            append_quanx_v2ray_options(&mut line, &node.settings, &node.server)?;
             Ok(line)
         }
         "vless" => {
@@ -1750,15 +1944,16 @@ pub(crate) fn render_quantumult_x_proxy(node: &NodeView) -> Result<String, AppEr
                 "vless={}, {}, method=none, password={}, tag={}",
                 node.server,
                 node.port,
-                required_json_string(&node.settings, "uuid")?,
+                safe_inline_value(required_json_string(&node.settings, "uuid")?)?,
                 tag
             );
             if let Some(flow) = node.settings.get("flow").and_then(|v| v.as_str())
                 && !flow.is_empty()
             {
+                let flow = safe_inline_value(flow)?;
                 line.push_str(&format!(", flow={flow}"));
             }
-            append_quanx_v2ray_options(&mut line, &node.settings, &node.server);
+            append_quanx_v2ray_options(&mut line, &node.settings, &node.server)?;
             Ok(line)
         }
         "trojan" => {
@@ -1766,10 +1961,10 @@ pub(crate) fn render_quantumult_x_proxy(node: &NodeView) -> Result<String, AppEr
                 "trojan={}, {}, password={}, tag={}",
                 node.server,
                 node.port,
-                required_json_string(&node.settings, "password")?,
+                safe_inline_value(required_json_string(&node.settings, "password")?)?,
                 tag
             );
-            append_quanx_v2ray_options(&mut line, &node.settings, &node.server);
+            append_quanx_v2ray_options(&mut line, &node.settings, &node.server)?;
             Ok(line)
         }
         "hysteria2" => {
@@ -1777,12 +1972,13 @@ pub(crate) fn render_quantumult_x_proxy(node: &NodeView) -> Result<String, AppEr
                 "hysteria2={}, {}, password={}, tag={}",
                 node.server,
                 node.port,
-                required_json_string(&node.settings, "password")?,
+                safe_inline_value(required_json_string(&node.settings, "password")?)?,
                 tag
             );
             if let Some(sni) = node.settings.get("sni").and_then(|v| v.as_str())
                 && !sni.is_empty()
             {
+                let sni = safe_inline_value(sni)?;
                 line.push_str(&format!(", server_check_url=https://{sni}/"));
             }
             Ok(line)
@@ -1794,7 +1990,11 @@ pub(crate) fn render_quantumult_x_proxy(node: &NodeView) -> Result<String, AppEr
     }
 }
 
-fn append_quanx_v2ray_options(line: &mut String, settings: &serde_json::Value, server: &str) {
+fn append_quanx_v2ray_options(
+    line: &mut String,
+    settings: &serde_json::Value,
+    server: &str,
+) -> Result<(), AppError> {
     let network = settings
         .get("type")
         .and_then(|v| v.as_str())
@@ -1807,11 +2007,13 @@ fn append_quanx_v2ray_options(line: &mut String, settings: &serde_json::Value, s
         if let Some(path) = settings.get("path").and_then(|v| v.as_str())
             && !path.is_empty()
         {
+            let path = safe_inline_value(path)?;
             line.push_str(&format!(", obfs-uri={path}"));
         }
         if let Some(host) = settings.get("host").and_then(|v| v.as_str())
             && !host.is_empty()
         {
+            let host = safe_inline_value(host)?;
             line.push_str(&format!(", obfs-host={host}"));
         }
     }
@@ -1825,6 +2027,7 @@ fn append_quanx_v2ray_options(line: &mut String, settings: &serde_json::Value, s
         && !sni.is_empty()
         && sni != server
     {
+        let sni = safe_inline_value(sni)?;
         line.push_str(&format!(", tls-host={sni}"));
     }
     if let Some(insecure) = settings.get("insecure").and_then(json_to_bool)
@@ -1835,26 +2038,62 @@ fn append_quanx_v2ray_options(line: &mut String, settings: &serde_json::Value, s
     if let Some(pbk) = settings.get("pbk").and_then(|v| v.as_str())
         && !pbk.is_empty()
     {
+        let pbk = safe_inline_value(pbk)?;
         line.push_str(&format!(", reality-public-key={pbk}"));
     }
     if let Some(sid) = settings.get("sid").and_then(|v| v.as_str())
         && !sid.is_empty()
     {
+        let sid = safe_inline_value(sid)?;
         line.push_str(&format!(", reality-short-id={sid}"));
     }
+    Ok(())
 }
 
-fn append_common_tls_params(line: &mut String, settings: &serde_json::Value, server: &str) {
-    if let Some(sni) = settings.get("sni").and_then(|v| v.as_str()) {
-        if !sni.is_empty() && sni != server {
-            line.push_str(&format!(", sni={sni}"));
-        }
+fn append_common_tls_params(
+    line: &mut String,
+    settings: &serde_json::Value,
+    server: &str,
+) -> Result<(), AppError> {
+    if let Some(sni) = settings.get("sni").and_then(|v| v.as_str())
+        && !sni.is_empty()
+        && sni != server
+    {
+        let sni = safe_inline_value(sni)?;
+        line.push_str(&format!(", sni={sni}"));
     }
     if let Some(insecure) = settings.get("insecure").and_then(json_to_bool)
         && insecure
     {
         line.push_str(", skip-cert-verify=true");
     }
+    Ok(())
+}
+
+fn safe_inline_value(value: impl AsRef<str>) -> Result<String, AppError> {
+    let value = value.as_ref();
+    if value
+        .chars()
+        .any(|ch| ch == ',' || ch == '\r' || ch == '\n' || ch.is_control())
+    {
+        return Err(AppError::BadRequest(
+            "node setting contains characters that are unsafe for line-based exports".to_string(),
+        ));
+    }
+    Ok(value.to_string())
+}
+
+fn safe_line_value(value: impl AsRef<str>) -> Result<String, AppError> {
+    let value = value.as_ref();
+    if value
+        .chars()
+        .any(|ch| ch == '\r' || ch == '\n' || ch.is_control())
+    {
+        return Err(AppError::BadRequest(
+            "node setting contains characters that are unsafe for line-based exports".to_string(),
+        ));
+    }
+    Ok(value.to_string())
 }
 
 fn canonical_export_target(target: &str) -> Result<&'static str, AppError> {
@@ -1940,10 +2179,17 @@ fn parse_yaml_template(
 }
 
 fn built_in_clash_routing_template() -> Result<&'static str, AppError> {
-    let section = CLASH_ROUTING_TEMPLATE_DOC
-        .find("## ACL4SSR-Style Full Routing Template")
-        .map(|section_start| &CLASH_ROUTING_TEMPLATE_DOC[section_start..])
-        .unwrap_or(CLASH_ROUTING_TEMPLATE_DOC);
+    let section = [
+        "## ACL4SSR 风格完整分流模板",
+        "## ACL4SSR-Style Full Routing Template",
+    ]
+    .iter()
+    .find_map(|heading| {
+        CLASH_ROUTING_TEMPLATE_DOC
+            .find(heading)
+            .map(|section_start| &CLASH_ROUTING_TEMPLATE_DOC[section_start..])
+    })
+    .unwrap_or(CLASH_ROUTING_TEMPLATE_DOC);
     let yaml_start_marker = "```yaml";
     let yaml_start = section.find(yaml_start_marker).ok_or_else(|| {
         AppError::BadRequest("built-in Clash routing template is missing a YAML block".to_string())
@@ -1993,6 +2239,290 @@ fn is_upstream_mihomo_template(content: &str) -> bool {
             Some(marker && has_proxies)
         })
         .unwrap_or(false)
+}
+
+pub(crate) fn dedupe_mihomo_proxy_names(root: &mut Mapping) {
+    let proxy_key = Value::String("proxies".to_string());
+    let name_key = Value::String("name".to_string());
+    let mut used_names = HashSet::new();
+    let mut aliases: HashMap<String, Vec<String>> = HashMap::new();
+
+    if let Some(Value::Sequence(proxies)) = root.get_mut(&proxy_key) {
+        for proxy in proxies {
+            let Some(mapping) = proxy.as_mapping_mut() else {
+                continue;
+            };
+            let Some(original_name) = mapping
+                .get(&name_key)
+                .and_then(Value::as_str)
+                .map(str::to_string)
+            else {
+                continue;
+            };
+
+            let unique_name = unique_mihomo_proxy_name(&original_name, &mut used_names);
+            if unique_name != original_name {
+                mapping.insert(name_key.clone(), Value::String(unique_name.clone()));
+            }
+            aliases.entry(original_name).or_default().push(unique_name);
+        }
+    }
+
+    expand_mihomo_proxy_group_refs(root, &aliases);
+}
+
+fn collect_mihomo_proxy_names(root: &Mapping) -> HashSet<String> {
+    root.get(Value::String("proxies".to_string()))
+        .and_then(Value::as_sequence)
+        .map(|proxies| {
+            proxies
+                .iter()
+                .filter_map(|proxy| {
+                    proxy
+                        .as_mapping()
+                        .and_then(|mapping| mapping.get(Value::String("name".to_string())))
+                        .and_then(Value::as_str)
+                        .map(str::to_string)
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn unique_mihomo_proxy_name(base: &str, used_names: &mut HashSet<String>) -> String {
+    let normalized = {
+        let trimmed = base.trim();
+        if trimmed.is_empty() { "Proxy" } else { trimmed }
+    };
+
+    if used_names.insert(normalized.to_string()) {
+        return normalized.to_string();
+    }
+
+    for index in 2.. {
+        let candidate = format!("{normalized} #{index}");
+        if used_names.insert(candidate.clone()) {
+            return candidate;
+        }
+    }
+
+    unreachable!("unbounded proxy name allocator must return before usize overflow")
+}
+
+fn expand_mihomo_proxy_group_refs(root: &mut Mapping, aliases: &HashMap<String, Vec<String>>) {
+    if aliases.is_empty() {
+        return;
+    }
+
+    let groups_key = Value::String("proxy-groups".to_string());
+    let proxies_key = Value::String("proxies".to_string());
+    let Some(Value::Sequence(groups)) = root.get_mut(&groups_key) else {
+        return;
+    };
+
+    for group in groups {
+        let Some(mapping) = group.as_mapping_mut() else {
+            continue;
+        };
+        let Some(Value::Sequence(members)) = mapping.get_mut(&proxies_key) else {
+            continue;
+        };
+
+        let mut seen = HashSet::new();
+        let mut rewritten = Vec::with_capacity(members.len());
+        for member in members.iter() {
+            if let Some(name) = member.as_str() {
+                if let Some(replacements) = aliases.get(name) {
+                    for replacement in replacements {
+                        if seen.insert(replacement.clone()) {
+                            rewritten.push(Value::String(replacement.clone()));
+                        }
+                    }
+                } else if seen.insert(name.to_string()) {
+                    rewritten.push(Value::String(name.to_string()));
+                }
+            } else {
+                rewritten.push(member.clone());
+            }
+        }
+
+        *members = rewritten;
+    }
+}
+
+fn expand_mihomo_include_all_proxy_groups(root: &mut Mapping, proxy_names: &[String]) {
+    let groups_key = Value::String("proxy-groups".to_string());
+    let proxies_key = Value::String("proxies".to_string());
+    let include_all_key = Value::String("include-all-proxies".to_string());
+    let Some(Value::Sequence(groups)) = root.get_mut(&groups_key) else {
+        return;
+    };
+
+    for group in groups {
+        let Some(mapping) = group.as_mapping_mut() else {
+            continue;
+        };
+        let include_all = mapping
+            .get(&include_all_key)
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        if !include_all {
+            continue;
+        }
+
+        let members = mapping
+            .entry(proxies_key.clone())
+            .or_insert_with(|| Value::Sequence(Vec::new()));
+        let Value::Sequence(members) = members else {
+            continue;
+        };
+
+        append_unique_proxy_group_members(members, proxy_names);
+        mapping.remove(&include_all_key);
+    }
+}
+
+fn append_unique_proxy_group_members(members: &mut Vec<Value>, proxy_names: &[String]) {
+    let mut seen = members
+        .iter()
+        .filter_map(Value::as_str)
+        .map(str::to_string)
+        .collect::<HashSet<_>>();
+
+    for proxy_name in proxy_names {
+        if seen.insert(proxy_name.clone()) {
+            members.push(Value::String(proxy_name.clone()));
+        }
+    }
+}
+
+fn ensure_mihomo_default_proxy_groups(root: &mut Mapping, proxy_names: &[String]) {
+    let groups_key = Value::String("proxy-groups".to_string());
+    let has_groups = root
+        .get(&groups_key)
+        .and_then(Value::as_sequence)
+        .is_some_and(|groups| !groups.is_empty());
+
+    if !has_groups {
+        root.insert(
+            groups_key,
+            Value::Sequence(vec![
+                Value::Mapping(mihomo_proxy_select_group(proxy_names)),
+                Value::Mapping(mihomo_auto_proxy_group(proxy_names)),
+            ]),
+        );
+        return;
+    }
+
+    if !mihomo_proxy_group_exists(root, "AUTO") {
+        yaml_push_sequence(
+            root,
+            "proxy-groups",
+            vec![Value::Mapping(mihomo_auto_proxy_group(proxy_names))],
+        );
+    }
+}
+
+fn mihomo_proxy_group_exists(root: &Mapping, name: &str) -> bool {
+    root.get(Value::String("proxy-groups".to_string()))
+        .and_then(Value::as_sequence)
+        .is_some_and(|groups| {
+            groups.iter().any(|group| {
+                group
+                    .as_mapping()
+                    .and_then(|mapping| mapping.get(Value::String("name".to_string())))
+                    .and_then(Value::as_str)
+                    .is_some_and(|group_name| group_name == name)
+            })
+        })
+}
+
+fn mihomo_first_proxy_group_name(root: &Mapping) -> Option<String> {
+    root.get(Value::String("proxy-groups".to_string()))
+        .and_then(Value::as_sequence)
+        .and_then(|groups| {
+            groups.iter().find_map(|group| {
+                group
+                    .as_mapping()
+                    .and_then(|mapping| mapping.get(Value::String("name".to_string())))
+                    .and_then(Value::as_str)
+                    .map(str::to_string)
+            })
+        })
+}
+
+fn ensure_mihomo_match_rule(root: &mut Mapping) {
+    let rules_key = Value::String("rules".to_string());
+    let has_rules = root
+        .get(&rules_key)
+        .and_then(Value::as_sequence)
+        .is_some_and(|rules| !rules.is_empty());
+    if has_rules {
+        return;
+    }
+
+    let target_group = if mihomo_proxy_group_exists(root, "PROXY") {
+        "PROXY".to_string()
+    } else if mihomo_proxy_group_exists(root, "AUTO") {
+        "AUTO".to_string()
+    } else if let Some(group_name) = mihomo_first_proxy_group_name(root) {
+        group_name
+    } else {
+        "DIRECT".to_string()
+    };
+
+    root.insert(
+        rules_key,
+        Value::Sequence(vec![Value::String(format!("MATCH,{target_group}"))]),
+    );
+}
+
+fn mihomo_proxy_select_group(proxy_names: &[String]) -> Mapping {
+    let mut members = vec![
+        Value::String("AUTO".to_string()),
+        Value::String("DIRECT".to_string()),
+    ];
+    append_unique_proxy_group_members(&mut members, proxy_names);
+
+    let mut group = Mapping::new();
+    group.insert(
+        Value::String("name".to_string()),
+        Value::String("PROXY".to_string()),
+    );
+    group.insert(
+        Value::String("type".to_string()),
+        Value::String("select".to_string()),
+    );
+    group.insert(
+        Value::String("proxies".to_string()),
+        Value::Sequence(members),
+    );
+    group
+}
+
+fn mihomo_auto_proxy_group(proxy_names: &[String]) -> Mapping {
+    let mut group = Mapping::new();
+    group.insert(
+        Value::String("name".to_string()),
+        Value::String("AUTO".to_string()),
+    );
+    group.insert(
+        Value::String("type".to_string()),
+        Value::String("url-test".to_string()),
+    );
+    group.insert(
+        Value::String("proxies".to_string()),
+        Value::Sequence(proxy_names.iter().cloned().map(Value::String).collect()),
+    );
+    group.insert(
+        Value::String("url".to_string()),
+        Value::String(MIHOMO_DEFAULT_DELAY_TEST_URL.to_string()),
+    );
+    group.insert(
+        Value::String("interval".to_string()),
+        Value::Number(300.into()),
+    );
+    group
 }
 
 fn yaml_push_sequence(root: &mut Mapping, key: &str, values: Vec<Value>) {
@@ -2180,12 +2710,11 @@ fn apply_v2ray_transport(outbound: &mut serde_json::Value, settings: &serde_json
             {
                 outbound["transport"]["headers"] = json!({ "Host": host });
             }
-        } else if network.eq_ignore_ascii_case("grpc") {
-            if let Some(service_name) = settings.get("grpc-service-name").and_then(|v| v.as_str())
-                && !service_name.is_empty()
-            {
-                outbound["transport"]["service_name"] = json!(service_name);
-            }
+        } else if network.eq_ignore_ascii_case("grpc")
+            && let Some(service_name) = settings.get("grpc-service-name").and_then(|v| v.as_str())
+            && !service_name.is_empty()
+        {
+            outbound["transport"]["service_name"] = json!(service_name);
         }
     }
 }
@@ -2399,6 +2928,17 @@ fn text_response(
             .map_err(|_| AppError::Internal)?,
     );
     response.headers_mut().insert(
+        header::CACHE_CONTROL,
+        HeaderValue::from_static("no-store, no-cache, must-revalidate, max-age=0"),
+    );
+    response
+        .headers_mut()
+        .insert(header::PRAGMA, HeaderValue::from_static("no-cache"));
+    response.headers_mut().insert(
+        HeaderName::from_static("referrer-policy"),
+        HeaderValue::from_static("no-referrer"),
+    );
+    response.headers_mut().insert(
         HeaderName::from_static("x-sublinkx-export-mode"),
         HeaderValue::from_static(match mode {
             ExportMode::Strict => "strict",
@@ -2434,4 +2974,275 @@ fn ascii_filename_fallback(filename: &str) -> String {
     };
 
     format!("subscription.{safe_extension}")
+}
+
+#[cfg(test)]
+mod tests {
+    use axum::http::header;
+
+    use super::{
+        ExportMode, MIHOMO_DEFAULT_DELAY_TEST_URL, dedupe_mihomo_proxy_names,
+        ensure_mihomo_default_proxy_groups, ensure_mihomo_match_rule,
+        expand_mihomo_include_all_proxy_groups, mihomo_proxy_group_exists, safe_inline_value,
+        safe_line_value, text_response, unique_mihomo_proxy_name,
+    };
+    use serde_yaml::Value;
+    use std::collections::HashSet;
+
+    #[test]
+    fn rejects_inline_export_delimiters() {
+        assert!(safe_inline_value("secret, udp-relay=true").is_err());
+        assert!(safe_inline_value("secret\nProxy = direct").is_err());
+    }
+
+    #[test]
+    fn rejects_line_breaks_in_section_values() {
+        assert!(safe_line_value("private-key\npeer = injected").is_err());
+    }
+
+    #[test]
+    fn export_response_disables_cache_and_referrers() {
+        let response = text_response(
+            "proxy config".to_string(),
+            "text/plain; charset=utf-8",
+            "subscription.txt",
+            ExportMode::Strict,
+            0,
+        )
+        .unwrap();
+
+        assert_eq!(
+            response
+                .headers()
+                .get(header::CACHE_CONTROL)
+                .and_then(|value| value.to_str().ok()),
+            Some("no-store, no-cache, must-revalidate, max-age=0")
+        );
+        assert_eq!(
+            response
+                .headers()
+                .get("referrer-policy")
+                .and_then(|value| value.to_str().ok()),
+            Some("no-referrer")
+        );
+    }
+
+    #[test]
+    fn dedupes_mihomo_proxy_names_and_expands_group_refs() {
+        let value = serde_yaml::from_str::<Value>(
+            r#"
+proxies:
+  - name: JP 日本01[HY2]
+    type: hysteria2
+    server: one.example
+    port: 443
+  - name: JP 日本01[HY2]
+    type: hysteria2
+    server: two.example
+    port: 443
+proxy-groups:
+  - name: AUTO
+    type: select
+    proxies:
+      - JP 日本01[HY2]
+"#,
+        )
+        .unwrap();
+        let mut root = value.as_mapping().unwrap().clone();
+
+        dedupe_mihomo_proxy_names(&mut root);
+
+        let proxies = root
+            .get(Value::String("proxies".to_string()))
+            .and_then(Value::as_sequence)
+            .unwrap();
+        let names = proxies
+            .iter()
+            .map(|proxy| {
+                proxy
+                    .as_mapping()
+                    .unwrap()
+                    .get(Value::String("name".to_string()))
+                    .and_then(Value::as_str)
+                    .unwrap()
+                    .to_string()
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(names, vec!["JP 日本01[HY2]", "JP 日本01[HY2] #2"]);
+
+        let group_members = root
+            .get(Value::String("proxy-groups".to_string()))
+            .and_then(Value::as_sequence)
+            .and_then(|groups| groups.first())
+            .and_then(Value::as_mapping)
+            .and_then(|group| group.get(Value::String("proxies".to_string())))
+            .and_then(Value::as_sequence)
+            .unwrap()
+            .iter()
+            .map(|member| member.as_str().unwrap().to_string())
+            .collect::<Vec<_>>();
+        assert_eq!(group_members, vec!["JP 日本01[HY2]", "JP 日本01[HY2] #2"]);
+    }
+
+    #[test]
+    fn allocates_next_available_mihomo_proxy_name() {
+        let mut used = HashSet::from(["Proxy".to_string(), "Proxy #2".to_string()]);
+
+        assert_eq!(unique_mihomo_proxy_name("Proxy", &mut used), "Proxy #3");
+        assert_eq!(unique_mihomo_proxy_name("", &mut used), "Proxy #4");
+    }
+
+    #[test]
+    fn expands_include_all_proxy_groups_to_explicit_members() {
+        let value = serde_yaml::from_str::<Value>(
+            r#"
+proxy-groups:
+  - name: PROXY
+    type: select
+    include-all-proxies: true
+    proxies:
+      - AUTO
+      - DIRECT
+  - name: AUTO
+    type: url-test
+    include-all-proxies: true
+"#,
+        )
+        .unwrap();
+        let mut root = value.as_mapping().unwrap().clone();
+        let proxy_names = vec![
+            "JP 日本01[HY2]".to_string(),
+            "JP 日本02[HY2]".to_string(),
+            "JP 日本03[HY2]".to_string(),
+        ];
+
+        expand_mihomo_include_all_proxy_groups(&mut root, &proxy_names);
+
+        assert!(mihomo_proxy_group_exists(&root, "AUTO"));
+        let groups = root
+            .get(Value::String("proxy-groups".to_string()))
+            .and_then(Value::as_sequence)
+            .unwrap();
+        let proxy_group = groups
+            .first()
+            .and_then(Value::as_mapping)
+            .expect("PROXY group should be present");
+        assert!(
+            proxy_group
+                .get(Value::String("include-all-proxies".to_string()))
+                .is_none()
+        );
+        let members = proxy_group
+            .get(Value::String("proxies".to_string()))
+            .and_then(Value::as_sequence)
+            .unwrap()
+            .iter()
+            .map(|member| member.as_str().unwrap().to_string())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            members,
+            vec![
+                "AUTO",
+                "DIRECT",
+                "JP 日本01[HY2]",
+                "JP 日本02[HY2]",
+                "JP 日本03[HY2]"
+            ]
+        );
+    }
+
+    #[test]
+    fn creates_url_test_auto_group_for_plain_mihomo_exports() {
+        let mut root = serde_yaml::from_str::<Value>("{}\n")
+            .unwrap()
+            .as_mapping()
+            .unwrap()
+            .clone();
+        let proxy_names = vec!["JP 日本01[HY2]".to_string(), "JP 日本02[HY2]".to_string()];
+
+        ensure_mihomo_default_proxy_groups(&mut root, &proxy_names);
+        ensure_mihomo_match_rule(&mut root);
+
+        let groups = root
+            .get(Value::String("proxy-groups".to_string()))
+            .and_then(Value::as_sequence)
+            .unwrap();
+        let proxy_group = groups.first().and_then(Value::as_mapping).unwrap();
+        assert_eq!(
+            proxy_group
+                .get(Value::String("name".to_string()))
+                .and_then(Value::as_str),
+            Some("PROXY")
+        );
+        assert_eq!(
+            proxy_group
+                .get(Value::String("type".to_string()))
+                .and_then(Value::as_str),
+            Some("select")
+        );
+
+        let auto_group = groups.get(1).and_then(Value::as_mapping).unwrap();
+        assert_eq!(
+            auto_group
+                .get(Value::String("name".to_string()))
+                .and_then(Value::as_str),
+            Some("AUTO")
+        );
+        assert_eq!(
+            auto_group
+                .get(Value::String("type".to_string()))
+                .and_then(Value::as_str),
+            Some("url-test")
+        );
+        assert_eq!(
+            auto_group
+                .get(Value::String("url".to_string()))
+                .and_then(Value::as_str),
+            Some(MIHOMO_DEFAULT_DELAY_TEST_URL)
+        );
+
+        let rules = root
+            .get(Value::String("rules".to_string()))
+            .and_then(Value::as_sequence)
+            .unwrap();
+        assert_eq!(rules.first().and_then(Value::as_str), Some("MATCH,PROXY"));
+    }
+
+    #[test]
+    fn keeps_existing_mihomo_template_rules() {
+        let value = serde_yaml::from_str::<Value>(
+            r#"
+proxy-groups:
+  - name: Custom
+    type: select
+    proxies:
+      - DIRECT
+rules:
+  - MATCH,Custom
+"#,
+        )
+        .unwrap();
+        let mut root = value.as_mapping().unwrap().clone();
+
+        ensure_mihomo_default_proxy_groups(&mut root, &["Proxy".to_string()]);
+        ensure_mihomo_match_rule(&mut root);
+
+        let rules = root
+            .get(Value::String("rules".to_string()))
+            .and_then(Value::as_sequence)
+            .unwrap();
+        assert_eq!(rules.len(), 1);
+        assert_eq!(rules.first().and_then(Value::as_str), Some("MATCH,Custom"));
+    }
+
+    #[test]
+    fn built_in_clash_template_avoids_geoip_database_dependency() {
+        let template = super::built_in_clash_routing_template().unwrap();
+
+        assert!(!template.contains("GEOIP,CN"));
+        assert!(!template.contains("fallback-filter:"));
+        assert!(!template.contains("\n  fallback:\n"));
+        assert!(template.contains("RULE-SET,proxygfw,节点选择"));
+        assert!(template.contains("MATCH,漏网之鱼"));
+    }
 }

@@ -1,15 +1,16 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from 'vue'
-import { extractApiError } from '../api/client'
+import { extractApiError, extractApiErrorCode } from '../api/client'
 import { useI18n } from '../i18n'
 import {
   createNode,
+  cancelAutoLatency,
   deleteNode,
   importNodesFromSubscription,
   listNodes,
   moveNodes,
   testNodeLatency,
-  testNodeLatencyBatch,
+  testNodeLatencyBatchStream,
   updateNode,
   type NodeLatencyResult,
   type NodeItem,
@@ -64,6 +65,8 @@ const errorMessage = ref('')
 const successMessage = ref('')
 const latencyResults = ref<Record<number, NodeLatencyResult>>({})
 const testingLatencyIds = ref<number[]>([])
+
+class ManualLatencyCancelledError extends Error {}
 
 const form = reactive({
   name: '',
@@ -277,6 +280,48 @@ function nodeRowClass(item: NodeItem) {
   }
 }
 
+function delay(ms: number) {
+  return new Promise((resolve) => window.setTimeout(resolve, ms))
+}
+
+function isLatencyAutoRunningError(error: unknown) {
+  return extractApiErrorCode(error) === 'latency_auto_running'
+}
+
+function isManualLatencyCancelled(error: unknown) {
+  return error instanceof ManualLatencyCancelledError
+}
+
+async function runManualLatencyRequest<T>(operation: () => Promise<T>): Promise<T> {
+  try {
+    return await operation()
+  } catch (error) {
+    if (!isLatencyAutoRunningError(error)) {
+      throw error
+    }
+
+    if (!window.confirm(t('confirmStopAutoLatency'))) {
+      throw new ManualLatencyCancelledError()
+    }
+
+    await cancelAutoLatency()
+    let lastError: unknown = error
+    for (let attempt = 0; attempt < 10; attempt += 1) {
+      await delay(300)
+      try {
+        return await operation()
+      } catch (retryError) {
+        if (!isLatencyAutoRunningError(retryError)) {
+          throw retryError
+        }
+        lastError = retryError
+      }
+    }
+
+    throw lastError
+  }
+}
+
 function groupName(groupId: number | null) {
   if (groupId === null) {
     return t('ungrouped')
@@ -391,12 +436,15 @@ async function testLatency(item: NodeItem) {
   errorMessage.value = ''
 
   try {
-    const response = await testNodeLatency(item.id)
+    const response = await runManualLatencyRequest(() => testNodeLatency(item.id))
     setLatencyResult(response.data)
     if (response.data.status !== 'ok') {
       errorMessage.value = t('latencyFailed', { name: item.name, message: response.data.message ?? response.data.status })
     }
   } catch (error) {
+    if (isManualLatencyCancelled(error)) {
+      return
+    }
     errorMessage.value = formatLatencyApiError(error)
   } finally {
     testingLatencyIds.value = testingLatencyIds.value.filter((id) => id !== item.id)
@@ -413,14 +461,21 @@ async function testSelectedLatencies() {
   successMessage.value = ''
 
   try {
-    const response = await testNodeLatencyBatch(ids)
-    for (const result of response.data) {
-      setLatencyResult(result)
-    }
-    const okCount = response.data.filter((item) => item.status === 'ok').length
-    const failedCount = response.data.length - okCount
+    const results: NodeLatencyResult[] = []
+    await runManualLatencyRequest(() =>
+      testNodeLatencyBatchStream(ids, (result) => {
+        results.push(result)
+        setLatencyResult(result)
+        testingLatencyIds.value = testingLatencyIds.value.filter((id) => id !== result.id)
+      }),
+    )
+    const okCount = results.filter((item) => item.status === 'ok').length
+    const failedCount = results.length - okCount
     successMessage.value = t('latencyBatchDone', { ok: okCount, failed: failedCount })
   } catch (error) {
+    if (isManualLatencyCancelled(error)) {
+      return
+    }
     errorMessage.value = formatLatencyApiError(error)
   } finally {
     testingLatencyIds.value = testingLatencyIds.value.filter((id) => !ids.includes(id))

@@ -3,9 +3,11 @@ import {
   changeCredentialsRequest,
   fetchMeRequest,
   loginRequest,
+  logoutRequest,
   type ChangeCredentialsPayload,
   type LoginPayload,
 } from '../api/auth'
+import { clearAuthToken, readAuthToken, readCsrfToken, writeCsrfToken } from '../utils/authToken'
 
 export interface AuthUser {
   user_id: number
@@ -16,23 +18,23 @@ export interface AuthUser {
   must_change_credentials: boolean
 }
 
-const TOKEN_KEY = 'sublinkx_rs_token'
-
 export const useAuthStore = defineStore('auth', {
   state: () => ({
-    token: localStorage.getItem(TOKEN_KEY) ?? '',
+    token: readCsrfToken() || readAuthToken(),
     user: null as AuthUser | null,
   }),
   actions: {
     async login(payload: LoginPayload) {
       const response = await loginRequest(payload)
-      this.token = response.data.access_token
+      const csrfToken = response.data.csrf_token
+      this.token = csrfToken
       this.user = response.data.user
-      localStorage.setItem(TOKEN_KEY, this.token)
+      writeCsrfToken(csrfToken)
     },
     async changeCredentials(payload: ChangeCredentialsPayload) {
       const response = await changeCredentialsRequest(payload)
       this.user = response.data
+      this.token = readCsrfToken()
       return response.data
     },
     async fetchMe() {
@@ -43,9 +45,14 @@ export const useAuthStore = defineStore('auth', {
     clearAuth() {
       this.token = ''
       this.user = null
-      localStorage.removeItem(TOKEN_KEY)
+      clearAuthToken()
+    },
+    async logout() {
+      try {
+        await logoutRequest()
+      } finally {
+        this.clearAuth()
+      }
     },
   },
 })
-
-export { TOKEN_KEY }

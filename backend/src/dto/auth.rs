@@ -22,10 +22,14 @@ pub struct LoginResponse {
 
 #[derive(Debug, Serialize)]
 pub struct LoginTokenData {
-    pub access_token: String,
-    pub token_type: &'static str,
+    pub csrf_token: String,
     pub expires_in_hours: i64,
     pub user: MeData,
+}
+
+#[derive(Debug, Serialize)]
+pub struct LogoutResponse {
+    pub code: &'static str,
 }
 
 #[derive(Debug, Serialize)]

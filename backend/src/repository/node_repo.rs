@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use sqlx::{Any, QueryBuilder};
 
 use crate::db::DbPool;
@@ -17,6 +19,7 @@ pub struct NewNodeRecord<'a> {
     pub port: i64,
     pub enabled: i64,
     pub group_id: Option<i64>,
+    pub fingerprint_scope: i64,
     pub source_type: &'a str,
     pub source_ref: Option<&'a str>,
     pub fingerprint: &'a str,
@@ -34,6 +37,7 @@ pub struct UpdateNodeRecord<'a> {
     pub port: i64,
     pub enabled: i64,
     pub group_id: Option<i64>,
+    pub fingerprint_scope: i64,
     pub fingerprint: &'a str,
     pub settings_json: &'a str,
     pub remark: &'a str,
@@ -71,23 +75,45 @@ pub async fn find_by_id(pool: &DbPool, id: i64) -> Result<Option<NodeRecord>, sq
     .await
 }
 
-pub async fn find_by_fingerprint(
+pub async fn find_by_fingerprint_in_group(
     pool: &DbPool,
     fingerprint: &str,
+    group_id: Option<i64>,
 ) -> Result<Option<NodeRecord>, sqlx::Error> {
-    sqlx::query_as::<_, NodeRecord>(
-        r#"
-        SELECT
-               id, name, protocol, raw_link, server, port, enabled + 0 AS enabled, group_id, source_type, source_ref,
-               fingerprint, settings_json, remark, last_latency_ms, last_latency_status,
-               last_latency_message, last_latency_tested_at, created_at, updated_at
-        FROM nodes
-        WHERE fingerprint = ?
-        "#,
-    )
-    .bind(fingerprint)
-    .fetch_optional(pool)
-    .await
+    let query = format!(
+        "SELECT {NODE_SELECT_FIELDS} FROM nodes WHERE fingerprint = ? AND fingerprint_scope = ?"
+    );
+
+    sqlx::query_as::<_, NodeRecord>(&query)
+        .bind(fingerprint)
+        .bind(fingerprint_scope(group_id))
+        .fetch_optional(pool)
+        .await
+}
+
+pub async fn existing_fingerprints_in_group(
+    pool: &DbPool,
+    fingerprints: &[String],
+    group_id: Option<i64>,
+) -> Result<HashSet<String>, sqlx::Error> {
+    if fingerprints.is_empty() {
+        return Ok(HashSet::new());
+    }
+
+    let mut query =
+        QueryBuilder::<Any>::new("SELECT fingerprint FROM nodes WHERE fingerprint_scope = ");
+    query.push_bind(fingerprint_scope(group_id));
+    query.push(" AND fingerprint IN (");
+    {
+        let mut separated = query.separated(", ");
+        for fingerprint in fingerprints {
+            separated.push_bind(fingerprint);
+        }
+    }
+    query.push(")");
+
+    let rows = query.build_query_scalar::<String>().fetch_all(pool).await?;
+    Ok(rows.into_iter().collect())
 }
 
 pub async fn insert(pool: &DbPool, node: &NewNodeRecord<'_>) -> Result<NodeRecord, sqlx::Error> {
@@ -95,8 +121,8 @@ pub async fn insert(pool: &DbPool, node: &NewNodeRecord<'_>) -> Result<NodeRecor
         r#"
         INSERT INTO nodes (
             name, protocol, raw_link, server, port, enabled, group_id, source_type, source_ref,
-            fingerprint, settings_json, remark, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            fingerprint, fingerprint_scope, settings_json, remark, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         "#,
     )
     .bind(node.name)
@@ -109,6 +135,7 @@ pub async fn insert(pool: &DbPool, node: &NewNodeRecord<'_>) -> Result<NodeRecor
     .bind(node.source_type)
     .bind(node.source_ref)
     .bind(node.fingerprint)
+    .bind(node.fingerprint_scope)
     .bind(node.settings_json)
     .bind(node.remark)
     .bind(node.created_at)
@@ -116,7 +143,7 @@ pub async fn insert(pool: &DbPool, node: &NewNodeRecord<'_>) -> Result<NodeRecor
     .execute(pool)
     .await?;
 
-    find_by_fingerprint(pool, node.fingerprint)
+    find_by_fingerprint_in_group(pool, node.fingerprint, node.group_id)
         .await?
         .ok_or(sqlx::Error::RowNotFound)
 }
@@ -137,6 +164,7 @@ pub async fn update(
             enabled = ?,
             group_id = ?,
             fingerprint = ?,
+            fingerprint_scope = ?,
             settings_json = ?,
             remark = ?,
             updated_at = ?
@@ -151,6 +179,7 @@ pub async fn update(
     .bind(node.enabled)
     .bind(node.group_id)
     .bind(node.fingerprint)
+    .bind(node.fingerprint_scope)
     .bind(node.settings_json)
     .bind(node.remark)
     .bind(node.updated_at)
@@ -225,6 +254,8 @@ pub async fn update_group_for_ids(
     update.push_bind(group_id);
     update.push(", updated_at = ");
     update.push_bind(updated_at);
+    update.push(", fingerprint_scope = ");
+    update.push_bind(fingerprint_scope(group_id));
     update.push(" WHERE id IN (");
     {
         let mut separated = update.separated(", ");
@@ -246,4 +277,8 @@ pub async fn update_group_for_ids(
     }
     select.push(") ORDER BY id DESC");
     select.build_query_as::<NodeRecord>().fetch_all(pool).await
+}
+
+pub fn fingerprint_scope(group_id: Option<i64>) -> i64 {
+    group_id.unwrap_or(0)
 }

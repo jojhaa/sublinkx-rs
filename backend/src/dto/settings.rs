@@ -7,6 +7,7 @@ pub struct UpdateSettingsRequest {
     pub public_base_url: String,
     pub latency_auto_enabled: bool,
     pub latency_interval_minutes: i64,
+    pub latency_concurrency: i64,
     pub latency_core_path: String,
     pub latency_test_url: String,
     pub latency_timeout_secs: i64,

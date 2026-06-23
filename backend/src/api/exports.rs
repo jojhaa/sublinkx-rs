@@ -1,8 +1,9 @@
 use axum::{
-    extract::{Path, Query, State},
+    extract::{ConnectInfo, Path, Query, State},
     http::HeaderMap,
     response::IntoResponse,
 };
+use std::net::SocketAddr;
 
 use crate::{errors::AppError, services::export_service, state::AppState};
 
@@ -14,6 +15,7 @@ pub struct ExportQuery {
 
 pub async fn get_subscription(
     State(state): State<AppState>,
+    ConnectInfo(peer_addr): ConnectInfo<SocketAddr>,
     Path(token): Path<String>,
     Query(query): Query<ExportQuery>,
     headers: HeaderMap,
@@ -26,6 +28,8 @@ pub async fn get_subscription(
         headers
             .get("user-agent")
             .and_then(|value| value.to_str().ok()),
+        &headers,
+        Some(peer_addr.ip()),
     )
     .await
 }

@@ -1,4 +1,7 @@
 import apiClient from './client'
+import { readAuthToken, readCsrfToken } from '../utils/authToken'
+
+const apiBaseUrl = import.meta.env.VITE_API_BASE_URL || ''
 
 export interface NodeItem {
   id: number
@@ -135,4 +138,77 @@ export async function testNodeLatency(id: number) {
 export async function testNodeLatencyBatch(ids: number[]) {
   const { data } = await apiClient.post<NodeLatencyBatchResponse>('/api/v1/nodes/test-latency', { ids })
   return data
+}
+
+export async function testNodeLatencyBatchStream(ids: number[], onResult: (result: NodeLatencyResult) => void) {
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    'Cache-Control': 'no-cache',
+    Pragma: 'no-cache',
+  }
+  const token = readAuthToken()
+  const csrfToken = readCsrfToken()
+  if (token) {
+    headers.Authorization = `Bearer ${token}`
+  }
+  if (csrfToken) {
+    headers['X-CSRF-Token'] = csrfToken
+  }
+
+  const response = await fetch(`${apiBaseUrl}/api/v1/nodes/test-latency-stream`, {
+    method: 'POST',
+    credentials: 'include',
+    headers,
+    body: JSON.stringify({ ids }),
+  })
+
+  if (!response.ok) {
+    throw await fetchApiError(response)
+  }
+  if (!response.body) {
+    throw new Error('Streaming response is not available.')
+  }
+
+  const reader = response.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+  while (true) {
+    const { done, value } = await reader.read()
+    if (done) {
+      break
+    }
+
+    buffer += decoder.decode(value, { stream: true })
+    const lines = buffer.split('\n')
+    buffer = lines.pop() ?? ''
+    for (const line of lines) {
+      const trimmed = line.trim()
+      if (trimmed) {
+        onResult(JSON.parse(trimmed) as NodeLatencyResult)
+      }
+    }
+  }
+
+  buffer += decoder.decode()
+  const trimmed = buffer.trim()
+  if (trimmed) {
+    onResult(JSON.parse(trimmed) as NodeLatencyResult)
+  }
+}
+
+export async function cancelAutoLatency() {
+  const { data } = await apiClient.post<{ code: string; cancelled: boolean }>('/api/v1/nodes/auto-latency/cancel')
+  return data
+}
+
+async function fetchApiError(response: Response) {
+  let payload: { code?: string; message?: string; error?: string } = {}
+  try {
+    payload = await response.json()
+  } catch {
+    payload = {}
+  }
+  const error = new Error(payload.message ?? payload.error ?? response.statusText) as Error & { code?: string }
+  error.code = payload.code
+  return error
 }

@@ -4,6 +4,7 @@ export interface AppSettings {
   public_base_url: string
   latency_auto_enabled: boolean
   latency_interval_minutes: number
+  latency_concurrency: number
   latency_core_path: string
   latency_test_url: string
   latency_timeout_secs: number
