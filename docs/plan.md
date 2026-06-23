@@ -339,3 +339,4 @@ backend/src/protocols/
 - 部署修复：恢复历史迁移 `0006_latency_real_link_settings.sql` 的原始内容，避免已上线 SQLite 库启动时报 `Migrate(VersionMismatch(6))`；默认测速 URL 的变更保留在后续 `0012` 迁移中执行，确保历史迁移校验稳定。
 - 发布追加：重新编译并推送后端 Docker Hub `latest` 镜像；后端镜像 ID `84e71d866a83`，大小 `158MB`，digest `sha256:84e71d866a8351b25a0fac780185532afa8eeead8adf128bc9f666a7838d2cc8`。
 - 发布追加：为避免部署端 `latest` 被镜像代理或本地缓存卡住，额外推送不可变后端标签 `docker.io/jojhaa/sublinkx-rs-backend:20260623-migrate-fix`，digest 同为 `sha256:84e71d866a8351b25a0fac780185532afa8eeead8adf128bc9f666a7838d2cc8`。
+- 发布准备：项目版本号更新到 `0.1.1`，补充 `CHANGELOG.md` 的 `v0.1.1` 发布说明，覆盖安全加固、Mihomo/Clash 导出、延迟测试、订阅二维码和 Docker 部署修复。
