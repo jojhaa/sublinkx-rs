@@ -1280,6 +1280,12 @@ button {
   color: var(--accent-deep);
 }
 
+.upstream-url {
+  max-width: 520px;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
 .subscription-config-cell {
   display: flex;
   flex-wrap: wrap;

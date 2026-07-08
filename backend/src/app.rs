@@ -71,6 +71,19 @@ pub fn build_app(state: AppState) -> Router {
             axum::routing::post(api::nodes::import_from_subscription),
         )
         .route(
+            "/api/v1/upstream-subscriptions",
+            get(api::upstream_subscriptions::list).post(api::upstream_subscriptions::create),
+        )
+        .route(
+            "/api/v1/upstream-subscriptions/{id}",
+            axum::routing::put(api::upstream_subscriptions::update)
+                .delete(api::upstream_subscriptions::delete),
+        )
+        .route(
+            "/api/v1/upstream-subscriptions/{id}/import",
+            axum::routing::post(api::upstream_subscriptions::import),
+        )
+        .route(
             "/api/v1/nodes/move",
             axum::routing::post(api::nodes::move_batch),
         )

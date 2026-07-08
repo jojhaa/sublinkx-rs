@@ -1,5 +1,22 @@
 # Changelog
 
+## v0.1.2 - 2026-07-08
+
+本版本聚焦上游订阅链接管理和 Shadowsocks 上游导入兼容性。
+
+### 上游订阅管理
+
+- 新增上游订阅链接管理页面 `/upstreams`，侧边栏增加“上游订阅”入口。
+- 新增 `upstream_subscriptions` 持久化表和管理 API，支持保存、编辑、删除、手动重新导入上游订阅链接。
+- 上游订阅列表展示目标节点分组、启用状态、最近导入状态、导入/跳过/失败数量、最近导入时间和上游模板信息。
+- 节点页旧的“上游订阅导入”成功后会自动写入管理表；管理页也会从已有节点 `source_ref` 反向补齐历史导入过的上游链接。
+
+### Shadowsocks 导入修复
+
+- 修复 Mihomo YAML 上游中的 `type: ss` / `shadowsocks` 节点无法从上游订阅导入的问题。
+- Shadowsocks 解析器增强 SIP002 兼容，支持 `userinfo` Base64、尾部 `/`、`udp` query 和 `plugin` query。
+- Mihomo 再导出时保留已导入 SS 节点的 `udp` 和 `plugin` 设置，减少导入后再导出的配置丢失。
+
 ## v0.1.1 - 2026-06-23
 
 本版本聚焦已上线环境的安全加固、Mihomo/Clash 导出稳定性、延迟测试体验和 Docker 部署可靠性。

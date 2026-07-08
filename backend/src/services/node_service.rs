@@ -30,6 +30,7 @@ use crate::{
         group_repo::{self, GroupTable},
         node_repo::{self, NewNodeRecord, UpdateNodeRecord},
         template_repo,
+        upstream_subscription_repo::{self, ImportResultRecord},
     },
     state::{AppState, LatencyManualBeginError},
     utils::time::now_rfc3339,
@@ -37,7 +38,7 @@ use crate::{
 
 use super::{
     auth_service, export_service, mihomo_core_service, protocol_parser_service, settings_service,
-    url_safety,
+    upstream_subscription_service, url_safety,
 };
 
 const MAX_SUBSCRIPTION_BODY_BYTES: usize = 5 * 1024 * 1024;
@@ -232,7 +233,7 @@ pub async fn import_nodes_from_subscription(
         }
     }
 
-    Ok(NodeImportResponse {
+    let response = NodeImportResponse {
         code: "00000",
         imported: imported.len(),
         skipped,
@@ -244,7 +245,60 @@ pub async fn import_nodes_from_subscription(
         fidelity_warnings,
         data: imported,
         failures,
-    })
+    };
+
+    remember_upstream_subscription(
+        state,
+        url,
+        payload.group_id,
+        payload.remark.as_deref(),
+        &response,
+    )
+    .await?;
+
+    Ok(response)
+}
+
+async fn remember_upstream_subscription(
+    state: &AppState,
+    url: &str,
+    group_id: Option<i64>,
+    remark: Option<&str>,
+    response: &NodeImportResponse,
+) -> Result<(), AppError> {
+    let now = now_rfc3339();
+    let status = if response.failed == 0 {
+        "ok"
+    } else if response.imported > 0 || response.skipped > 0 {
+        "partial"
+    } else {
+        "error"
+    };
+    let message = format!(
+        "imported {}, skipped {}, failed {}",
+        response.imported, response.skipped, response.failed
+    );
+    let name = upstream_subscription_service::default_name_from_url(url);
+    upstream_subscription_repo::upsert_import_result_by_url(
+        &state.db,
+        &name,
+        url,
+        group_id,
+        remark.unwrap_or("").trim(),
+        &ImportResultRecord {
+            status,
+            message: &message,
+            imported: response.imported as i64,
+            skipped: response.skipped as i64,
+            failed: response.failed as i64,
+            template_id: response.template_id,
+            template_name: response.template_name.as_deref(),
+            imported_at: &now,
+        },
+    )
+    .await?;
+
+    Ok(())
 }
 
 pub async fn update_node(
@@ -1843,11 +1897,40 @@ fn extract_mihomo_yaml_links(body: &str) -> Result<Vec<String>, AppError> {
 fn mihomo_proxy_to_raw_link(proxy: &Mapping) -> Option<String> {
     let proxy_type = yaml_string(proxy, "type")?;
     match proxy_type {
+        "ss" | "shadowsocks" => mihomo_shadowsocks_to_uri(proxy),
         "vless" => mihomo_vless_to_uri(proxy),
         "trojan" => mihomo_trojan_to_uri(proxy),
         "hysteria2" | "hy2" => mihomo_hysteria2_to_uri(proxy),
         _ => None,
     }
+}
+
+fn mihomo_shadowsocks_to_uri(proxy: &Mapping) -> Option<String> {
+    let method = yaml_string(proxy, "cipher").or_else(|| yaml_string(proxy, "method"))?;
+    let password = yaml_string(proxy, "password")?;
+    let server = yaml_string(proxy, "server")?;
+    let port = yaml_i64(proxy, "port")?;
+    let name = yaml_string(proxy, "name").unwrap_or("shadowsocks");
+    let credentials = general_purpose::URL_SAFE_NO_PAD.encode(format!("{method}:{password}"));
+    let mut params = Vec::new();
+    if let Some(udp) = yaml_bool(proxy, "udp") {
+        push_param(&mut params, "udp", if udp { "true" } else { "false" });
+    }
+    push_optional_param(&mut params, "plugin", yaml_string(proxy, "plugin"));
+    let query = if params.is_empty() {
+        String::new()
+    } else {
+        format!("?{}", params.join("&"))
+    };
+
+    Some(format!(
+        "ss://{}@{}:{}{}#{}",
+        credentials,
+        server,
+        port,
+        query,
+        encode_uri_component(name)
+    ))
 }
 
 fn mihomo_vless_to_uri(proxy: &Mapping) -> Option<String> {
@@ -2110,7 +2193,9 @@ async fn ensure_group_exists(state: &AppState, group_id: Option<i64>) -> Result<
 
 #[cfg(test)]
 mod tests {
-    use super::{check_mihomo_conversion_fidelity, sanitize_mihomo_profile_yaml};
+    use super::{
+        check_mihomo_conversion_fidelity, mihomo_proxy_to_raw_link, sanitize_mihomo_profile_yaml,
+    };
     use crate::services::url_safety::validate_public_http_url;
     use serde_yaml::Value;
 
@@ -2172,6 +2257,47 @@ proxies:
         assert!(
             warnings.is_empty(),
             "unexpected fidelity warnings: {warnings:#?}"
+        );
+    }
+
+    #[test]
+    fn converts_mihomo_shadowsocks_proxy_to_importable_uri() {
+        let yaml = r#"
+name: SS Full
+type: ss
+server: ss.example.com
+port: 8388
+cipher: aes-256-gcm
+password: secret
+udp: true
+"#;
+        let proxy = serde_yaml::from_str::<Value>(yaml).unwrap();
+        let mapping = proxy.as_mapping().unwrap();
+        let link = mihomo_proxy_to_raw_link(mapping).expect("ss proxy should convert to URI");
+        let parsed = crate::services::protocol_parser_service::parse_raw_link(&link, None)
+            .expect("converted ss URI should parse");
+
+        assert_eq!(parsed.protocol.as_str(), "shadowsocks");
+        assert_eq!(parsed.name, "SS Full");
+        assert_eq!(parsed.server, "ss.example.com");
+        assert_eq!(parsed.port, 8388);
+        assert_eq!(
+            parsed
+                .settings
+                .get("method")
+                .and_then(|value| value.as_str()),
+            Some("aes-256-gcm")
+        );
+        assert_eq!(
+            parsed
+                .settings
+                .get("password")
+                .and_then(|value| value.as_str()),
+            Some("secret")
+        );
+        assert_eq!(
+            parsed.settings.get("udp").and_then(|value| value.as_str()),
+            Some("true")
         );
     }
 

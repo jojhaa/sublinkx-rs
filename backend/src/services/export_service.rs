@@ -952,6 +952,8 @@ pub(crate) fn render_mihomo_proxy(node: &NodeView) -> Result<Mapping, AppError> 
             );
             insert_json_string(&mut map, "cipher", &node.settings, "method")?;
             insert_json_string(&mut map, "password", &node.settings, "password")?;
+            insert_optional_json_bool(&mut map, "udp", &node.settings, "udp");
+            insert_optional_json_string(&mut map, "plugin", &node.settings, "plugin");
         }
         "vmess" => {
             map.insert(

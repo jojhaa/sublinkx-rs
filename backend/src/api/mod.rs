@@ -6,4 +6,5 @@ pub mod nodes;
 pub mod settings;
 pub mod subscriptions;
 pub mod templates;
+pub mod upstream_subscriptions;
 pub mod version;

@@ -30,6 +30,11 @@ const router = createRouter({
           component: () => import('../views/NodesView.vue'),
         },
         {
+          path: 'upstreams',
+          name: 'upstreams',
+          component: () => import('../views/UpstreamSubscriptionsView.vue'),
+        },
+        {
           path: 'subscriptions',
           name: 'subscriptions',
           component: () => import('../views/SubscriptionsView.vue'),

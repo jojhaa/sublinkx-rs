@@ -39,42 +39,47 @@ pub fn parse_raw_link(raw_link: &str, custom_name: Option<&str>) -> Result<Parse
 fn parse_ss(raw_link: &str, custom_name: Option<&str>) -> Result<ParsedNode, AppError> {
     let without_scheme = raw_link.trim_start_matches("ss://");
     let (main, fragment) = split_fragment(without_scheme);
-    let main = main.split('?').next().unwrap_or(main);
+    let main = main.split('?').next().unwrap_or(main).trim_end_matches('/');
 
-    let decoded = general_purpose::STANDARD
-        .decode(pad_base64(main))
-        .ok()
-        .and_then(|bytes| String::from_utf8(bytes).ok())
-        .unwrap_or_else(|| main.to_string());
+    let decoded = decode_base64(main).unwrap_or_else(|| main.to_string());
 
     let (userinfo, host_part) = decoded
-        .split_once('@')
+        .rsplit_once('@')
         .ok_or_else(|| AppError::BadRequest("invalid shadowsocks link".to_string()))?;
-    let decoded_userinfo = general_purpose::STANDARD
-        .decode(pad_base64(userinfo))
-        .ok()
-        .and_then(|bytes| String::from_utf8(bytes).ok())
-        .unwrap_or_else(|| userinfo.to_string());
+    let decoded_userinfo =
+        decode_base64(userinfo).unwrap_or_else(|| percent_decode_to_string(userinfo));
     let (method, password) = decoded_userinfo
         .split_once(':')
         .ok_or_else(|| AppError::BadRequest("invalid shadowsocks credentials".to_string()))?;
-    let (server, port) = split_host_port(host_part)?;
+    let (server, port) = split_host_port(host_part.trim_end_matches('/'))?;
     let name = node_name(custom_name, fragment, "shadowsocks");
+    let query = Url::parse(raw_link).ok().map(|url| query_map(&url));
 
     let fingerprint = fingerprint(
         "shadowsocks",
         &format!("{method}|{password}|{server}|{port}"),
     );
+    let mut settings = json!({
+        "method": method,
+        "password": password
+    });
+    if let Some(settings) = settings.as_object_mut()
+        && let Some(query) = query
+    {
+        if let Some(udp) = query.get("udp") {
+            settings.insert("udp".to_string(), json!(udp));
+        }
+        if let Some(plugin) = query.get("plugin") {
+            settings.insert("plugin".to_string(), json!(plugin));
+        }
+    }
 
     Ok(ParsedNode {
         protocol: Protocol::Shadowsocks,
         name,
         server: server.to_string(),
         port,
-        settings: json!({
-            "method": method,
-            "password": password
-        }),
+        settings,
         fingerprint,
     })
 }
@@ -396,6 +401,20 @@ fn decode_name(input: &str) -> String {
         .unwrap_or_else(|_| input.trim().to_string())
 }
 
+fn decode_base64(input: &str) -> Option<String> {
+    general_purpose::STANDARD
+        .decode(pad_base64(&percent_decode_to_string(input)))
+        .ok()
+        .and_then(|bytes| String::from_utf8(bytes).ok())
+}
+
+fn percent_decode_to_string(input: &str) -> String {
+    percent_decode_str(input)
+        .decode_utf8()
+        .map(|value| value.to_string())
+        .unwrap_or_else(|_| input.to_string())
+}
+
 fn pad_base64(input: &str) -> String {
     let mut padded = input.replace('-', "+").replace('_', "/");
     let rem = padded.len() % 4;
@@ -429,6 +448,57 @@ fn fingerprint(protocol: &str, material: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::parse_raw_link;
+
+    #[test]
+    fn parses_shadowsocks_sip002_userinfo_base64() {
+        let parsed = parse_raw_link(
+            "ss://YWVzLTI1Ni1nY206c2VjcmV0@example.com:8388#SS%20Node",
+            None,
+        )
+        .expect("shadowsocks sip002 link should parse");
+
+        assert_eq!(parsed.protocol.as_str(), "shadowsocks");
+        assert_eq!(parsed.name, "SS Node");
+        assert_eq!(parsed.server, "example.com");
+        assert_eq!(parsed.port, 8388);
+        assert_eq!(
+            parsed
+                .settings
+                .get("method")
+                .and_then(|value| value.as_str()),
+            Some("aes-256-gcm")
+        );
+        assert_eq!(
+            parsed
+                .settings
+                .get("password")
+                .and_then(|value| value.as_str()),
+            Some("secret")
+        );
+    }
+
+    #[test]
+    fn parses_shadowsocks_sip002_path_and_query() {
+        let parsed = parse_raw_link(
+            "ss://YWVzLTI1Ni1nY206c2VjcmV0@example.com:8388/?udp=true&plugin=obfs-local%3Bobfs%3Dhttp#SS",
+            None,
+        )
+        .expect("shadowsocks sip002 link with query should parse");
+
+        assert_eq!(parsed.server, "example.com");
+        assert_eq!(parsed.port, 8388);
+        assert_eq!(
+            parsed.settings.get("udp").and_then(|value| value.as_str()),
+            Some("true")
+        );
+        assert_eq!(
+            parsed
+                .settings
+                .get("plugin")
+                .and_then(|value| value.as_str()),
+            Some("obfs-local;obfs=http")
+        );
+    }
 
     #[test]
     fn parses_percent_encoded_vless_uuid() {

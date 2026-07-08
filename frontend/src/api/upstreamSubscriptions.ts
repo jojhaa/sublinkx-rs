@@ -1,0 +1,70 @@
+import apiClient from './client'
+import type { NodeImportResponse } from './nodes'
+
+export interface UpstreamSubscriptionItem {
+  id: number
+  name: string
+  url: string
+  group_id: number | null
+  enabled: boolean
+  remark: string
+  last_imported_at: string | null
+  last_import_status: 'ok' | 'partial' | 'error' | null
+  last_import_message: string | null
+  last_import_imported: number
+  last_import_skipped: number
+  last_import_failed: number
+  template_id: number | null
+  template_name: string | null
+  created_at: string
+  updated_at: string
+}
+
+interface UpstreamSubscriptionListResponse {
+  code: string
+  data: UpstreamSubscriptionItem[]
+}
+
+interface UpstreamSubscriptionResponse {
+  code: string
+  data: UpstreamSubscriptionItem
+}
+
+interface UpstreamSubscriptionImportResponse {
+  code: string
+  data: UpstreamSubscriptionItem
+  import: NodeImportResponse
+}
+
+export interface UpstreamSubscriptionPayload {
+  name: string
+  url: string
+  group_id?: number | null
+  enabled?: boolean
+  remark?: string
+}
+
+export async function listUpstreamSubscriptions() {
+  const { data } = await apiClient.get<UpstreamSubscriptionListResponse>('/api/v1/upstream-subscriptions')
+  return data
+}
+
+export async function createUpstreamSubscription(payload: UpstreamSubscriptionPayload) {
+  const { data } = await apiClient.post<UpstreamSubscriptionResponse>('/api/v1/upstream-subscriptions', payload)
+  return data
+}
+
+export async function updateUpstreamSubscription(id: number, payload: UpstreamSubscriptionPayload) {
+  const { data } = await apiClient.put<UpstreamSubscriptionResponse>(`/api/v1/upstream-subscriptions/${id}`, payload)
+  return data
+}
+
+export async function deleteUpstreamSubscription(id: number) {
+  const { data } = await apiClient.delete<{ code: string; message: string }>(`/api/v1/upstream-subscriptions/${id}`)
+  return data
+}
+
+export async function importUpstreamSubscription(id: number) {
+  const { data } = await apiClient.post<UpstreamSubscriptionImportResponse>(`/api/v1/upstream-subscriptions/${id}/import`)
+  return data
+}

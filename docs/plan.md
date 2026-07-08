@@ -340,3 +340,7 @@ backend/src/protocols/
 - 发布追加：重新编译并推送后端 Docker Hub `latest` 镜像；后端镜像 ID `84e71d866a83`，大小 `158MB`，digest `sha256:84e71d866a8351b25a0fac780185532afa8eeead8adf128bc9f666a7838d2cc8`。
 - 发布追加：为避免部署端 `latest` 被镜像代理或本地缓存卡住，额外推送不可变后端标签 `docker.io/jojhaa/sublinkx-rs-backend:20260623-migrate-fix`，digest 同为 `sha256:84e71d866a8351b25a0fac780185532afa8eeead8adf128bc9f666a7838d2cc8`。
 - 发布准备：项目版本号更新到 `0.1.1`，补充 `CHANGELOG.md` 的 `v0.1.1` 发布说明，覆盖安全加固、Mihomo/Clash 导出、延迟测试、订阅二维码和 Docker 部署修复。
+- 2026-07-08 功能修复：上游 Mihomo YAML 导入新增 `type: ss`/`shadowsocks` 支持，会转换为 SIP002 `ss://` 链接后走统一解析；Shadowsocks 解析器增强对 `userinfo` Base64、尾部 `/`、`udp` 和 `plugin` query 的兼容；Mihomo 再导出时保留 SS 的 `udp`/`plugin` 字段。
+- 2026-07-08 功能增强：新增上游订阅链接管理能力，增加 `upstream_subscriptions` 持久化表、管理 API 和前端 `/upstreams` 页面；支持保存、编辑、删除、手动重新导入上游链接，并展示最近导入状态、导入/跳过/失败数量、目标节点分组和上游模板信息；旧节点页上游导入成功后也会自动写入管理表，管理页会从已有节点 `source_ref` 反向补齐历史上游链接。
+- 2026-07-08 发布准备：项目版本号更新到 `0.1.2`，`CHANGELOG.md` 新增 `v0.1.2`，覆盖上游订阅链接管理页面和 Shadowsocks 上游导入兼容性修复。
+- 2026-07-08 Docker 发布追加：使用 `DOCKER_REGISTRY=docker.m.daocloud.io` 完成 `0.1.2` 生产镜像构建并推送 Docker Hub；后端 `latest`/`0.1.2`/`v0.1.2` digest 为 `sha256:1e3f20b4dff0de8456a10a1beb173934f2251d36b920fdd960da51566bf2e52b`，前端 `latest`/`0.1.2`/`v0.1.2` digest 为 `sha256:2394535480207dc98cd9d4d795b80812dd325d4d1e433e893e560e832b0f1983`。

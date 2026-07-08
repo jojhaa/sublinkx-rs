@@ -12,6 +12,7 @@ const { t } = useI18n()
 const navItems = [
   { name: 'dashboard', labelKey: 'dashboard', to: '/' },
   { name: 'nodes', labelKey: 'nodes', to: '/nodes' },
+  { name: 'upstreams', labelKey: 'upstreamSubscriptions', to: '/upstreams' },
   { name: 'subscriptions', labelKey: 'subscriptions', to: '/subscriptions' },
   { name: 'templates', labelKey: 'templates', to: '/templates' },
   { name: 'settings', labelKey: 'settings', to: '/settings' },

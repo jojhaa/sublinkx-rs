@@ -53,12 +53,12 @@ interface NodeLatencyBatchResponse {
   data: NodeLatencyResult[]
 }
 
-interface NodeImportFailure {
+export interface NodeImportFailure {
   source: string
   reason: string
 }
 
-interface NodeFidelityWarning {
+export interface NodeFidelityWarning {
   target: string
   name: string
   protocol: string
@@ -66,7 +66,7 @@ interface NodeFidelityWarning {
   changed_fields: string[]
 }
 
-interface NodeImportResponse {
+export interface NodeImportResponse {
   code: string
   imported: number
   skipped: number

@@ -193,6 +193,31 @@ async fn init_mysql_schema(pool: &DbPool) -> Result<(), sqlx::Error> {
           updated_at VARCHAR(64) NOT NULL
         )
         "#,
+        r#"
+        CREATE TABLE IF NOT EXISTS upstream_subscriptions (
+          id BIGINT PRIMARY KEY AUTO_INCREMENT,
+          name VARCHAR(191) NOT NULL,
+          url VARCHAR(2048) NOT NULL,
+          group_id BIGINT NULL,
+          enabled BOOLEAN NOT NULL DEFAULT TRUE,
+          remark VARCHAR(1024) NOT NULL DEFAULT '',
+          last_imported_at VARCHAR(64) NULL,
+          last_import_status VARCHAR(64) NULL,
+          last_import_message TEXT NULL,
+          last_import_imported BIGINT NOT NULL DEFAULT 0,
+          last_import_skipped BIGINT NOT NULL DEFAULT 0,
+          last_import_failed BIGINT NOT NULL DEFAULT 0,
+          template_id BIGINT NULL,
+          template_name VARCHAR(191) NULL,
+          created_at VARCHAR(64) NOT NULL,
+          updated_at VARCHAR(64) NOT NULL,
+          KEY idx_upstream_subscriptions_url (url(191)),
+          KEY idx_upstream_subscriptions_group_id (group_id),
+          KEY idx_upstream_subscriptions_enabled (enabled),
+          CONSTRAINT fk_upstream_subscriptions_group_id FOREIGN KEY (group_id) REFERENCES node_groups(id) ON DELETE SET NULL,
+          CONSTRAINT fk_upstream_subscriptions_template_id FOREIGN KEY (template_id) REFERENCES templates(id) ON DELETE SET NULL
+        )
+        "#,
     ];
 
     for statement in statements {

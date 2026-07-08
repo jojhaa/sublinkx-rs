@@ -4,4 +4,5 @@ pub mod node;
 pub mod settings;
 pub mod subscription;
 pub mod template;
+pub mod upstream_subscription;
 pub mod user;
