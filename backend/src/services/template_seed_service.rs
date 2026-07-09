@@ -31,8 +31,8 @@ proxy-groups:
   - name: 节点选择
     type: select
     proxies:
-      - 自动选择
       - 手动切换
+      - 自动选择
       - DIRECT
   - name: 手动切换
     type: select
@@ -186,6 +186,32 @@ rules:
   - RULE-SET,localarea,全球直连
   - RULE-SET,unban,全球直连
   - RULE-SET,banad,广告拦截
+  - DOMAIN-SUFFIX,chatgpt.com,Ai平台
+  - DOMAIN-SUFFIX,openai.com,Ai平台
+  - DOMAIN-SUFFIX,anthropic.com,Ai平台
+  - DOMAIN-SUFFIX,claude.ai,Ai平台
+  - DOMAIN-SUFFIX,github.com,节点选择
+  - DOMAIN-SUFFIX,githubusercontent.com,节点选择
+  - DOMAIN-SUFFIX,githubassets.com,节点选择
+  - DOMAIN-SUFFIX,youtube.com,油管视频
+  - DOMAIN-SUFFIX,googlevideo.com,油管视频
+  - DOMAIN-SUFFIX,ytimg.com,油管视频
+  - DOMAIN-SUFFIX,netflix.com,奈飞视频
+  - DOMAIN-SUFFIX,nflxvideo.net,奈飞视频
+  - DOMAIN-SUFFIX,t.me,电报消息
+  - DOMAIN-SUFFIX,telegram.org,电报消息
+  - DOMAIN-SUFFIX,x.com,节点选择
+  - DOMAIN-SUFFIX,twitter.com,节点选择
+  - DOMAIN-SUFFIX,instagram.com,节点选择
+  - DOMAIN-SUFFIX,tiktok.com,节点选择
+  - DOMAIN-SUFFIX,spotify.com,节点选择
+  - DOMAIN-SUFFIX,disneyplus.com,节点选择
+  - DOMAIN-SUFFIX,primevideo.com,节点选择
+  - DOMAIN-SUFFIX,max.com,节点选择
+  - DOMAIN-SUFFIX,hbomax.com,节点选择
+  - DOMAIN-SUFFIX,steamcommunity.com,节点选择
+  - DOMAIN-SUFFIX,steampowered.com,节点选择
+  - DOMAIN-SUFFIX,epicgames.com,节点选择
   - RULE-SET,googlecn,全球直连
   - RULE-SET,apple,苹果服务
   - RULE-SET,microsoft,微软服务
@@ -234,8 +260,8 @@ proxy-groups:
   - name: PROXY
     type: select
     proxies:
-      - AUTO
       - MANUAL
+      - AUTO
       - DIRECT
   - name: MANUAL
     type: select
@@ -290,6 +316,13 @@ proxy-groups:
       - PROXY
       - AUTO
       - MANUAL
+  - name: GAME
+    type: select
+    proxies:
+      - PROXY
+      - MANUAL
+      - AUTO
+      - DIRECT
   - name: FINAL
     type: select
     proxies:
@@ -426,6 +459,32 @@ rule-providers:
 rules:
   - RULE-SET,private_ip,DIRECT,no-resolve
   - RULE-SET,private_domain,DIRECT
+  - DOMAIN-SUFFIX,chatgpt.com,AI
+  - DOMAIN-SUFFIX,openai.com,AI
+  - DOMAIN-SUFFIX,anthropic.com,AI
+  - DOMAIN-SUFFIX,claude.ai,AI
+  - DOMAIN-SUFFIX,github.com,PROXY
+  - DOMAIN-SUFFIX,githubusercontent.com,PROXY
+  - DOMAIN-SUFFIX,githubassets.com,PROXY
+  - DOMAIN-SUFFIX,youtube.com,YOUTUBE
+  - DOMAIN-SUFFIX,googlevideo.com,YOUTUBE
+  - DOMAIN-SUFFIX,ytimg.com,YOUTUBE
+  - DOMAIN-SUFFIX,netflix.com,NETFLIX
+  - DOMAIN-SUFFIX,nflxvideo.net,NETFLIX
+  - DOMAIN-SUFFIX,t.me,TELEGRAM
+  - DOMAIN-SUFFIX,telegram.org,TELEGRAM
+  - DOMAIN-SUFFIX,x.com,MEDIA
+  - DOMAIN-SUFFIX,twitter.com,MEDIA
+  - DOMAIN-SUFFIX,instagram.com,MEDIA
+  - DOMAIN-SUFFIX,tiktok.com,MEDIA
+  - DOMAIN-SUFFIX,spotify.com,MEDIA
+  - DOMAIN-SUFFIX,disneyplus.com,MEDIA
+  - DOMAIN-SUFFIX,primevideo.com,MEDIA
+  - DOMAIN-SUFFIX,max.com,MEDIA
+  - DOMAIN-SUFFIX,hbomax.com,MEDIA
+  - DOMAIN-SUFFIX,steamcommunity.com,GAME
+  - DOMAIN-SUFFIX,steampowered.com,GAME
+  - DOMAIN-SUFFIX,epicgames.com,GAME
   - RULE-SET,ai,AI
   - RULE-SET,github_domain,PROXY
   - RULE-SET,youtube_domain,YOUTUBE

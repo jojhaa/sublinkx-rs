@@ -198,6 +198,42 @@ pub async fn delete(pool: &DbPool, id: i64) -> Result<(), sqlx::Error> {
     Ok(())
 }
 
+pub async fn detach_upstream_source_ref(
+    pool: &DbPool,
+    url: &str,
+    updated_at: &str,
+) -> Result<u64, sqlx::Error> {
+    let result = sqlx::query(
+        r#"
+        UPDATE nodes
+        SET source_type = 'manual',
+            source_ref = NULL,
+            updated_at = ?
+        WHERE source_type = 'upstream_subscription'
+          AND source_ref = ?
+        "#,
+    )
+    .bind(updated_at)
+    .bind(url)
+    .execute(pool)
+    .await?;
+    Ok(result.rows_affected())
+}
+
+pub async fn delete_upstream_source_ref(pool: &DbPool, url: &str) -> Result<u64, sqlx::Error> {
+    let result = sqlx::query(
+        r#"
+        DELETE FROM nodes
+        WHERE source_type = 'upstream_subscription'
+          AND source_ref = ?
+        "#,
+    )
+    .bind(url)
+    .execute(pool)
+    .await?;
+    Ok(result.rows_affected())
+}
+
 pub async fn list_enabled(pool: &DbPool) -> Result<Vec<NodeRecord>, sqlx::Error> {
     let query = format!(
         r#"

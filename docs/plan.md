@@ -344,3 +344,13 @@ backend/src/protocols/
 - 2026-07-08 功能增强：新增上游订阅链接管理能力，增加 `upstream_subscriptions` 持久化表、管理 API 和前端 `/upstreams` 页面；支持保存、编辑、删除、手动重新导入上游链接，并展示最近导入状态、导入/跳过/失败数量、目标节点分组和上游模板信息；旧节点页上游导入成功后也会自动写入管理表，管理页会从已有节点 `source_ref` 反向补齐历史上游链接。
 - 2026-07-08 发布准备：项目版本号更新到 `0.1.2`，`CHANGELOG.md` 新增 `v0.1.2`，覆盖上游订阅链接管理页面和 Shadowsocks 上游导入兼容性修复。
 - 2026-07-08 Docker 发布追加：使用 `DOCKER_REGISTRY=docker.m.daocloud.io` 完成 `0.1.2` 生产镜像构建并推送 Docker Hub；后端 `latest`/`0.1.2`/`v0.1.2` digest 为 `sha256:1e3f20b4dff0de8456a10a1beb173934f2251d36b920fdd960da51566bf2e52b`，前端 `latest`/`0.1.2`/`v0.1.2` digest 为 `sha256:2394535480207dc98cd9d4d795b80812dd325d4d1e433e893e560e832b0f1983`。
+- 2026-07-08 前端优化追加：上游订阅管理页从复用固定列表格改为专用卡片列表，长订阅链接改为域名与短摘要展示，最近导入状态和操作按钮收敛到右侧信息区，避免长 URL 把页面撑乱或挤成竖排。
+- 2026-07-08 功能调整追加：托管上游订阅取消手动选择节点分组，后端在创建、更新和重新导入时自动按上游订阅名称创建或复用节点分组；前端编辑弹窗改为展示自动分组说明，节点导入按订阅名隔离。
+- 2026-07-08 Docker 发布追加：基于当前上游订阅自动分组和页面整理改动重新构建并推送 `0.1.2` 镜像；后端 `latest`/`0.1.2`/`v0.1.2` digest 为 `sha256:8a8224ea832fb588cd6b0488f0fe2545ead6c484b991fe1550fe896031486a24`，前端 `latest`/`0.1.2`/`v0.1.2` digest 为 `sha256:a3694fcb24d90566c18f0490c8b763299ffd6e2b01d26b730543383d7a926402`。
+- 2026-07-09 缺陷修复：修复上游订阅删除后被节点 `source_ref` 自动回填、导致页面看起来无法删除的问题；删除上游订阅时保留已导入节点，但解除这些节点的上游来源关联。
+- 2026-07-09 功能增强：删除上游订阅时新增“同时删除相关节点”可选行为；默认仍仅解除节点来源关联，选择删除节点时后端通过 `delete_nodes=true` 删除仍关联该上游链接的节点并返回删除数量。
+- 2026-07-09 模板优化：Mihomo/Clash 默认模板的“节点选择”改为手动选择优先，再进入自动测速选择；无上游模板的 Mihomo 导出同步生成 `PROXY -> MANUAL -> AUTO` 结构，避免客户端默认落到自动选择；补充 AI、GitHub、YouTube、Netflix、Telegram、社媒流媒体和游戏平台等常用站点直连规则映射，并通过新迁移更新仍停留在内置模板内容的旧库记录。
+- 2026-07-09 验证追加：`cargo fmt --manifest-path backend\Cargo.toml`、`cargo test --manifest-path backend\Cargo.toml`、`npm --prefix frontend run build`、`git diff --check` 均通过。
+- 2026-07-09 发布准备：项目版本号更新到 `0.1.3`，`CHANGELOG.md` 新增 `v0.1.3`，覆盖上游订阅管理页面整理、自动分组、删除关联节点选项、Mihomo/Clash 手动优先模板和常用站点规则优化。
+- 2026-07-09 Docker 发布追加：使用 `DOCKER_REGISTRY=docker.m.daocloud.io` 完成 `0.1.3` 生产镜像构建并推送 Docker Hub；后端 `latest`/`0.1.3`/`v0.1.3` digest 为 `sha256:5d32315ddb3c509707dd5c74a6c858be05ebb4f6a2ef0972fa3554111107390d`，前端 `latest`/`0.1.3`/`v0.1.3` digest 为 `sha256:dcd1c73a4cef8f6f113957173b6be275280490b7d484925cd397b48394810556`。
+- 2026-07-09 Docker 发布验证：`docker buildx imagetools inspect docker.io/jojhaa/sublinkx-rs-backend:0.1.3` 和 `docker buildx imagetools inspect docker.io/jojhaa/sublinkx-rs-frontend:0.1.3` 均可读取远端镜像 digest；推送期间 Docker Desktop 内部 DNS 将 Docker Hub 解析到异常地址，已临时写入正确 hosts 映射完成推送并在完成后清理。

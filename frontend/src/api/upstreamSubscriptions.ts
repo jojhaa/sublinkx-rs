@@ -39,7 +39,6 @@ interface UpstreamSubscriptionImportResponse {
 export interface UpstreamSubscriptionPayload {
   name: string
   url: string
-  group_id?: number | null
   enabled?: boolean
   remark?: string
 }
@@ -59,8 +58,15 @@ export async function updateUpstreamSubscription(id: number, payload: UpstreamSu
   return data
 }
 
-export async function deleteUpstreamSubscription(id: number) {
-  const { data } = await apiClient.delete<{ code: string; message: string }>(`/api/v1/upstream-subscriptions/${id}`)
+export async function deleteUpstreamSubscription(id: number, deleteNodes = false) {
+  const { data } = await apiClient.delete<{
+    code: string
+    message: string
+    deleted_nodes: number
+    detached_nodes: number
+  }>(`/api/v1/upstream-subscriptions/${id}`, {
+    params: { delete_nodes: deleteNodes },
+  })
   return data
 }
 

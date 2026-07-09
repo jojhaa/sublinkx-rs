@@ -30,13 +30,19 @@ proxy-groups:
   - name: PROXY
     type: select
     proxies:
+      - MANUAL
       - AUTO
       - DIRECT
+
+  - name: MANUAL
+    type: select
+    include-all-proxies: true
 
   - name: AI
     type: select
     proxies:
       - PROXY
+      - MANUAL
       - AUTO
       - DIRECT
 
@@ -44,6 +50,7 @@ proxy-groups:
     type: select
     proxies:
       - PROXY
+      - MANUAL
       - AUTO
 
   - name: GLOBAL
@@ -163,8 +170,8 @@ proxy-groups:
   - name: 节点选择
     type: select
     proxies:
-      - 自动选择
       - 手动切换
+      - 自动选择
       - 香港节点
       - 台湾节点
       - 狮城节点
@@ -506,6 +513,32 @@ rules:
   - RULE-SET,unban,全球直连
   - RULE-SET,banad,广告拦截
   - RULE-SET,banprogramad,应用净化
+  - DOMAIN-SUFFIX,chatgpt.com,Ai平台
+  - DOMAIN-SUFFIX,openai.com,Ai平台
+  - DOMAIN-SUFFIX,anthropic.com,Ai平台
+  - DOMAIN-SUFFIX,claude.ai,Ai平台
+  - DOMAIN-SUFFIX,github.com,节点选择
+  - DOMAIN-SUFFIX,githubusercontent.com,节点选择
+  - DOMAIN-SUFFIX,githubassets.com,节点选择
+  - DOMAIN-SUFFIX,youtube.com,油管视频
+  - DOMAIN-SUFFIX,googlevideo.com,油管视频
+  - DOMAIN-SUFFIX,ytimg.com,油管视频
+  - DOMAIN-SUFFIX,netflix.com,奈飞视频
+  - DOMAIN-SUFFIX,nflxvideo.net,奈飞视频
+  - DOMAIN-SUFFIX,t.me,电报消息
+  - DOMAIN-SUFFIX,telegram.org,电报消息
+  - DOMAIN-SUFFIX,x.com,国外媒体
+  - DOMAIN-SUFFIX,twitter.com,国外媒体
+  - DOMAIN-SUFFIX,instagram.com,国外媒体
+  - DOMAIN-SUFFIX,tiktok.com,国外媒体
+  - DOMAIN-SUFFIX,spotify.com,国外媒体
+  - DOMAIN-SUFFIX,disneyplus.com,国外媒体
+  - DOMAIN-SUFFIX,primevideo.com,国外媒体
+  - DOMAIN-SUFFIX,max.com,国外媒体
+  - DOMAIN-SUFFIX,hbomax.com,国外媒体
+  - DOMAIN-SUFFIX,steamcommunity.com,游戏平台
+  - DOMAIN-SUFFIX,steampowered.com,游戏平台
+  - DOMAIN-SUFFIX,epicgames.com,游戏平台
   - RULE-SET,googlefcm,全球直连
   - RULE-SET,googlecn,全球直连
   - RULE-SET,steamcn,全球直连

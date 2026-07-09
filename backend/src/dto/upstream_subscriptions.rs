@@ -8,9 +8,22 @@ use super::nodes::NodeImportResponse;
 pub struct UpstreamSubscriptionPayload {
     pub name: String,
     pub url: String,
-    pub group_id: Option<i64>,
     pub enabled: Option<bool>,
     pub remark: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct DeleteUpstreamSubscriptionQuery {
+    #[serde(default)]
+    pub delete_nodes: bool,
+}
+
+#[derive(Debug, Serialize)]
+pub struct DeleteUpstreamSubscriptionResponse {
+    pub code: &'static str,
+    pub message: &'static str,
+    pub deleted_nodes: u64,
+    pub detached_nodes: u64,
 }
 
 #[derive(Debug, Serialize)]

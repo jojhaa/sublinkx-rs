@@ -1,11 +1,12 @@
 use axum::{
     Json,
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::HeaderMap,
 };
 
 use crate::{
     dto::upstream_subscriptions::{
+        DeleteUpstreamSubscriptionQuery, DeleteUpstreamSubscriptionResponse,
         UpstreamSubscriptionImportResponse, UpstreamSubscriptionListResponse,
         UpstreamSubscriptionPayload, UpstreamSubscriptionResponse,
     },
@@ -49,13 +50,17 @@ pub async fn delete(
     State(state): State<AppState>,
     headers: HeaderMap,
     Path(id): Path<i64>,
-) -> Result<Json<serde_json::Value>, AppError> {
+    Query(query): Query<DeleteUpstreamSubscriptionQuery>,
+) -> Result<Json<DeleteUpstreamSubscriptionResponse>, AppError> {
     auth_service::require_user(&state, &headers).await?;
-    upstream_subscription_service::delete(&state, id).await?;
-    Ok(Json(serde_json::json!({
-        "code": "00000",
-        "message": "upstream subscription deleted"
-    })))
+    let (deleted_nodes, detached_nodes) =
+        upstream_subscription_service::delete(&state, id, query.delete_nodes).await?;
+    Ok(Json(DeleteUpstreamSubscriptionResponse {
+        code: "00000",
+        message: "upstream subscription deleted",
+        deleted_nodes,
+        detached_nodes,
+    }))
 }
 
 pub async fn import(

@@ -2410,6 +2410,7 @@ fn ensure_mihomo_default_proxy_groups(root: &mut Mapping, proxy_names: &[String]
             groups_key,
             Value::Sequence(vec![
                 Value::Mapping(mihomo_proxy_select_group(proxy_names)),
+                Value::Mapping(mihomo_manual_proxy_group(proxy_names)),
                 Value::Mapping(mihomo_auto_proxy_group(proxy_names)),
             ]),
         );
@@ -2481,10 +2482,13 @@ fn ensure_mihomo_match_rule(root: &mut Mapping) {
 
 fn mihomo_proxy_select_group(proxy_names: &[String]) -> Mapping {
     let mut members = vec![
+        Value::String("MANUAL".to_string()),
         Value::String("AUTO".to_string()),
         Value::String("DIRECT".to_string()),
     ];
-    append_unique_proxy_group_members(&mut members, proxy_names);
+    if proxy_names.is_empty() {
+        members.retain(|member| member.as_str() != Some("MANUAL"));
+    }
 
     let mut group = Mapping::new();
     group.insert(
@@ -2498,6 +2502,23 @@ fn mihomo_proxy_select_group(proxy_names: &[String]) -> Mapping {
     group.insert(
         Value::String("proxies".to_string()),
         Value::Sequence(members),
+    );
+    group
+}
+
+fn mihomo_manual_proxy_group(proxy_names: &[String]) -> Mapping {
+    let mut group = Mapping::new();
+    group.insert(
+        Value::String("name".to_string()),
+        Value::String("MANUAL".to_string()),
+    );
+    group.insert(
+        Value::String("type".to_string()),
+        Value::String("select".to_string()),
+    );
+    group.insert(
+        Value::String("proxies".to_string()),
+        Value::Sequence(proxy_names.iter().cloned().map(Value::String).collect()),
     );
     group
 }
@@ -3183,7 +3204,21 @@ proxy-groups:
             Some("select")
         );
 
-        let auto_group = groups.get(1).and_then(Value::as_mapping).unwrap();
+        let manual_group = groups.get(1).and_then(Value::as_mapping).unwrap();
+        assert_eq!(
+            manual_group
+                .get(Value::String("name".to_string()))
+                .and_then(Value::as_str),
+            Some("MANUAL")
+        );
+        assert_eq!(
+            manual_group
+                .get(Value::String("type".to_string()))
+                .and_then(Value::as_str),
+            Some("select")
+        );
+
+        let auto_group = groups.get(2).and_then(Value::as_mapping).unwrap();
         assert_eq!(
             auto_group
                 .get(Value::String("name".to_string()))
@@ -3202,6 +3237,14 @@ proxy-groups:
                 .and_then(Value::as_str),
             Some(MIHOMO_DEFAULT_DELAY_TEST_URL)
         );
+        let proxy_members = proxy_group
+            .get(Value::String("proxies".to_string()))
+            .and_then(Value::as_sequence)
+            .unwrap()
+            .iter()
+            .map(|member| member.as_str().unwrap().to_string())
+            .collect::<Vec<_>>();
+        assert_eq!(proxy_members, vec!["MANUAL", "AUTO", "DIRECT"]);
 
         let rules = root
             .get(Value::String("rules".to_string()))
@@ -3244,7 +3287,20 @@ rules:
         assert!(!template.contains("GEOIP,CN"));
         assert!(!template.contains("fallback-filter:"));
         assert!(!template.contains("\n  fallback:\n"));
+        assert!(template.contains("      - 手动切换\n      - 自动选择"));
+        assert!(template.contains("DOMAIN-SUFFIX,chatgpt.com,Ai平台"));
+        assert!(template.contains("DOMAIN-SUFFIX,github.com,节点选择"));
         assert!(template.contains("RULE-SET,proxygfw,节点选择"));
         assert!(template.contains("MATCH,漏网之鱼"));
+    }
+
+    #[test]
+    fn built_in_mihomo_template_prefers_manual_and_has_common_site_rules() {
+        let template = crate::services::template_seed_service::MIHOMO_TEMPLATE;
+
+        assert!(template.contains("      - MANUAL\n      - AUTO\n      - DIRECT"));
+        assert!(template.contains("DOMAIN-SUFFIX,chatgpt.com,AI"));
+        assert!(template.contains("DOMAIN-SUFFIX,github.com,PROXY"));
+        assert!(template.contains("DOMAIN-SUFFIX,steamcommunity.com,GAME"));
     }
 }

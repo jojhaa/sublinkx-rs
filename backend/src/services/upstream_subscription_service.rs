@@ -10,7 +10,8 @@ use crate::{
     },
     errors::AppError,
     repository::{
-        group_repo::{self, GroupTable},
+        group_repo::{self, GroupTable, NewGroupRecord},
+        node_repo,
         upstream_subscription_repo::{
             self, ImportResultRecord, NewUpstreamSubscriptionRecord,
             UpdateUpstreamSubscriptionRecord,
@@ -37,7 +38,7 @@ pub async fn create(
 ) -> Result<UpstreamSubscriptionResponse, AppError> {
     let name = validate_name(&payload.name)?;
     let url = validate_url(&payload.url)?;
-    ensure_group_exists(state, payload.group_id).await?;
+    let group_id = ensure_node_group_for_upstream_name(state, &name).await?;
     if upstream_subscription_repo::find_by_url(&state.db, &url)
         .await?
         .is_some()
@@ -53,7 +54,7 @@ pub async fn create(
         &NewUpstreamSubscriptionRecord {
             name: &name,
             url: &url,
-            group_id: payload.group_id,
+            group_id: Some(group_id),
             enabled: bool_to_db(payload.enabled.unwrap_or(true)),
             remark: payload.remark.as_deref().unwrap_or("").trim(),
             created_at: &now,
@@ -78,7 +79,7 @@ pub async fn update(
         .ok_or_else(|| AppError::NotFound("upstream subscription not found".to_string()))?;
     let name = validate_name(&payload.name)?;
     let url = validate_url(&payload.url)?;
-    ensure_group_exists(state, payload.group_id).await?;
+    let group_id = ensure_node_group_for_upstream_name(state, &name).await?;
     if let Some(duplicate) = upstream_subscription_repo::find_by_url(&state.db, &url).await?
         && duplicate.id != id
     {
@@ -94,7 +95,7 @@ pub async fn update(
         &UpdateUpstreamSubscriptionRecord {
             name: &name,
             url: &url,
-            group_id: payload.group_id,
+            group_id: Some(group_id),
             enabled: bool_to_db(payload.enabled.unwrap_or(true)),
             remark: payload.remark.as_deref().unwrap_or("").trim(),
             updated_at: &now,
@@ -108,12 +109,23 @@ pub async fn update(
     })
 }
 
-pub async fn delete(state: &AppState, id: i64) -> Result<(), AppError> {
-    upstream_subscription_repo::find_by_id(&state.db, id)
+pub async fn delete(state: &AppState, id: i64, delete_nodes: bool) -> Result<(u64, u64), AppError> {
+    let record = upstream_subscription_repo::find_by_id(&state.db, id)
         .await?
         .ok_or_else(|| AppError::NotFound("upstream subscription not found".to_string()))?;
+    let (deleted_nodes, detached_nodes) = if delete_nodes {
+        (
+            node_repo::delete_upstream_source_ref(&state.db, &record.url).await?,
+            0,
+        )
+    } else {
+        (
+            0,
+            node_repo::detach_upstream_source_ref(&state.db, &record.url, &now_rfc3339()).await?,
+        )
+    };
     upstream_subscription_repo::delete(&state.db, id).await?;
-    Ok(())
+    Ok((deleted_nodes, detached_nodes))
 }
 
 pub async fn import(
@@ -123,12 +135,13 @@ pub async fn import(
     let record = upstream_subscription_repo::find_by_id(&state.db, id)
         .await?
         .ok_or_else(|| AppError::NotFound("upstream subscription not found".to_string()))?;
+    let group_id = ensure_node_group_for_upstream_name(state, &record.name).await?;
 
     let import_result = node_service::import_nodes_from_subscription(
         state,
         ImportNodesFromSubscriptionRequest {
             url: record.url.clone(),
-            group_id: record.group_id,
+            group_id: Some(group_id),
             remark: if record.remark.trim().is_empty() {
                 None
             } else {
@@ -172,19 +185,27 @@ pub async fn import(
     }
 }
 
-async fn ensure_group_exists(state: &AppState, group_id: Option<i64>) -> Result<(), AppError> {
-    if let Some(group_id) = group_id
-        && group_repo::find_by_id(&state.db, GroupTable::Node, group_id)
-            .await?
-            .is_none()
-    {
-        return Err(AppError::BadRequest(format!(
-            "node group not found: {}",
-            group_id
-        )));
+async fn ensure_node_group_for_upstream_name(
+    state: &AppState,
+    name: &str,
+) -> Result<i64, AppError> {
+    if let Some(group) = group_repo::find_by_name(&state.db, GroupTable::Node, name).await? {
+        return Ok(group.id);
     }
 
-    Ok(())
+    let now = now_rfc3339();
+    let group = group_repo::insert(
+        &state.db,
+        GroupTable::Node,
+        &NewGroupRecord {
+            name,
+            sort_order: 0,
+            created_at: &now,
+            updated_at: &now,
+        },
+    )
+    .await?;
+    Ok(group.id)
 }
 
 fn validate_name(name: &str) -> Result<String, AppError> {

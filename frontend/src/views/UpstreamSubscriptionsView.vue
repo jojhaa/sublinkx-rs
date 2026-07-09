@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
 import { extractApiError } from '../api/client'
-import { listNodeGroups, type GroupItem } from '../api/groups'
 import {
   createUpstreamSubscription,
   deleteUpstreamSubscription,
@@ -15,7 +14,6 @@ import { useI18n } from '../i18n'
 const { t } = useI18n()
 
 const upstreams = ref<UpstreamSubscriptionItem[]>([])
-const groups = ref<GroupItem[]>([])
 const loading = ref(false)
 const saving = ref(false)
 const importingId = ref<number | null>(null)
@@ -27,7 +25,6 @@ const successMessage = ref('')
 const form = reactive({
   name: '',
   url: '',
-  group_id: null as number | null,
   enabled: true,
   remark: '',
 })
@@ -44,7 +41,6 @@ function resetForm() {
   editingId.value = null
   form.name = ''
   form.url = ''
-  form.group_id = null
   form.enabled = true
   form.remark = ''
 }
@@ -65,19 +61,11 @@ function startEdit(item: UpstreamSubscriptionItem) {
   editingId.value = item.id
   form.name = item.name
   form.url = item.url
-  form.group_id = item.group_id
   form.enabled = item.enabled
   form.remark = item.remark
   showEditor.value = true
   errorMessage.value = ''
   successMessage.value = ''
-}
-
-function groupName(id: number | null) {
-  if (id === null) {
-    return t('ungrouped')
-  }
-  return groups.value.find((item) => item.id === id)?.name ?? t('nodeGroupFallback', { id })
 }
 
 function statusLabel(item: UpstreamSubscriptionItem) {
@@ -117,17 +105,29 @@ function formatDate(value: string | null) {
   return date.toLocaleString()
 }
 
+function urlHost(value: string) {
+  try {
+    return new URL(value).host || value
+  } catch {
+    return value.replace(/^https?:\/\//, '').split('/')[0] || value
+  }
+}
+
+function compactUrl(value: string) {
+  const stripped = value.replace(/^https?:\/\//, '')
+  if (stripped.length <= 88) {
+    return stripped
+  }
+  return `${stripped.slice(0, 54)}...${stripped.slice(-20)}`
+}
+
 async function load() {
   loading.value = true
   errorMessage.value = ''
 
   try {
-    const [upstreamResponse, groupResponse] = await Promise.all([
-      listUpstreamSubscriptions(),
-      listNodeGroups(),
-    ])
+    const upstreamResponse = await listUpstreamSubscriptions()
     upstreams.value = upstreamResponse.data
-    groups.value = groupResponse.data
   } catch (error) {
     errorMessage.value = extractApiError(error)
   } finally {
@@ -144,7 +144,6 @@ async function submit() {
     const payload = {
       name: form.name,
       url: form.url,
-      group_id: form.group_id,
       enabled: form.enabled,
       remark: form.remark || undefined,
     }
@@ -191,10 +190,13 @@ async function removeItem(item: UpstreamSubscriptionItem) {
   if (!window.confirm(t('confirmDeleteUpstreamSubscription'))) {
     return
   }
+  const deleteNodes = window.confirm(t('confirmDeleteUpstreamSubscriptionNodes'))
 
   try {
-    await deleteUpstreamSubscription(item.id)
-    successMessage.value = t('upstreamSubscriptionDeleted')
+    const response = await deleteUpstreamSubscription(item.id, deleteNodes)
+    successMessage.value = deleteNodes
+      ? t('upstreamSubscriptionDeletedWithNodes', { count: response.deleted_nodes })
+      : t('upstreamSubscriptionDeleted')
     if (editingId.value === item.id) {
       closeEditor()
     }
@@ -238,65 +240,58 @@ onMounted(load)
 
       <div v-if="upstreams.length === 0" class="empty-state">{{ t('emptyUpstreamSubscriptions') }}</div>
 
-      <div v-else class="table-wrap">
-        <table class="table dense-table subscription-table">
-          <thead>
-            <tr>
-              <th>{{ t('upstreamSubscription') }}</th>
-              <th>{{ t('importTarget') }}</th>
-              <th>{{ t('lastImport') }}</th>
-              <th>{{ t('actions') }}</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr v-for="item in upstreams" :key="item.id">
-              <td>
-                <div class="subscription-title-row">
-                  <strong class="row-title">{{ item.name }}</strong>
-                  <span class="status-badge" :class="item.enabled ? 'status-badge-ok' : 'status-badge-muted'">
-                    {{ item.enabled ? t('enabled') : t('disabled') }}
-                  </span>
-                </div>
-                <div class="row-meta upstream-url">{{ item.url }}</div>
-                <div v-if="item.remark" class="row-meta">{{ item.remark }}</div>
-              </td>
-              <td>
-                <span class="status-badge status-badge-neutral">{{ groupName(item.group_id) }}</span>
-                <div v-if="item.template_name" class="row-meta">{{ item.template_name }}</div>
-              </td>
-              <td>
+      <div v-else class="upstream-card-list">
+        <article v-for="item in upstreams" :key="item.id" class="upstream-card" :class="{ 'is-disabled': !item.enabled }">
+          <div class="upstream-card-main">
+            <div class="upstream-card-kicker">
+              <span class="status-badge" :class="item.enabled ? 'status-badge-ok' : 'status-badge-muted'">
+                {{ item.enabled ? t('enabled') : t('disabled') }}
+              </span>
+              <span class="status-badge status-badge-neutral">{{ t('upstreamAutoGroupBadge', { name: item.name }) }}</span>
+              <span v-if="item.template_name" class="status-badge status-badge-neutral">{{ item.template_name }}</span>
+            </div>
+            <h3 class="upstream-card-title">{{ item.name }}</h3>
+            <div class="upstream-url-panel" :title="item.url">
+              <span class="upstream-url-host">{{ urlHost(item.url) }}</span>
+              <span class="upstream-url-short">{{ compactUrl(item.url) }}</span>
+            </div>
+            <p v-if="item.remark" class="upstream-card-note">{{ item.remark }}</p>
+          </div>
+
+          <div class="upstream-card-side">
+            <div class="upstream-import-panel">
+              <div class="upstream-import-head">
                 <span class="status-badge" :class="statusClass(item)">{{ statusLabel(item) }}</span>
-                <div class="row-meta">{{ formatDate(item.last_imported_at) }}</div>
-                <div class="row-meta">
-                  {{ t('importStats', {
-                    imported: item.last_import_imported,
-                    skipped: item.last_import_skipped,
-                    failed: item.last_import_failed,
-                  }) }}
-                </div>
-                <div v-if="item.last_import_message" class="row-meta">{{ item.last_import_message }}</div>
-              </td>
-              <td>
-                <div class="inline-actions row-actions">
-                  <button
-                    class="button button-accent button-compact"
-                    type="button"
-                    :disabled="importingId === item.id || !item.enabled"
-                    @click="runImport(item)"
-                  >
-                    {{ importingId === item.id ? t('importingNode') : t('importNow') }}
-                  </button>
-                  <button class="button button-ghost button-compact" type="button" @click="startEdit(item)">
-                    {{ t('edit') }}
-                  </button>
-                  <button class="button button-danger button-compact" type="button" @click="removeItem(item)">
-                    {{ t('delete') }}
-                  </button>
-                </div>
-              </td>
-            </tr>
-          </tbody>
-        </table>
+                <span class="upstream-import-time">{{ formatDate(item.last_imported_at) }}</span>
+              </div>
+              <div class="upstream-import-stats">
+                {{ t('importStats', {
+                  imported: item.last_import_imported,
+                  skipped: item.last_import_skipped,
+                  failed: item.last_import_failed,
+                }) }}
+              </div>
+              <div v-if="item.last_import_message" class="upstream-import-message">{{ item.last_import_message }}</div>
+            </div>
+
+            <div class="inline-actions row-actions upstream-card-actions">
+              <button
+                class="button button-accent button-compact"
+                type="button"
+                :disabled="importingId === item.id || !item.enabled"
+                @click="runImport(item)"
+              >
+                {{ importingId === item.id ? t('importingNode') : t('importNow') }}
+              </button>
+              <button class="button button-ghost button-compact" type="button" @click="startEdit(item)">
+                {{ t('edit') }}
+              </button>
+              <button class="button button-danger button-compact" type="button" @click="removeItem(item)">
+                {{ t('delete') }}
+              </button>
+            </div>
+          </div>
+        </article>
       </div>
     </article>
 
@@ -329,14 +324,10 @@ onMounted(load)
               <div class="hint template-kind-hint">{{ t('upstreamSubscriptionSaveHint') }}</div>
             </div>
 
-            <div>
-              <label class="field-label" for="upstream-group-managed">{{ t('importToNodeGroup') }}</label>
-              <select id="upstream-group-managed" v-model="form.group_id" class="select">
-                <option :value="null">{{ t('ungrouped') }}</option>
-                <option v-for="group in groups" :key="group.id" :value="group.id">
-                  {{ group.name }}
-                </option>
-              </select>
+            <div class="upstream-auto-group-panel">
+              <span class="status-badge status-badge-neutral">{{ t('importTarget') }}</span>
+              <strong>{{ form.name || t('upstreamSubscriptionName') }}</strong>
+              <p>{{ t('upstreamAutoGroupHint') }}</p>
             </div>
 
             <div>
