@@ -354,3 +354,4 @@ backend/src/protocols/
 - 2026-07-09 发布准备：项目版本号更新到 `0.1.3`，`CHANGELOG.md` 新增 `v0.1.3`，覆盖上游订阅管理页面整理、自动分组、删除关联节点选项、Mihomo/Clash 手动优先模板和常用站点规则优化。
 - 2026-07-09 Docker 发布追加：使用 `DOCKER_REGISTRY=docker.m.daocloud.io` 完成 `0.1.3` 生产镜像构建并推送 Docker Hub；后端 `latest`/`0.1.3`/`v0.1.3` digest 为 `sha256:5d32315ddb3c509707dd5c74a6c858be05ebb4f6a2ef0972fa3554111107390d`，前端 `latest`/`0.1.3`/`v0.1.3` digest 为 `sha256:dcd1c73a4cef8f6f113957173b6be275280490b7d484925cd397b48394810556`。
 - 2026-07-09 Docker 发布验证：`docker buildx imagetools inspect docker.io/jojhaa/sublinkx-rs-backend:0.1.3` 和 `docker buildx imagetools inspect docker.io/jojhaa/sublinkx-rs-frontend:0.1.3` 均可读取远端镜像 digest；推送期间 Docker Desktop 内部 DNS 将 Docker Hub 解析到异常地址，已临时写入正确 hosts 映射完成推送并在完成后清理。
+- 2026-07-09 GitHub 发布追加：提交 `81851c9 release v0.1.3` 已推送到 `main`，并创建/推送 tag `v0.1.3`；GitHub Release 已发布到 `https://github.com/jojhaa/sublinkx-rs/releases/tag/v0.1.3`，发布说明包含 `CHANGELOG.md` 的 `v0.1.3` 更新日志和 Docker 镜像 digest。
