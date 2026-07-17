@@ -30,6 +30,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     services::template_seed_service::seed_default_templates(&pool).await?;
     let state = AppState::new(config.clone(), pool);
     services::latency_scheduler_service::spawn_auto_latency_tester(state.clone());
+    services::upstream_sync_scheduler_service::spawn_upstream_subscription_syncer(state.clone());
     let app = build_app(state);
 
     let addr = SocketAddr::from(([0, 0, 0, 0], config.server.port));

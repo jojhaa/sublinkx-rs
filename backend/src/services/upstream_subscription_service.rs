@@ -1,3 +1,4 @@
+use time::{Duration as TimeDuration, OffsetDateTime, format_description::well_known::Rfc3339};
 use url::Url;
 
 use crate::{
@@ -22,6 +23,10 @@ use crate::{
 };
 
 use super::node_service;
+
+pub const MIN_SYNC_INTERVAL_MINUTES: i64 = 5;
+pub const MAX_SYNC_INTERVAL_MINUTES: i64 = 10080;
+pub const DEFAULT_SYNC_INTERVAL_MINUTES: i64 = 360;
 
 pub async fn list(state: &AppState) -> Result<UpstreamSubscriptionListResponse, AppError> {
     backfill_existing_node_source_refs(state).await?;
@@ -49,6 +54,11 @@ pub async fn create(
     }
 
     let now = now_rfc3339();
+    let sync_interval_minutes = validate_sync_interval(
+        payload
+            .sync_interval_minutes
+            .unwrap_or(DEFAULT_SYNC_INTERVAL_MINUTES),
+    )?;
     let record = upstream_subscription_repo::insert(
         &state.db,
         &NewUpstreamSubscriptionRecord {
@@ -56,6 +66,8 @@ pub async fn create(
             url: &url,
             group_id: Some(group_id),
             enabled: bool_to_db(payload.enabled.unwrap_or(true)),
+            sync_enabled: bool_to_db(payload.sync_enabled.unwrap_or(false)),
+            sync_interval_minutes,
             remark: payload.remark.as_deref().unwrap_or("").trim(),
             created_at: &now,
             updated_at: &now,
@@ -89,6 +101,11 @@ pub async fn update(
     }
 
     let now = now_rfc3339();
+    let sync_interval_minutes = validate_sync_interval(
+        payload
+            .sync_interval_minutes
+            .unwrap_or(DEFAULT_SYNC_INTERVAL_MINUTES),
+    )?;
     let record = upstream_subscription_repo::update(
         &state.db,
         id,
@@ -97,6 +114,8 @@ pub async fn update(
             url: &url,
             group_id: Some(group_id),
             enabled: bool_to_db(payload.enabled.unwrap_or(true)),
+            sync_enabled: bool_to_db(payload.sync_enabled.unwrap_or(false)),
+            sync_interval_minutes,
             remark: payload.remark.as_deref().unwrap_or("").trim(),
             updated_at: &now,
         },
@@ -135,9 +154,10 @@ pub async fn import(
     let record = upstream_subscription_repo::find_by_id(&state.db, id)
         .await?
         .ok_or_else(|| AppError::NotFound("upstream subscription not found".to_string()))?;
+    let _sync_guard = state.upstream_subscription_sync_lock.lock().await;
     let group_id = ensure_node_group_for_upstream_name(state, &record.name).await?;
 
-    let import_result = node_service::import_nodes_from_subscription(
+    let import_result = node_service::sync_nodes_from_subscription(
         state,
         ImportNodesFromSubscriptionRequest {
             url: record.url.clone(),
@@ -172,6 +192,8 @@ pub async fn import(
                     status: "error",
                     message: &message,
                     imported: 0,
+                    updated: 0,
+                    disabled: 0,
                     skipped: 0,
                     failed: 0,
                     template_id: record.template_id,
@@ -183,6 +205,30 @@ pub async fn import(
             Err(error)
         }
     }
+}
+
+pub async fn sync_due_subscriptions(state: &AppState) -> Result<usize, AppError> {
+    let records = upstream_subscription_repo::list_sync_enabled(&state.db).await?;
+    let now = OffsetDateTime::now_utc();
+    let mut synced = 0usize;
+
+    for record in records {
+        if !is_due_for_sync(&record, now) {
+            continue;
+        }
+
+        match import(state, record.id).await {
+            Ok(_) => synced += 1,
+            Err(error) => tracing::warn!(
+                upstream_id = record.id,
+                upstream_name = %record.name,
+                "scheduled upstream sync failed: {}",
+                error
+            ),
+        }
+    }
+
+    Ok(synced)
 }
 
 async fn ensure_node_group_for_upstream_name(
@@ -245,6 +291,37 @@ fn validate_url(url: &str) -> Result<String, AppError> {
     Ok(url.to_string())
 }
 
+fn validate_sync_interval(interval_minutes: i64) -> Result<i64, AppError> {
+    if !(MIN_SYNC_INTERVAL_MINUTES..=MAX_SYNC_INTERVAL_MINUTES).contains(&interval_minutes) {
+        return Err(AppError::BadRequest(format!(
+            "upstream sync interval must be between {MIN_SYNC_INTERVAL_MINUTES} and {MAX_SYNC_INTERVAL_MINUTES} minutes"
+        )));
+    }
+    Ok(interval_minutes)
+}
+
+fn is_due_for_sync(
+    record: &crate::domain::upstream_subscription::UpstreamSubscriptionRecord,
+    now: OffsetDateTime,
+) -> bool {
+    if record.enabled == 0 || record.sync_enabled == 0 {
+        return false;
+    }
+
+    let Some(last_imported_at) = record.last_imported_at.as_deref() else {
+        return true;
+    };
+    let Ok(last_imported_at) = OffsetDateTime::parse(last_imported_at, &Rfc3339) else {
+        return true;
+    };
+    let interval = TimeDuration::minutes(
+        record
+            .sync_interval_minutes
+            .clamp(MIN_SYNC_INTERVAL_MINUTES, MAX_SYNC_INTERVAL_MINUTES),
+    );
+    last_imported_at + interval <= now
+}
+
 fn bool_to_db(value: bool) -> i64 {
     if value { 1 } else { 0 }
 }
@@ -270,6 +347,8 @@ async fn backfill_existing_node_source_refs(state: &AppState) -> Result<(), AppE
                 status: "ok",
                 message: &message,
                 imported: source.node_count,
+                updated: 0,
+                disabled: 0,
                 skipped: 0,
                 failed: 0,
                 template_id: None,

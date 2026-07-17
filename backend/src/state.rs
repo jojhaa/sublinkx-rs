@@ -18,6 +18,7 @@ pub struct AppState {
     pub config: AppConfig,
     pub db: DbPool,
     pub latency_test_semaphore: Arc<Semaphore>,
+    pub upstream_subscription_sync_lock: Arc<Mutex<()>>,
     latency_run_state: Arc<Mutex<LatencyRunState>>,
     public_export_cache: Arc<Mutex<HashMap<String, PublicExportCacheEntry>>>,
     rate_limit_buckets: Arc<Mutex<HashMap<String, RateLimitBucket>>>,
@@ -60,6 +61,7 @@ impl AppState {
             latency_test_semaphore: Arc::new(Semaphore::new(
                 crate::services::settings_service::MAX_LATENCY_CONCURRENCY as usize,
             )),
+            upstream_subscription_sync_lock: Arc::new(Mutex::new(())),
             latency_run_state: Arc::new(Mutex::new(LatencyRunState {
                 manual_in_progress: false,
                 auto_in_progress: false,

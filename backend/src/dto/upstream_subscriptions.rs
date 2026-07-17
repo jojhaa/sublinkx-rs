@@ -9,6 +9,8 @@ pub struct UpstreamSubscriptionPayload {
     pub name: String,
     pub url: String,
     pub enabled: Option<bool>,
+    pub sync_enabled: Option<bool>,
+    pub sync_interval_minutes: Option<i64>,
     pub remark: Option<String>,
 }
 

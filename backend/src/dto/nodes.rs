@@ -89,6 +89,8 @@ pub struct NodeFidelityWarning {
 pub struct NodeImportResponse {
     pub code: &'static str,
     pub imported: usize,
+    pub updated: usize,
+    pub disabled: usize,
     pub skipped: usize,
     pub failed: usize,
     pub template_id: Option<i64>,

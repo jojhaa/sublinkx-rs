@@ -10,4 +10,5 @@ pub mod subscription_service;
 pub mod template_seed_service;
 pub mod template_service;
 pub mod upstream_subscription_service;
+pub mod upstream_sync_scheduler_service;
 pub mod url_safety;

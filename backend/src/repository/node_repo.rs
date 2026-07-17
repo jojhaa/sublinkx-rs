@@ -7,7 +7,7 @@ use crate::domain::node::NodeRecord;
 
 const NODE_SELECT_FIELDS: &str = r#"
 id, name, protocol, raw_link, server, port, enabled + 0 AS enabled, group_id, source_type, source_ref,
-fingerprint, settings_json, remark, last_latency_ms, last_latency_status,
+upstream_missing + 0 AS upstream_missing, fingerprint, settings_json, remark, last_latency_ms, last_latency_status,
 last_latency_message, last_latency_tested_at, created_at, updated_at
 "#;
 
@@ -22,6 +22,7 @@ pub struct NewNodeRecord<'a> {
     pub fingerprint_scope: i64,
     pub source_type: &'a str,
     pub source_ref: Option<&'a str>,
+    pub upstream_missing: i64,
     pub fingerprint: &'a str,
     pub settings_json: &'a str,
     pub remark: &'a str,
@@ -38,6 +39,7 @@ pub struct UpdateNodeRecord<'a> {
     pub enabled: i64,
     pub group_id: Option<i64>,
     pub fingerprint_scope: i64,
+    pub upstream_missing: i64,
     pub fingerprint: &'a str,
     pub settings_json: &'a str,
     pub remark: &'a str,
@@ -49,7 +51,7 @@ pub async fn list(pool: &DbPool) -> Result<Vec<NodeRecord>, sqlx::Error> {
         r#"
         SELECT
                id, name, protocol, raw_link, server, port, enabled + 0 AS enabled, group_id, source_type, source_ref,
-               fingerprint, settings_json, remark, last_latency_ms, last_latency_status,
+               upstream_missing + 0 AS upstream_missing, fingerprint, settings_json, remark, last_latency_ms, last_latency_status,
                last_latency_message, last_latency_tested_at, created_at, updated_at
         FROM nodes
         ORDER BY id DESC
@@ -64,7 +66,7 @@ pub async fn find_by_id(pool: &DbPool, id: i64) -> Result<Option<NodeRecord>, sq
         r#"
         SELECT
                id, name, protocol, raw_link, server, port, enabled + 0 AS enabled, group_id, source_type, source_ref,
-               fingerprint, settings_json, remark, last_latency_ms, last_latency_status,
+               upstream_missing + 0 AS upstream_missing, fingerprint, settings_json, remark, last_latency_ms, last_latency_status,
                last_latency_message, last_latency_tested_at, created_at, updated_at
         FROM nodes
         WHERE id = ?
@@ -89,6 +91,58 @@ pub async fn find_by_fingerprint_in_group(
         .bind(fingerprint_scope(group_id))
         .fetch_optional(pool)
         .await
+}
+
+pub async fn find_upstream_by_fingerprint(
+    pool: &DbPool,
+    url: &str,
+    fingerprint: &str,
+) -> Result<Option<NodeRecord>, sqlx::Error> {
+    let query = format!(
+        r#"
+        SELECT {NODE_SELECT_FIELDS}
+        FROM nodes
+        WHERE source_type = 'upstream_subscription'
+          AND source_ref = ?
+          AND fingerprint = ?
+        "#
+    );
+
+    sqlx::query_as::<_, NodeRecord>(&query)
+        .bind(url)
+        .bind(fingerprint)
+        .fetch_optional(pool)
+        .await
+}
+
+pub async fn find_unique_upstream_by_name(
+    pool: &DbPool,
+    url: &str,
+    name: &str,
+) -> Result<Option<NodeRecord>, sqlx::Error> {
+    let query = format!(
+        r#"
+        SELECT {NODE_SELECT_FIELDS}
+        FROM nodes
+        WHERE source_type = 'upstream_subscription'
+          AND source_ref = ?
+          AND name = ?
+        ORDER BY id ASC
+        LIMIT 2
+        "#
+    );
+
+    let records = sqlx::query_as::<_, NodeRecord>(&query)
+        .bind(url)
+        .bind(name)
+        .fetch_all(pool)
+        .await?;
+
+    Ok(if records.len() == 1 {
+        records.into_iter().next()
+    } else {
+        None
+    })
 }
 
 pub async fn existing_fingerprints_in_group(
@@ -121,8 +175,8 @@ pub async fn insert(pool: &DbPool, node: &NewNodeRecord<'_>) -> Result<NodeRecor
         r#"
         INSERT INTO nodes (
             name, protocol, raw_link, server, port, enabled, group_id, source_type, source_ref,
-            fingerprint, fingerprint_scope, settings_json, remark, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            upstream_missing, fingerprint, fingerprint_scope, settings_json, remark, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         "#,
     )
     .bind(node.name)
@@ -134,6 +188,7 @@ pub async fn insert(pool: &DbPool, node: &NewNodeRecord<'_>) -> Result<NodeRecor
     .bind(node.group_id)
     .bind(node.source_type)
     .bind(node.source_ref)
+    .bind(node.upstream_missing)
     .bind(node.fingerprint)
     .bind(node.fingerprint_scope)
     .bind(node.settings_json)
@@ -163,6 +218,7 @@ pub async fn update(
             port = ?,
             enabled = ?,
             group_id = ?,
+            upstream_missing = ?,
             fingerprint = ?,
             fingerprint_scope = ?,
             settings_json = ?,
@@ -178,6 +234,7 @@ pub async fn update(
     .bind(node.port)
     .bind(node.enabled)
     .bind(node.group_id)
+    .bind(node.upstream_missing)
     .bind(node.fingerprint)
     .bind(node.fingerprint_scope)
     .bind(node.settings_json)
@@ -231,6 +288,34 @@ pub async fn delete_upstream_source_ref(pool: &DbPool, url: &str) -> Result<u64,
     .bind(url)
     .execute(pool)
     .await?;
+    Ok(result.rows_affected())
+}
+
+pub async fn disable_stale_upstream_nodes(
+    pool: &DbPool,
+    url: &str,
+    fingerprints: &[String],
+    updated_at: &str,
+) -> Result<u64, sqlx::Error> {
+    let mut query = QueryBuilder::<Any>::new(
+        "UPDATE nodes SET enabled = 0, upstream_missing = 1, updated_at = ",
+    );
+    query.push_bind(updated_at);
+    query.push(" WHERE source_type = 'upstream_subscription' AND source_ref = ");
+    query.push_bind(url);
+    query.push(" AND (enabled <> 0 OR upstream_missing = 0)");
+    if !fingerprints.is_empty() {
+        query.push(" AND fingerprint NOT IN (");
+        {
+            let mut separated = query.separated(", ");
+            for fingerprint in fingerprints {
+                separated.push_bind(fingerprint);
+            }
+        }
+        query.push(")");
+    }
+
+    let result = query.build().execute(pool).await?;
     Ok(result.rows_affected())
 }
 

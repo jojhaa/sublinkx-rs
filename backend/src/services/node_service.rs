@@ -7,7 +7,7 @@ use percent_encoding::{NON_ALPHANUMERIC, utf8_percent_encode};
 use serde_yaml::{Mapping, Value};
 use sha2::{Digest, Sha256};
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     convert::Infallible,
     fs,
     net::TcpListener,
@@ -45,6 +45,12 @@ const MAX_SUBSCRIPTION_BODY_BYTES: usize = 5 * 1024 * 1024;
 const MAX_IMPORT_SUBSCRIPTION_NODES: usize = 1000;
 const MAX_LATENCY_BATCH_SIZE: usize = 50;
 const LATENCY_RUN_COOLDOWN: Duration = Duration::from_secs(20);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SubscriptionImportMode {
+    AddOnly,
+    SyncOverwrite,
+}
 
 pub async fn require_auth(state: &AppState, headers: &HeaderMap) -> Result<(), AppError> {
     auth_service::require_user(state, headers).await.map(|_| ())
@@ -111,6 +117,7 @@ pub async fn create_node(
             fingerprint_scope: node_repo::fingerprint_scope(payload.group_id),
             source_type: "manual",
             source_ref: None,
+            upstream_missing: bool_to_db(false),
             fingerprint: &parsed.fingerprint,
             settings_json: &settings_json,
             remark: payload.remark.as_deref().unwrap_or(""),
@@ -130,6 +137,22 @@ pub async fn create_node(
 pub async fn import_nodes_from_subscription(
     state: &AppState,
     payload: ImportNodesFromSubscriptionRequest,
+) -> Result<NodeImportResponse, AppError> {
+    import_nodes_from_subscription_with_mode(state, payload, SubscriptionImportMode::AddOnly).await
+}
+
+pub async fn sync_nodes_from_subscription(
+    state: &AppState,
+    payload: ImportNodesFromSubscriptionRequest,
+) -> Result<NodeImportResponse, AppError> {
+    import_nodes_from_subscription_with_mode(state, payload, SubscriptionImportMode::SyncOverwrite)
+        .await
+}
+
+async fn import_nodes_from_subscription_with_mode(
+    state: &AppState,
+    payload: ImportNodesFromSubscriptionRequest,
+    mode: SubscriptionImportMode,
 ) -> Result<NodeImportResponse, AppError> {
     let url = payload.url.trim();
     if url.is_empty() {
@@ -159,8 +182,12 @@ pub async fn import_nodes_from_subscription(
     let mut imported = Vec::new();
     let mut failures = Vec::new();
     let mut skipped = 0usize;
+    let mut imported_count = 0usize;
+    let mut updated_count = 0usize;
+    let mut disabled_count = 0usize;
     let mut parsed_links = Vec::new();
     let mut seen_fingerprints = HashSet::new();
+    let mut name_counts = HashMap::<String, usize>::new();
 
     for raw_link in raw_links {
         match protocol_parser_service::parse_raw_link(&raw_link, None) {
@@ -175,6 +202,7 @@ pub async fn import_nodes_from_subscription(
                     continue;
                 }
 
+                *name_counts.entry(parsed.name.clone()).or_default() += 1;
                 parsed_links.push((raw_link, parsed));
             }
             Err(error) => failures.push(NodeImportFailure {
@@ -193,6 +221,57 @@ pub async fn import_nodes_from_subscription(
             .await?;
 
     for (raw_link, parsed) in parsed_links {
+        if mode == SubscriptionImportMode::SyncOverwrite
+            && let Some(existing) = find_existing_upstream_node_for_sync(
+                state,
+                url,
+                &parsed.name,
+                &parsed.fingerprint,
+                name_counts.get(&parsed.name).copied().unwrap_or_default() == 1,
+                &existing_fingerprints,
+            )
+            .await?
+        {
+            let settings_json =
+                serde_json::to_string(&parsed.settings).map_err(|_| AppError::Internal)?;
+            match node_repo::update(
+                &state.db,
+                existing.id,
+                &UpdateNodeRecord {
+                    name: &parsed.name,
+                    protocol: parsed.protocol.as_str(),
+                    raw_link: raw_link.trim(),
+                    server: &parsed.server,
+                    port: i64::from(parsed.port),
+                    enabled: if existing.upstream_missing != 0 {
+                        bool_to_db(true)
+                    } else {
+                        existing.enabled
+                    },
+                    group_id: payload.group_id,
+                    fingerprint_scope: node_repo::fingerprint_scope(payload.group_id),
+                    upstream_missing: bool_to_db(false),
+                    fingerprint: &parsed.fingerprint,
+                    settings_json: &settings_json,
+                    remark: payload.remark.as_deref().unwrap_or(&existing.remark),
+                    updated_at: &now,
+                },
+            )
+            .await
+            {
+                Ok(record) => {
+                    let view = NodeView::try_from(record).map_err(|_| AppError::Internal)?;
+                    updated_count += 1;
+                    imported.push(view);
+                }
+                Err(error) => failures.push(NodeImportFailure {
+                    source: truncate_source(&raw_link),
+                    reason: error.to_string(),
+                }),
+            }
+            continue;
+        }
+
         if existing_fingerprints.contains(&parsed.fingerprint) {
             skipped += 1;
             continue;
@@ -213,6 +292,7 @@ pub async fn import_nodes_from_subscription(
                 fingerprint_scope: node_repo::fingerprint_scope(payload.group_id),
                 source_type: "upstream_subscription",
                 source_ref: Some(url),
+                upstream_missing: bool_to_db(false),
                 fingerprint: &parsed.fingerprint,
                 settings_json: &settings_json,
                 remark: payload.remark.as_deref().unwrap_or(""),
@@ -224,6 +304,7 @@ pub async fn import_nodes_from_subscription(
         {
             Ok(record) => {
                 let view = NodeView::try_from(record).map_err(|_| AppError::Internal)?;
+                imported_count += 1;
                 imported.push(view);
             }
             Err(error) => failures.push(NodeImportFailure {
@@ -233,9 +314,17 @@ pub async fn import_nodes_from_subscription(
         }
     }
 
+    if mode == SubscriptionImportMode::SyncOverwrite && failures.is_empty() {
+        disabled_count =
+            node_repo::disable_stale_upstream_nodes(&state.db, url, &fingerprints, &now).await?
+                as usize;
+    }
+
     let response = NodeImportResponse {
         code: "00000",
-        imported: imported.len(),
+        imported: imported_count,
+        updated: updated_count,
+        disabled: disabled_count,
         skipped,
         failed: failures.len(),
         template_id: saved_template.as_ref().map(|template| template.id),
@@ -259,6 +348,29 @@ pub async fn import_nodes_from_subscription(
     Ok(response)
 }
 
+async fn find_existing_upstream_node_for_sync(
+    state: &AppState,
+    url: &str,
+    name: &str,
+    fingerprint: &str,
+    incoming_name_is_unique: bool,
+    existing_fingerprints: &HashSet<String>,
+) -> Result<Option<crate::domain::node::NodeRecord>, AppError> {
+    if let Some(existing) =
+        node_repo::find_upstream_by_fingerprint(&state.db, url, fingerprint).await?
+    {
+        return Ok(Some(existing));
+    }
+
+    if !incoming_name_is_unique || existing_fingerprints.contains(fingerprint) {
+        return Ok(None);
+    }
+
+    node_repo::find_unique_upstream_by_name(&state.db, url, name)
+        .await
+        .map_err(Into::into)
+}
+
 async fn remember_upstream_subscription(
     state: &AppState,
     url: &str,
@@ -269,14 +381,18 @@ async fn remember_upstream_subscription(
     let now = now_rfc3339();
     let status = if response.failed == 0 {
         "ok"
-    } else if response.imported > 0 || response.skipped > 0 {
+    } else if response.imported > 0
+        || response.updated > 0
+        || response.disabled > 0
+        || response.skipped > 0
+    {
         "partial"
     } else {
         "error"
     };
     let message = format!(
-        "imported {}, skipped {}, failed {}",
-        response.imported, response.skipped, response.failed
+        "imported {}, updated {}, disabled {}, skipped {}, failed {}",
+        response.imported, response.updated, response.disabled, response.skipped, response.failed
     );
     let name = upstream_subscription_service::default_name_from_url(url);
     upstream_subscription_repo::upsert_import_result_by_url(
@@ -289,6 +405,8 @@ async fn remember_upstream_subscription(
             status,
             message: &message,
             imported: response.imported as i64,
+            updated: response.updated as i64,
+            disabled: response.disabled as i64,
             skipped: response.skipped as i64,
             failed: response.failed as i64,
             template_id: response.template_id,
@@ -336,6 +454,7 @@ pub async fn update_node(
             enabled: payload.enabled.map(bool_to_db).unwrap_or(existing.enabled),
             group_id: payload.group_id,
             fingerprint_scope: node_repo::fingerprint_scope(payload.group_id),
+            upstream_missing: bool_to_db(false),
             fingerprint: &parsed.fingerprint,
             settings_json: &settings_json,
             remark: payload.remark.as_deref().unwrap_or(&existing.remark),
@@ -1214,6 +1333,7 @@ fn fidelity_node_from_parsed(
         group_id: None,
         source_type: "fidelity_check".to_string(),
         source_ref: None,
+        upstream_missing: false,
         fingerprint: parsed.fingerprint,
         settings: parsed.settings,
         remark: String::new(),

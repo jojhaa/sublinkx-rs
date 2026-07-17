@@ -108,6 +108,7 @@ async fn init_mysql_schema(pool: &DbPool) -> Result<(), sqlx::Error> {
           group_id BIGINT NULL,
           source_type VARCHAR(64) NOT NULL DEFAULT 'manual',
           source_ref VARCHAR(2048) NULL,
+          upstream_missing BOOLEAN NOT NULL DEFAULT FALSE,
           fingerprint VARCHAR(191) NOT NULL,
           fingerprint_scope BIGINT NOT NULL DEFAULT 0,
           settings_json VARCHAR(4096) NOT NULL,
@@ -200,11 +201,15 @@ async fn init_mysql_schema(pool: &DbPool) -> Result<(), sqlx::Error> {
           url VARCHAR(2048) NOT NULL,
           group_id BIGINT NULL,
           enabled BOOLEAN NOT NULL DEFAULT TRUE,
+          sync_enabled BOOLEAN NOT NULL DEFAULT FALSE,
+          sync_interval_minutes BIGINT NOT NULL DEFAULT 360,
           remark VARCHAR(1024) NOT NULL DEFAULT '',
           last_imported_at VARCHAR(64) NULL,
           last_import_status VARCHAR(64) NULL,
           last_import_message TEXT NULL,
           last_import_imported BIGINT NOT NULL DEFAULT 0,
+          last_import_updated BIGINT NOT NULL DEFAULT 0,
+          last_import_disabled BIGINT NOT NULL DEFAULT 0,
           last_import_skipped BIGINT NOT NULL DEFAULT 0,
           last_import_failed BIGINT NOT NULL DEFAULT 0,
           template_id BIGINT NULL,
@@ -214,6 +219,7 @@ async fn init_mysql_schema(pool: &DbPool) -> Result<(), sqlx::Error> {
           KEY idx_upstream_subscriptions_url (url(191)),
           KEY idx_upstream_subscriptions_group_id (group_id),
           KEY idx_upstream_subscriptions_enabled (enabled),
+          KEY idx_upstream_subscriptions_sync (enabled, sync_enabled),
           CONSTRAINT fk_upstream_subscriptions_group_id FOREIGN KEY (group_id) REFERENCES node_groups(id) ON DELETE SET NULL,
           CONSTRAINT fk_upstream_subscriptions_template_id FOREIGN KEY (template_id) REFERENCES templates(id) ON DELETE SET NULL
         )
@@ -308,6 +314,11 @@ async fn apply_mysql_schema_upgrades(pool: &DbPool) -> Result<(), sqlx::Error> {
             "VARCHAR(64) NOT NULL DEFAULT 'manual'",
         ),
         ("nodes", "source_ref", "VARCHAR(2048) NULL"),
+        (
+            "nodes",
+            "upstream_missing",
+            "BOOLEAN NOT NULL DEFAULT FALSE",
+        ),
         ("nodes", "fingerprint_scope", "BIGINT NOT NULL DEFAULT 0"),
         ("nodes", "last_latency_ms", "BIGINT NULL"),
         ("nodes", "last_latency_status", "VARCHAR(64) NULL"),
@@ -315,6 +326,26 @@ async fn apply_mysql_schema_upgrades(pool: &DbPool) -> Result<(), sqlx::Error> {
         ("nodes", "last_latency_tested_at", "VARCHAR(64) NULL"),
         ("subscriptions", "group_id", "BIGINT NULL"),
         ("subscriptions", "expires_at", "VARCHAR(64) NULL"),
+        (
+            "upstream_subscriptions",
+            "sync_enabled",
+            "BOOLEAN NOT NULL DEFAULT FALSE",
+        ),
+        (
+            "upstream_subscriptions",
+            "sync_interval_minutes",
+            "BIGINT NOT NULL DEFAULT 360",
+        ),
+        (
+            "upstream_subscriptions",
+            "last_import_updated",
+            "BIGINT NOT NULL DEFAULT 0",
+        ),
+        (
+            "upstream_subscriptions",
+            "last_import_disabled",
+            "BIGINT NOT NULL DEFAULT 0",
+        ),
     ] {
         mysql_add_column_if_missing(pool, table, column, definition).await?;
     }
@@ -356,6 +387,11 @@ async fn apply_mysql_schema_upgrades(pool: &DbPool) -> Result<(), sqlx::Error> {
             "subscriptions",
             "idx_subscriptions_expires_at",
             "CREATE INDEX idx_subscriptions_expires_at ON subscriptions(expires_at)",
+        ),
+        (
+            "upstream_subscriptions",
+            "idx_upstream_subscriptions_sync",
+            "CREATE INDEX idx_upstream_subscriptions_sync ON upstream_subscriptions(enabled, sync_enabled)",
         ),
         (
             "subscription_nodes",

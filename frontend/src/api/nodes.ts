@@ -14,6 +14,7 @@ export interface NodeItem {
   group_id: number | null
   source_type: string
   source_ref: string | null
+  upstream_missing: boolean
   fingerprint: string
   settings: Record<string, unknown>
   remark: string
@@ -69,6 +70,8 @@ export interface NodeFidelityWarning {
 export interface NodeImportResponse {
   code: string
   imported: number
+  updated: number
+  disabled: number
   skipped: number
   failed: number
   template_id: number | null

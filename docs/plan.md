@@ -355,3 +355,9 @@ backend/src/protocols/
 - 2026-07-09 Docker 发布追加：使用 `DOCKER_REGISTRY=docker.m.daocloud.io` 完成 `0.1.3` 生产镜像构建并推送 Docker Hub；后端 `latest`/`0.1.3`/`v0.1.3` digest 为 `sha256:5d32315ddb3c509707dd5c74a6c858be05ebb4f6a2ef0972fa3554111107390d`，前端 `latest`/`0.1.3`/`v0.1.3` digest 为 `sha256:dcd1c73a4cef8f6f113957173b6be275280490b7d484925cd397b48394810556`。
 - 2026-07-09 Docker 发布验证：`docker buildx imagetools inspect docker.io/jojhaa/sublinkx-rs-backend:0.1.3` 和 `docker buildx imagetools inspect docker.io/jojhaa/sublinkx-rs-frontend:0.1.3` 均可读取远端镜像 digest；推送期间 Docker Desktop 内部 DNS 将 Docker Hub 解析到异常地址，已临时写入正确 hosts 映射完成推送并在完成后清理。
 - 2026-07-09 GitHub 发布追加：提交 `81851c9 release v0.1.3` 已推送到 `main`，并创建/推送 tag `v0.1.3`；GitHub Release 已发布到 `https://github.com/jojhaa/sublinkx-rs/releases/tag/v0.1.3`，发布说明包含 `CHANGELOG.md` 的 `v0.1.3` 更新日志和 Docker 镜像 digest。
+- 2026-07-17 功能增强：上游订阅新增定时同步能力，保存项可单独启用同步并设置 5 分钟到 7 天的同步间隔；后台任务会定期扫描到期上游订阅，按订阅名称自动分组执行覆盖同步。
+- 2026-07-17 数据同步：上游同步改为覆盖当前来源节点，保留已有节点启用状态，优先更新同来源同指纹节点；若上游只是参数变化导致指纹变化但节点名称不变，会在名称唯一时按同来源同名节点原地覆盖；同步也会新增上游新增节点，并将上游已移除节点自动停用为 `upstream_missing`，后续上游恢复时自动重新启用；托管上游同步串行执行，若本次上游解析出现失败，会跳过 stale 停用以避免脏上游误停线上节点。
+- 2026-07-17 管理页：上游订阅页面新增定时同步开关、同步间隔输入和同步状态徽标；最近一次同步统计持久化保存导入、更新、停用、跳过、失败数量，页面刷新后仍能看到真实覆盖结果。
+- 2026-07-17 发布准备：项目版本号更新到 `0.1.4`，`CHANGELOG.md` 新增 `v0.1.4`，覆盖上游定时同步、同名参数变化原地覆盖、上游移除节点自动停用和同步统计更新。
+- 2026-07-17 Docker 发布追加：使用 `DOCKER_REGISTRY=docker.m.daocloud.io` 完成 `0.1.4` 生产镜像构建并推送 Docker Hub；后端 `latest`/`0.1.4`/`v0.1.4` digest 为 `sha256:59344b70b6ff7f11ba69d9f0a64ed87809d4de71668e4a3e5bfe5284535bce19`，前端 `latest`/`0.1.4`/`v0.1.4` digest 为 `sha256:93dd1f832623e6789f433a4d787e062dd08f674150740b24fe524876adeb9642`。
+- 2026-07-17 Docker 发布验证：`docker buildx imagetools inspect docker.io/jojhaa/sublinkx-rs-backend:0.1.4` 和 `docker buildx imagetools inspect docker.io/jojhaa/sublinkx-rs-frontend:0.1.4` 均可读取远端镜像 digest。

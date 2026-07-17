@@ -7,11 +7,15 @@ export interface UpstreamSubscriptionItem {
   url: string
   group_id: number | null
   enabled: boolean
+  sync_enabled: boolean
+  sync_interval_minutes: number
   remark: string
   last_imported_at: string | null
   last_import_status: 'ok' | 'partial' | 'error' | null
   last_import_message: string | null
   last_import_imported: number
+  last_import_updated: number
+  last_import_disabled: number
   last_import_skipped: number
   last_import_failed: number
   template_id: number | null
@@ -40,6 +44,8 @@ export interface UpstreamSubscriptionPayload {
   name: string
   url: string
   enabled?: boolean
+  sync_enabled?: boolean
+  sync_interval_minutes?: number
   remark?: string
 }
 

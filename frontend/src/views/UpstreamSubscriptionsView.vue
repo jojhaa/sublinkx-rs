@@ -26,6 +26,8 @@ const form = reactive({
   name: '',
   url: '',
   enabled: true,
+  sync_enabled: false,
+  sync_interval_minutes: 360,
   remark: '',
 })
 
@@ -42,6 +44,8 @@ function resetForm() {
   form.name = ''
   form.url = ''
   form.enabled = true
+  form.sync_enabled = false
+  form.sync_interval_minutes = 360
   form.remark = ''
 }
 
@@ -62,6 +66,8 @@ function startEdit(item: UpstreamSubscriptionItem) {
   form.name = item.name
   form.url = item.url
   form.enabled = item.enabled
+  form.sync_enabled = item.sync_enabled
+  form.sync_interval_minutes = item.sync_interval_minutes
   form.remark = item.remark
   showEditor.value = true
   errorMessage.value = ''
@@ -145,6 +151,8 @@ async function submit() {
       name: form.name,
       url: form.url,
       enabled: form.enabled,
+      sync_enabled: form.sync_enabled,
+      sync_interval_minutes: form.sync_interval_minutes,
       remark: form.remark || undefined,
     }
 
@@ -174,6 +182,8 @@ async function runImport(item: UpstreamSubscriptionItem) {
     const response = await importUpstreamSubscription(item.id)
     successMessage.value = t('upstreamSubscriptionImported', {
       imported: response.import.imported,
+      updated: response.import.updated,
+      disabled: response.import.disabled,
       skipped: response.import.skipped,
       failed: response.import.failed,
     })
@@ -247,6 +257,9 @@ onMounted(load)
               <span class="status-badge" :class="item.enabled ? 'status-badge-ok' : 'status-badge-muted'">
                 {{ item.enabled ? t('enabled') : t('disabled') }}
               </span>
+              <span class="status-badge" :class="item.sync_enabled ? 'status-badge-ok' : 'status-badge-neutral'">
+                {{ item.sync_enabled ? t('upstreamSyncEvery', { minutes: item.sync_interval_minutes }) : t('upstreamSyncOff') }}
+              </span>
               <span class="status-badge status-badge-neutral">{{ t('upstreamAutoGroupBadge', { name: item.name }) }}</span>
               <span v-if="item.template_name" class="status-badge status-badge-neutral">{{ item.template_name }}</span>
             </div>
@@ -267,6 +280,8 @@ onMounted(load)
               <div class="upstream-import-stats">
                 {{ t('importStats', {
                   imported: item.last_import_imported,
+                  updated: item.last_import_updated,
+                  disabled: item.last_import_disabled,
                   skipped: item.last_import_skipped,
                   failed: item.last_import_failed,
                 }) }}
@@ -340,9 +355,31 @@ onMounted(load)
               <span>{{ t('enableUpstreamSubscription') }}</span>
             </label>
 
+            <label class="toggle-row">
+              <input v-model="form.sync_enabled" type="checkbox" />
+              <span>{{ t('enableUpstreamAutoSync') }}</span>
+            </label>
+
+            <div>
+              <label class="field-label" for="upstream-sync-interval">{{ t('upstreamSyncInterval') }}</label>
+              <input
+                id="upstream-sync-interval"
+                v-model.number="form.sync_interval_minutes"
+                class="input"
+                type="number"
+                min="5"
+                max="10080"
+              />
+              <div class="hint template-kind-hint">{{ t('upstreamSyncHint') }}</div>
+            </div>
+
             <div class="modal-actions">
               <button class="button button-ghost" type="button" :disabled="saving" @click="closeEditor">{{ t('cancel') }}</button>
-              <button class="button button-accent" type="submit" :disabled="saving || !form.name || !form.url">
+              <button
+                class="button button-accent"
+                type="submit"
+                :disabled="saving || !form.name || !form.url || form.sync_interval_minutes < 5"
+              >
                 {{ submitLabel }}
               </button>
             </div>
