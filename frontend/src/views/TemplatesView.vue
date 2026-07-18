@@ -68,6 +68,7 @@ const loading = ref(false)
 const saving = ref(false)
 const showEditor = ref(false)
 const editingId = ref<number | null>(null)
+const selectedIds = ref<number[]>([])
 const errorMessage = ref('')
 const successMessage = ref('')
 
@@ -78,6 +79,12 @@ const form = reactive({
 })
 
 const isEditing = computed(() => editingId.value !== null)
+const customTemplates = computed(() => templates.value.filter((item) => !item.is_builtin))
+const selectedTemplates = computed(() => templates.value.filter((item) => selectedIds.value.includes(item.id)))
+const selectedCount = computed(() => selectedTemplates.value.length)
+const allCustomTemplatesSelected = computed(
+  () => customTemplates.value.length > 0 && customTemplates.value.every((item) => selectedIds.value.includes(item.id)),
+)
 const selectedKindNote = computed(
   () => t(TEMPLATE_KIND_OPTIONS.find((item) => item.value === form.kind)?.noteKey ?? 'templateKindCommonNote'),
 )
@@ -133,6 +140,23 @@ function templateCountByKind(kind: TemplateKind) {
   return templates.value.filter((item) => item.kind === kind).length
 }
 
+function selectAllCustomTemplates(checked: boolean) {
+  selectedIds.value = checked ? customTemplates.value.map((item) => item.id) : []
+}
+
+function toggleTemplateSelection(id: number, checked: boolean) {
+  if (checked) {
+    selectedIds.value = Array.from(new Set([...selectedIds.value, id]))
+    return
+  }
+
+  selectedIds.value = selectedIds.value.filter((selectedId) => selectedId !== id)
+}
+
+function clearSelection() {
+  selectedIds.value = []
+}
+
 async function load() {
   loading.value = true
   errorMessage.value = ''
@@ -140,6 +164,9 @@ async function load() {
   try {
     const response = await listTemplates()
     templates.value = response.data
+    selectedIds.value = selectedIds.value.filter((id) =>
+      response.data.some((item) => item.id === id && !item.is_builtin),
+    )
   } catch (error) {
     errorMessage.value = extractApiError(error)
   } finally {
@@ -177,6 +204,12 @@ async function submit() {
 }
 
 async function removeTemplate(id: number) {
+  const item = templates.value.find((template) => template.id === id)
+  if (item?.is_builtin) {
+    errorMessage.value = t('builtinTemplateDeleteBlocked')
+    return
+  }
+
   if (!window.confirm(t('confirmDeleteTemplate'))) {
     return
   }
@@ -188,10 +221,57 @@ async function removeTemplate(id: number) {
       closeEditor()
     }
 
+    selectedIds.value = selectedIds.value.filter((selectedId) => selectedId !== id)
     successMessage.value = t('templateDeleted')
     await load()
   } catch (error) {
     errorMessage.value = extractApiError(error)
+  }
+}
+
+async function removeSelectedTemplates() {
+  if (selectedTemplates.value.length === 0) {
+    return
+  }
+
+  const ids = selectedTemplates.value.filter((item) => !item.is_builtin).map((item) => item.id)
+  if (ids.length === 0) {
+    errorMessage.value = t('noDeletableTemplatesSelected')
+    return
+  }
+
+  if (!window.confirm(t('confirmDeleteSelectedTemplates', { count: ids.length }))) {
+    return
+  }
+
+  saving.value = true
+  errorMessage.value = ''
+  successMessage.value = ''
+
+  try {
+    const results = await Promise.allSettled(ids.map((id) => deleteTemplate(id)))
+    const successCount = results.filter((item) => item.status === 'fulfilled').length
+    const failures = results.filter((item): item is PromiseRejectedResult => item.status === 'rejected')
+
+    if (successCount === 0) {
+      throw failures[0]?.reason ?? new Error(t('batchDeleteFailed'))
+    }
+
+    if (editingId.value !== null && ids.includes(editingId.value)) {
+      closeEditor()
+    }
+
+    selectedIds.value = selectedIds.value.filter((id) => !ids.includes(id))
+    successMessage.value = t('templatesDeleted', { count: successCount })
+    await load()
+
+    if (failures.length > 0) {
+      errorMessage.value = t('templateDeleteFailures', { count: failures.length, reason: extractApiError(failures[0].reason) })
+    }
+  } catch (error) {
+    errorMessage.value = extractApiError(error)
+  } finally {
+    saving.value = false
   }
 }
 
@@ -243,7 +323,13 @@ onMounted(load)
       <div class="section-bar">
         <div>
           <div class="hint">{{ t('templateList') }}</div>
-          <p class="card-copy">{{ t('templateListCopy') }}</p>
+          <p class="card-copy">{{ t('templateListSummary', { count: templates.length, selected: selectedCount }) }}</p>
+        </div>
+        <div class="inline-actions bulk-actions" :class="{ 'is-empty-selection': selectedCount === 0 }">
+          <button class="button button-ghost" type="button" :disabled="selectedCount === 0" @click="clearSelection">{{ t('clearSelection') }}</button>
+          <button class="button button-danger" type="button" :disabled="saving || selectedCount === 0" @click="removeSelectedTemplates">
+            {{ t('deleteSelected') }}
+          </button>
         </div>
       </div>
 
@@ -253,6 +339,15 @@ onMounted(load)
         <table class="table dense-table template-table">
           <thead>
             <tr>
+              <th class="table-select-cell">
+                <input
+                  type="checkbox"
+                  :checked="allCustomTemplatesSelected"
+                  :disabled="customTemplates.length === 0"
+                  :aria-label="allCustomTemplatesSelected ? t('unselectCurrentPage') : t('selectCurrentPage')"
+                  @change="selectAllCustomTemplates(($event.target as HTMLInputElement).checked)"
+                />
+              </th>
               <th>{{ t('template') }}</th>
               <th>{{ t('content') }}</th>
               <th>{{ t('actions') }}</th>
@@ -260,10 +355,22 @@ onMounted(load)
           </thead>
           <tbody>
             <tr v-for="item in templates" :key="item.id">
+              <td class="table-select-cell">
+                <input
+                  type="checkbox"
+                  :checked="selectedIds.includes(item.id)"
+                  :disabled="item.is_builtin"
+                  :aria-label="item.is_builtin ? t('builtinTemplate') : t('selectTemplate')"
+                  @change="toggleTemplateSelection(item.id, ($event.target as HTMLInputElement).checked)"
+                />
+              </td>
               <td>
                 <div class="subscription-title-row">
                   <strong class="row-title">{{ item.name }}</strong>
                   <span class="status-badge status-badge-neutral">{{ kindLabel(item.kind) }}</span>
+                  <span class="status-badge" :class="item.is_builtin ? 'status-badge-neutral' : 'status-badge-ok'">
+                    {{ item.is_builtin ? t('builtinTemplate') : t('customTemplate') }}
+                  </span>
                 </div>
                 <div class="row-meta">#{{ item.id }}</div>
               </td>
@@ -275,7 +382,7 @@ onMounted(load)
                   <button class="button button-ghost button-compact" type="button" @click="startEdit(item)">
                     {{ t('edit') }}
                   </button>
-                  <button class="button button-danger button-compact" type="button" @click="removeTemplate(item.id)">
+                  <button class="button button-danger button-compact" type="button" :disabled="item.is_builtin" @click="removeTemplate(item.id)">
                     {{ t('delete') }}
                   </button>
                 </div>

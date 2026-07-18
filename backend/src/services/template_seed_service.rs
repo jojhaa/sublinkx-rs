@@ -829,6 +829,7 @@ pub async fn seed_default_templates(pool: &DbPool) -> Result<(), sqlx::Error> {
                 name: template.name,
                 kind: template.kind,
                 content: template.content,
+                is_builtin: 1,
                 created_at: &now,
                 updated_at: &now,
             },

@@ -132,6 +132,7 @@ async fn init_mysql_schema(pool: &DbPool) -> Result<(), sqlx::Error> {
           name VARCHAR(191) NOT NULL UNIQUE,
           kind VARCHAR(64) NOT NULL,
           content VARCHAR(12000) NOT NULL,
+          is_builtin BOOLEAN NOT NULL DEFAULT FALSE,
           created_at VARCHAR(64) NOT NULL,
           updated_at VARCHAR(64) NOT NULL
         )
@@ -324,6 +325,7 @@ async fn apply_mysql_schema_upgrades(pool: &DbPool) -> Result<(), sqlx::Error> {
         ("nodes", "last_latency_status", "VARCHAR(64) NULL"),
         ("nodes", "last_latency_message", "TEXT NULL"),
         ("nodes", "last_latency_tested_at", "VARCHAR(64) NULL"),
+        ("templates", "is_builtin", "BOOLEAN NOT NULL DEFAULT FALSE"),
         ("subscriptions", "group_id", "BIGINT NULL"),
         ("subscriptions", "expires_at", "VARCHAR(64) NULL"),
         (
@@ -356,6 +358,35 @@ async fn apply_mysql_schema_upgrades(pool: &DbPool) -> Result<(), sqlx::Error> {
     }
     pool.execute("UPDATE nodes SET fingerprint_scope = COALESCE(group_id, 0)")
         .await?;
+    pool.execute(
+        r#"
+        UPDATE templates
+        SET is_builtin = TRUE
+        WHERE name IN (
+            'Built-in Common Notes',
+            'Built-in Clash ACL4SSR Style',
+            'Built-in Mihomo Rule Base',
+            'Built-in Xray URI Bundle',
+            'Built-in Surge 4/5 Managed',
+            'Built-in sing-box Route Base',
+            'Built-in Surge 3 Managed',
+            'Built-in Surge 2 Managed',
+            'Built-in Quantumult X Base',
+            'Built-in Quantumult Base',
+            'Built-in Loon Base',
+            'Built-in Surfboard Base',
+            'Built-in Mellow Base',
+            'Built-in ClashR Base',
+            'Built-in Shadowsocks SIP002 Notes',
+            'Built-in Shadowsocks SIP008 Base',
+            'Built-in ShadowsocksR Notes',
+            'Built-in ShadowsocksD Base',
+            'Built-in Trojan URI Notes',
+            'Built-in Mixed URI Notes'
+        )
+        "#,
+    )
+    .await?;
 
     for (table, index, create_sql) in [
         (

@@ -6,6 +6,7 @@ pub struct NewTemplateRecord<'a> {
     pub name: &'a str,
     pub kind: &'a str,
     pub content: &'a str,
+    pub is_builtin: i64,
     pub created_at: &'a str,
     pub updated_at: &'a str,
 }
@@ -20,7 +21,7 @@ pub struct UpdateTemplateRecord<'a> {
 pub async fn list(pool: &DbPool) -> Result<Vec<TemplateRecord>, sqlx::Error> {
     sqlx::query_as::<_, TemplateRecord>(
         r#"
-        SELECT id, name, kind, content, created_at, updated_at
+        SELECT id, name, kind, content, is_builtin + 0 AS is_builtin, created_at, updated_at
         FROM templates
         ORDER BY id DESC
         "#,
@@ -32,7 +33,7 @@ pub async fn list(pool: &DbPool) -> Result<Vec<TemplateRecord>, sqlx::Error> {
 pub async fn find_by_id(pool: &DbPool, id: i64) -> Result<Option<TemplateRecord>, sqlx::Error> {
     sqlx::query_as::<_, TemplateRecord>(
         r#"
-        SELECT id, name, kind, content, created_at, updated_at
+        SELECT id, name, kind, content, is_builtin + 0 AS is_builtin, created_at, updated_at
         FROM templates
         WHERE id = ?
         "#,
@@ -48,7 +49,7 @@ pub async fn find_by_name(
 ) -> Result<Option<TemplateRecord>, sqlx::Error> {
     sqlx::query_as::<_, TemplateRecord>(
         r#"
-        SELECT id, name, kind, content, created_at, updated_at
+        SELECT id, name, kind, content, is_builtin + 0 AS is_builtin, created_at, updated_at
         FROM templates
         WHERE name = ?
         "#,
@@ -64,13 +65,14 @@ pub async fn insert(
 ) -> Result<TemplateRecord, sqlx::Error> {
     sqlx::query(
         r#"
-        INSERT INTO templates (name, kind, content, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?)
+        INSERT INTO templates (name, kind, content, is_builtin, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?)
         "#,
     )
     .bind(item.name)
     .bind(item.kind)
     .bind(item.content)
+    .bind(item.is_builtin)
     .bind(item.created_at)
     .bind(item.updated_at)
     .execute(pool)

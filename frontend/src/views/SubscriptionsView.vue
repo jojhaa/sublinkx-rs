@@ -137,6 +137,7 @@ const editingId = ref<number | null>(null)
 const editingGroupId = ref<number | null>(null)
 const groupFilter = ref<number | 'all' | 'none'>('all')
 const nodeGroupFilter = ref<number | 'all' | 'none'>('all')
+const nodeStatusFilter = ref<'enabled' | 'disabled' | 'all'>('enabled')
 const nodeHealthFilter = ref<'all' | 'ok'>('all')
 const nodeSearch = ref('')
 const selectedIds = ref<number[]>([])
@@ -185,6 +186,12 @@ const filteredFormNodes = computed(() => {
     list = list.filter((item) => item.group_id === null)
   } else if (nodeGroupFilter.value !== 'all') {
     list = list.filter((item) => item.group_id === nodeGroupFilter.value)
+  }
+
+  if (nodeStatusFilter.value === 'enabled') {
+    list = list.filter((item) => item.enabled)
+  } else if (nodeStatusFilter.value === 'disabled') {
+    list = list.filter((item) => !item.enabled)
   }
 
   if (nodeHealthFilter.value === 'ok') {
@@ -780,6 +787,7 @@ function resetForm() {
   form.expires_at = ''
   form.node_ids = []
   nodeGroupFilter.value = 'all'
+  nodeStatusFilter.value = 'enabled'
   nodeHealthFilter.value = 'all'
   nodeSearch.value = ''
 }
@@ -825,6 +833,7 @@ function startEdit(item: SubscriptionItem) {
   form.expires_at = toDateTimeLocal(item.expires_at)
   form.node_ids = [...item.node_ids]
   nodeGroupFilter.value = 'all'
+  nodeStatusFilter.value = 'enabled'
   nodeHealthFilter.value = 'all'
   nodeSearch.value = ''
   showEditor.value = true
@@ -1459,6 +1468,14 @@ onMounted(load)
                         <option value="all">{{ t('allNodeGroups') }}</option>
                         <option value="none">{{ t('ungroupedNodes') }}</option>
                         <option v-for="group in nodeGroups" :key="group.id" :value="group.id">{{ group.name }}</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label class="field-label" for="subscription-node-status">{{ t('nodeStatusFilter') }}</label>
+                      <select id="subscription-node-status" v-model="nodeStatusFilter" class="select">
+                        <option value="enabled">{{ t('showEnabledNodes') }}</option>
+                        <option value="disabled">{{ t('showDisabledNodes') }}</option>
+                        <option value="all">{{ t('showAllNodes') }}</option>
                       </select>
                     </div>
                     <div>

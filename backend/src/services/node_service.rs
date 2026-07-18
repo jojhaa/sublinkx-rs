@@ -1753,6 +1753,7 @@ async fn save_upstream_template_if_mihomo_yaml(
             name: &name,
             kind: "mihomo",
             content: &content,
+            is_builtin: 0,
             created_at: &now,
             updated_at: &now,
         },

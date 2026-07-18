@@ -361,3 +361,9 @@ backend/src/protocols/
 - 2026-07-17 发布准备：项目版本号更新到 `0.1.4`，`CHANGELOG.md` 新增 `v0.1.4`，覆盖上游定时同步、同名参数变化原地覆盖、上游移除节点自动停用和同步统计更新。
 - 2026-07-17 Docker 发布追加：使用 `DOCKER_REGISTRY=docker.m.daocloud.io` 完成 `0.1.4` 生产镜像构建并推送 Docker Hub；后端 `latest`/`0.1.4`/`v0.1.4` digest 为 `sha256:59344b70b6ff7f11ba69d9f0a64ed87809d4de71668e4a3e5bfe5284535bce19`，前端 `latest`/`0.1.4`/`v0.1.4` digest 为 `sha256:93dd1f832623e6789f433a4d787e062dd08f674150740b24fe524876adeb9642`。
 - 2026-07-17 Docker 发布验证：`docker buildx imagetools inspect docker.io/jojhaa/sublinkx-rs-backend:0.1.4` 和 `docker buildx imagetools inspect docker.io/jojhaa/sublinkx-rs-frontend:0.1.4` 均可读取远端镜像 digest。
+- 2026-07-18 订阅管理修复：订阅编辑弹窗的节点选择器新增节点状态筛选，默认只显示启用节点，也可切换为暂停节点或全部节点，避免上游同步自动停用的节点继续混在可选列表里被误选。
+- 2026-07-18 节点管理修复：节点管理列表新增节点状态筛选，默认只显示启用节点，可切换暂停节点或全部节点，便于排查上游同步自动停用节点。
+- 2026-07-18 模板管理增强：模板列表新增多选批量删除，仅允许选择和删除用户新增模板；系统内置模板返回 `is_builtin` 标记，前端禁用删除入口，后端删除接口同步拦截内置模板删除。
+- 2026-07-18 发布准备：后端、前端和锁文件版本号更新到 `0.1.5`，`CHANGELOG.md` 新增 `v0.1.5`，覆盖节点状态筛选、订阅节点选择筛选和模板批量删除内置保护。
+- 2026-07-18 Docker 发布追加：使用 `DOCKER_REGISTRY=docker.m.daocloud.io` 完成 `0.1.5` 生产镜像构建并推送 Docker Hub；后端 `latest`/`0.1.5`/`v0.1.5` digest 为 `sha256:ce2a2040cdd26c7b1683046887d7987d1f08ed9026e604996e82464936b634bc`，前端 `latest`/`0.1.5`/`v0.1.5` digest 为 `sha256:d2cce8c3631c818e9f27dcc25bdc476ab4c6065314614ee19bebefa19b8bb89f`。
+- 2026-07-18 Docker 发布验证：`docker buildx imagetools inspect docker.io/jojhaa/sublinkx-rs-backend:0.1.5` 和 `docker buildx imagetools inspect docker.io/jojhaa/sublinkx-rs-frontend:0.1.5` 均可读取远端镜像 digest。

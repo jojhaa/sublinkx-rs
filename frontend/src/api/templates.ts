@@ -5,6 +5,7 @@ export interface TemplateItem {
   name: string
   kind: string
   content: string
+  is_builtin: boolean
   created_at: string
   updated_at: string
 }

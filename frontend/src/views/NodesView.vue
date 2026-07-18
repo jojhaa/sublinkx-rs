@@ -55,6 +55,7 @@ const showGroupEditor = ref(false)
 const editingId = ref<number | null>(null)
 const editingGroupId = ref<number | null>(null)
 const groupFilter = ref<number | 'all' | 'none'>('all')
+const nodeStatusFilter = ref<'enabled' | 'disabled' | 'all'>('enabled')
 const selectedIds = ref<number[]>([])
 const batchGroupId = ref<number | null>(null)
 const displayMode = ref<'detailed' | 'minimal'>('minimal')
@@ -88,13 +89,22 @@ const groupForm = reactive({
 })
 
 const filteredNodes = computed(() => {
+  let scopedNodes = nodes.value
   if (groupFilter.value === 'all') {
-    return nodes.value
+    scopedNodes = nodes.value
+  } else if (groupFilter.value === 'none') {
+    scopedNodes = nodes.value.filter((item) => item.group_id === null)
+  } else {
+    scopedNodes = nodes.value.filter((item) => item.group_id === groupFilter.value)
   }
-  if (groupFilter.value === 'none') {
-    return nodes.value.filter((item) => item.group_id === null)
+
+  if (nodeStatusFilter.value === 'enabled') {
+    return scopedNodes.filter((item) => item.enabled)
   }
-  return nodes.value.filter((item) => item.group_id === groupFilter.value)
+  if (nodeStatusFilter.value === 'disabled') {
+    return scopedNodes.filter((item) => !item.enabled)
+  }
+  return scopedNodes
 })
 
 const pageCount = computed(() => Math.max(1, Math.ceil(filteredNodes.value.length / pageSize.value)))
@@ -128,7 +138,7 @@ watch(pageSize, (value) => {
   storePageSize(PAGE_SIZE_STORAGE_KEY, value)
 })
 
-watch(groupFilter, () => {
+watch([groupFilter, nodeStatusFilter], () => {
   page.value = 1
   selectedIds.value = []
 })
@@ -754,6 +764,11 @@ onMounted(load)
           <option value="all">{{ t('allGroups') }}</option>
           <option value="none">{{ t('ungrouped') }}</option>
           <option v-for="group in groups" :key="group.id" :value="group.id">{{ group.name }}</option>
+        </select>
+        <select v-model="nodeStatusFilter" class="select toolbar-select" :aria-label="t('nodeStatusFilter')">
+          <option value="enabled">{{ t('showEnabledNodes') }}</option>
+          <option value="disabled">{{ t('showDisabledNodes') }}</option>
+          <option value="all">{{ t('showAllNodes') }}</option>
         </select>
         <button class="button button-ghost mobile-secondary-action" type="button" :disabled="loading" @click="load">
           {{ loading ? t('refreshing') : t('refresh') }}

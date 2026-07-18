@@ -64,6 +64,7 @@ pub async fn create_template(
             name: payload.name.trim(),
             kind: payload.kind.trim(),
             content: payload.content.trim(),
+            is_builtin: 0,
             created_at: &now,
             updated_at: &now,
         },
@@ -116,9 +117,15 @@ pub async fn update_template(
 }
 
 pub async fn delete_template(state: &AppState, id: i64) -> Result<(), AppError> {
-    template_repo::find_by_id(&state.db, id)
+    let existing = template_repo::find_by_id(&state.db, id)
         .await?
         .ok_or_else(|| AppError::NotFound("template not found".to_string()))?;
+
+    if existing.is_builtin != 0 {
+        return Err(AppError::BadRequest(
+            "built-in templates cannot be deleted".to_string(),
+        ));
+    }
 
     if subscription_repo::count_by_template_id(&state.db, id).await? > 0 {
         return Err(AppError::BadRequest(
