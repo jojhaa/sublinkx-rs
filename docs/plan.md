@@ -374,3 +374,5 @@ backend/src/protocols/
 - 2026-07-30 Docker 发布验证：`docker buildx imagetools inspect docker.io/jojhaa/sublinkx-rs-backend:0.1.6` 和 `docker buildx imagetools inspect docker.io/jojhaa/sublinkx-rs-frontend:0.1.6` 均可读取远端镜像 digest。
 - 2026-07-30 性能修复：模板管理卡片列表增加前端分页，默认每页只渲染 12 个模板卡片，支持 12/24/48 切换；“选择当前页”仅作用于当前页自定义模板，避免 44 个模板一次性渲染导致卡顿。
 - 2026-07-30 验证追加：模板分页修复后 `npm --prefix frontend run build` 和 `git diff --check` 均通过。
+- 2026-07-30 Docker 重发追加：基于模板分页性能修复重新构建并覆盖推送 `0.1.6` 镜像；后端 `latest`/`0.1.6`/`v0.1.6` digest 为 `sha256:6f6542beb028e2552f835f764f3c67cee18903706e5acf4fcb4406d80b5253bd`，前端 `latest`/`0.1.6`/`v0.1.6` digest 为 `sha256:d40740ada6aac128517815d534f29d19ecd4bccccbdf19ee9f018c705d04b285`。
+- 2026-07-30 Docker 重发验证：`docker buildx imagetools inspect docker.io/jojhaa/sublinkx-rs-backend:0.1.6` 和 `docker buildx imagetools inspect docker.io/jojhaa/sublinkx-rs-frontend:0.1.6` 均可读取新的远端镜像 digest。
