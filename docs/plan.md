@@ -370,3 +370,5 @@ backend/src/protocols/
 - 2026-07-30 前端优化：模板管理页从宽表格改为左侧类型筛选 + 右侧模板卡片网格，模板内容预览限制为卡片内折叠显示，解决模板行列过宽和操作区被挤到页面边缘的问题。
 - 2026-07-30 发布准备：项目版本号更新到 `0.1.6`，`CHANGELOG.md` 新增 `v0.1.6`，覆盖模板管理卡片式布局、类型筛选和长内容折叠预览。
 - 2026-07-30 验证追加：`cargo fmt --manifest-path backend\Cargo.toml`、`cargo test --manifest-path backend\Cargo.toml`、`npm --prefix frontend run build`、`git diff --check` 均通过。
+- 2026-07-30 Docker 发布追加：使用 `DOCKER_REGISTRY=docker.m.daocloud.io` 完成 `0.1.6` 生产镜像构建并推送 Docker Hub；后端 `latest`/`0.1.6`/`v0.1.6` digest 为 `sha256:e5fa0bfda46fc1a7e3bb92f02d4fe3b720a3720fa29c8487d56d4b513d47b841`，前端 `latest`/`0.1.6`/`v0.1.6` digest 为 `sha256:90204f9c69c81aa52216523ce95ccfa58aa252b26063c0208d7234e7ad63f905`。
+- 2026-07-30 Docker 发布验证：`docker buildx imagetools inspect docker.io/jojhaa/sublinkx-rs-backend:0.1.6` 和 `docker buildx imagetools inspect docker.io/jojhaa/sublinkx-rs-frontend:0.1.6` 均可读取远端镜像 digest。
