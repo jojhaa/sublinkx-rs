@@ -367,3 +367,6 @@ backend/src/protocols/
 - 2026-07-18 发布准备：后端、前端和锁文件版本号更新到 `0.1.5`，`CHANGELOG.md` 新增 `v0.1.5`，覆盖节点状态筛选、订阅节点选择筛选和模板批量删除内置保护。
 - 2026-07-18 Docker 发布追加：使用 `DOCKER_REGISTRY=docker.m.daocloud.io` 完成 `0.1.5` 生产镜像构建并推送 Docker Hub；后端 `latest`/`0.1.5`/`v0.1.5` digest 为 `sha256:ce2a2040cdd26c7b1683046887d7987d1f08ed9026e604996e82464936b634bc`，前端 `latest`/`0.1.5`/`v0.1.5` digest 为 `sha256:d2cce8c3631c818e9f27dcc25bdc476ab4c6065314614ee19bebefa19b8bb89f`。
 - 2026-07-18 Docker 发布验证：`docker buildx imagetools inspect docker.io/jojhaa/sublinkx-rs-backend:0.1.5` 和 `docker buildx imagetools inspect docker.io/jojhaa/sublinkx-rs-frontend:0.1.5` 均可读取远端镜像 digest。
+- 2026-07-30 前端优化：模板管理页从宽表格改为左侧类型筛选 + 右侧模板卡片网格，模板内容预览限制为卡片内折叠显示，解决模板行列过宽和操作区被挤到页面边缘的问题。
+- 2026-07-30 发布准备：项目版本号更新到 `0.1.6`，`CHANGELOG.md` 新增 `v0.1.6`，覆盖模板管理卡片式布局、类型筛选和长内容折叠预览。
+- 2026-07-30 验证追加：`cargo fmt --manifest-path backend\Cargo.toml`、`cargo test --manifest-path backend\Cargo.toml`、`npm --prefix frontend run build`、`git diff --check` 均通过。

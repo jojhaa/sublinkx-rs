@@ -69,6 +69,7 @@ const saving = ref(false)
 const showEditor = ref(false)
 const editingId = ref<number | null>(null)
 const selectedIds = ref<number[]>([])
+const kindFilter = ref<TemplateKind | 'all'>('all')
 const errorMessage = ref('')
 const successMessage = ref('')
 
@@ -79,11 +80,16 @@ const form = reactive({
 })
 
 const isEditing = computed(() => editingId.value !== null)
-const customTemplates = computed(() => templates.value.filter((item) => !item.is_builtin))
+const filteredTemplates = computed(() =>
+  kindFilter.value === 'all' ? templates.value : templates.value.filter((item) => item.kind === kindFilter.value),
+)
+const visibleCustomTemplates = computed(() => filteredTemplates.value.filter((item) => !item.is_builtin))
 const selectedTemplates = computed(() => templates.value.filter((item) => selectedIds.value.includes(item.id)))
 const selectedCount = computed(() => selectedTemplates.value.length)
 const allCustomTemplatesSelected = computed(
-  () => customTemplates.value.length > 0 && customTemplates.value.every((item) => selectedIds.value.includes(item.id)),
+  () =>
+    visibleCustomTemplates.value.length > 0 &&
+    visibleCustomTemplates.value.every((item) => selectedIds.value.includes(item.id)),
 )
 const selectedKindNote = computed(
   () => t(TEMPLATE_KIND_OPTIONS.find((item) => item.value === form.kind)?.noteKey ?? 'templateKindCommonNote'),
@@ -140,8 +146,21 @@ function templateCountByKind(kind: TemplateKind) {
   return templates.value.filter((item) => item.kind === kind).length
 }
 
+function setKindFilter(kind: TemplateKind | 'all') {
+  kindFilter.value = kind
+  selectedIds.value = selectedIds.value.filter((id) =>
+    templates.value.some((item) => item.id === id && !item.is_builtin && (kind === 'all' || item.kind === kind)),
+  )
+}
+
 function selectAllCustomTemplates(checked: boolean) {
-  selectedIds.value = checked ? customTemplates.value.map((item) => item.id) : []
+  if (!checked) {
+    const visibleIds = new Set(visibleCustomTemplates.value.map((item) => item.id))
+    selectedIds.value = selectedIds.value.filter((id) => !visibleIds.has(id))
+    return
+  }
+
+  selectedIds.value = Array.from(new Set([...selectedIds.value, ...visibleCustomTemplates.value.map((item) => item.id)]))
 }
 
 function toggleTemplateSelection(id: number, checked: boolean) {
@@ -297,101 +316,122 @@ onMounted(load)
     <div v-if="errorMessage" class="error-banner">{{ errorMessage }}</div>
     <div v-if="successMessage" class="success-banner">{{ successMessage }}</div>
 
-    <article class="card stack template-type-panel">
-      <div class="section-bar">
-        <div>
-          <div class="hint">{{ t('supportedTemplateTypes') }}</div>
-          <p class="card-copy">{{ t('supportedTemplateTypesCopy') }}</p>
-        </div>
-      </div>
-
-      <div class="target-badge-grid template-kind-grid">
-        <button
-          v-for="option in TEMPLATE_KIND_OPTIONS"
-          :key="option.value"
-          class="status-badge status-badge-neutral"
-          type="button"
-          @click="openCreate(option.value)"
-        >
-          {{ option.label }}
-          <span class="muted">({{ templateCountByKind(option.value) }})</span>
-        </button>
-      </div>
-    </article>
-
-    <article class="card stack management-card">
-      <div class="section-bar">
-        <div>
-          <div class="hint">{{ t('templateList') }}</div>
-          <p class="card-copy">{{ t('templateListSummary', { count: templates.length, selected: selectedCount }) }}</p>
-        </div>
-        <div class="inline-actions bulk-actions" :class="{ 'is-empty-selection': selectedCount === 0 }">
-          <button class="button button-ghost" type="button" :disabled="selectedCount === 0" @click="clearSelection">{{ t('clearSelection') }}</button>
-          <button class="button button-danger" type="button" :disabled="saving || selectedCount === 0" @click="removeSelectedTemplates">
-            {{ t('deleteSelected') }}
+    <section class="template-console">
+      <aside class="card template-type-panel template-rail">
+        <div class="template-rail-header">
+          <div>
+            <div class="hint">{{ t('supportedTemplateTypes') }}</div>
+            <p class="card-copy">{{ t('supportedTemplateTypesCopy') }}</p>
+          </div>
+          <button class="button button-ghost button-compact" type="button" @click="openCreate(normalizeKind(kindFilter === 'all' ? 'mihomo' : kindFilter))">
+            {{ t('createTemplate') }}
           </button>
         </div>
-      </div>
 
-      <div v-if="templates.length === 0" class="empty-state">{{ t('emptyTemplates') }}</div>
+        <div class="template-kind-list">
+          <button
+            class="template-kind-option"
+            :class="{ active: kindFilter === 'all' }"
+            type="button"
+            @click="setKindFilter('all')"
+          >
+            <span>{{ t('allTemplateKinds') }}</span>
+            <strong>{{ templates.length }}</strong>
+          </button>
+          <button
+            v-for="option in TEMPLATE_KIND_OPTIONS"
+            :key="option.value"
+            class="template-kind-option"
+            :class="{ active: kindFilter === option.value }"
+            type="button"
+            @click="setKindFilter(option.value)"
+          >
+            <span>{{ option.label }}</span>
+            <strong>{{ templateCountByKind(option.value) }}</strong>
+          </button>
+        </div>
+      </aside>
 
-      <div v-else class="table-wrap">
-        <table class="table dense-table template-table">
-          <thead>
-            <tr>
-              <th class="table-select-cell">
-                <input
-                  type="checkbox"
-                  :checked="allCustomTemplatesSelected"
-                  :disabled="customTemplates.length === 0"
-                  :aria-label="allCustomTemplatesSelected ? t('unselectCurrentPage') : t('selectCurrentPage')"
-                  @change="selectAllCustomTemplates(($event.target as HTMLInputElement).checked)"
-                />
-              </th>
-              <th>{{ t('template') }}</th>
-              <th>{{ t('content') }}</th>
-              <th>{{ t('actions') }}</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr v-for="item in templates" :key="item.id">
-              <td class="table-select-cell">
-                <input
-                  type="checkbox"
-                  :checked="selectedIds.includes(item.id)"
-                  :disabled="item.is_builtin"
-                  :aria-label="item.is_builtin ? t('builtinTemplate') : t('selectTemplate')"
-                  @change="toggleTemplateSelection(item.id, ($event.target as HTMLInputElement).checked)"
-                />
-              </td>
-              <td>
-                <div class="subscription-title-row">
-                  <strong class="row-title">{{ item.name }}</strong>
-                  <span class="status-badge status-badge-neutral">{{ kindLabel(item.kind) }}</span>
-                  <span class="status-badge" :class="item.is_builtin ? 'status-badge-neutral' : 'status-badge-ok'">
-                    {{ item.is_builtin ? t('builtinTemplate') : t('customTemplate') }}
-                  </span>
+      <article class="card stack management-card template-list-panel">
+        <div class="section-bar template-list-bar">
+          <div>
+            <div class="hint">{{ t('templateList') }}</div>
+            <p class="card-copy">{{ t('templateListSummary', { count: filteredTemplates.length, selected: selectedCount }) }}</p>
+          </div>
+          <div class="inline-actions bulk-actions" :class="{ 'is-empty-selection': selectedCount === 0 }">
+            <button class="button button-ghost" type="button" :disabled="selectedCount === 0" @click="clearSelection">{{ t('clearSelection') }}</button>
+            <button class="button button-danger" type="button" :disabled="saving || selectedCount === 0" @click="removeSelectedTemplates">
+              {{ t('deleteSelected') }}
+            </button>
+          </div>
+        </div>
+
+        <div v-if="templates.length === 0" class="empty-state">{{ t('emptyTemplates') }}</div>
+        <div v-else-if="filteredTemplates.length === 0" class="empty-state">{{ t('emptyFilteredTemplates') }}</div>
+
+        <div v-else class="template-list">
+          <div class="template-list-head">
+            <label class="template-select-all">
+              <input
+                type="checkbox"
+                :checked="allCustomTemplatesSelected"
+                :disabled="visibleCustomTemplates.length === 0"
+                :aria-label="allCustomTemplatesSelected ? t('unselectCurrentPage') : t('selectCurrentPage')"
+                @change="selectAllCustomTemplates(($event.target as HTMLInputElement).checked)"
+              />
+              <span>{{ t('selectCurrentPage') }}</span>
+            </label>
+            <span class="muted">{{ t('templateListCopy') }}</span>
+          </div>
+
+          <div class="template-card-grid">
+            <article
+              v-for="item in filteredTemplates"
+              :key="item.id"
+              class="template-card"
+              :class="{ 'is-selected': selectedIds.includes(item.id), 'is-builtin': item.is_builtin }"
+            >
+              <div class="template-card-head">
+                <label class="template-card-check">
+                  <input
+                    type="checkbox"
+                    :checked="selectedIds.includes(item.id)"
+                    :disabled="item.is_builtin"
+                    :aria-label="item.is_builtin ? t('builtinTemplate') : t('selectTemplate')"
+                    @change="toggleTemplateSelection(item.id, ($event.target as HTMLInputElement).checked)"
+                  />
+                </label>
+
+                <div class="template-title-stack">
+                  <strong class="row-title template-card-title">{{ item.name }}</strong>
+                  <div class="row-meta">#{{ item.id }} · {{ kindLabel(item.kind) }}</div>
                 </div>
-                <div class="row-meta">#{{ item.id }}</div>
-              </td>
-              <td>
-                <code class="code-block-preview compact-code-preview">{{ item.content }}</code>
-              </td>
-              <td>
-                <div class="inline-actions row-actions">
-                  <button class="button button-ghost button-compact" type="button" @click="startEdit(item)">
-                    {{ t('edit') }}
-                  </button>
-                  <button class="button button-danger button-compact" type="button" :disabled="item.is_builtin" @click="removeTemplate(item.id)">
-                    {{ t('delete') }}
-                  </button>
-                </div>
-              </td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
-    </article>
+
+                <span class="status-badge" :class="item.is_builtin ? 'status-badge-neutral' : 'status-badge-ok'">
+                  {{ item.is_builtin ? t('builtinTemplate') : t('customTemplate') }}
+                </span>
+              </div>
+
+              <div class="template-card-meta">
+                <span class="status-badge status-badge-neutral">{{ item.kind }}</span>
+                <span class="muted">{{ t('templateContent') }}</span>
+              </div>
+
+              <code class="template-preview-line">{{ item.content }}</code>
+
+              <div class="template-card-actions">
+                <button class="button button-ghost button-compact" type="button" @click="startEdit(item)">
+                  {{ t('edit') }}
+                </button>
+                <button class="button button-danger button-compact" type="button" :disabled="item.is_builtin" @click="removeTemplate(item.id)">
+                  {{ t('delete') }}
+                </button>
+              </div>
+            </article>
+          </div>
+        </div>
+      </article>
+    </section>
 
     <Teleport to="body">
       <div v-if="showEditor" class="modal-backdrop" @click.self="closeEditor">
