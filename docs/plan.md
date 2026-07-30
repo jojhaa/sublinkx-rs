@@ -372,3 +372,5 @@ backend/src/protocols/
 - 2026-07-30 验证追加：`cargo fmt --manifest-path backend\Cargo.toml`、`cargo test --manifest-path backend\Cargo.toml`、`npm --prefix frontend run build`、`git diff --check` 均通过。
 - 2026-07-30 Docker 发布追加：使用 `DOCKER_REGISTRY=docker.m.daocloud.io` 完成 `0.1.6` 生产镜像构建并推送 Docker Hub；后端 `latest`/`0.1.6`/`v0.1.6` digest 为 `sha256:e5fa0bfda46fc1a7e3bb92f02d4fe3b720a3720fa29c8487d56d4b513d47b841`，前端 `latest`/`0.1.6`/`v0.1.6` digest 为 `sha256:90204f9c69c81aa52216523ce95ccfa58aa252b26063c0208d7234e7ad63f905`。
 - 2026-07-30 Docker 发布验证：`docker buildx imagetools inspect docker.io/jojhaa/sublinkx-rs-backend:0.1.6` 和 `docker buildx imagetools inspect docker.io/jojhaa/sublinkx-rs-frontend:0.1.6` 均可读取远端镜像 digest。
+- 2026-07-30 性能修复：模板管理卡片列表增加前端分页，默认每页只渲染 12 个模板卡片，支持 12/24/48 切换；“选择当前页”仅作用于当前页自定义模板，避免 44 个模板一次性渲染导致卡顿。
+- 2026-07-30 验证追加：模板分页修复后 `npm --prefix frontend run build` 和 `git diff --check` 均通过。

@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { extractApiError } from '../api/client'
 import { useI18n, type MessageKey } from '../i18n'
+import { readStoredPageSize, storePageSize } from '../utils/pagination'
 import {
   createTemplate,
   deleteTemplate,
@@ -63,6 +64,9 @@ const TEMPLATE_KIND_OPTIONS: TemplateKindOption[] = [
   { value: 'mixed', label: 'Mixed', noteKey: 'templateKindMixedNote' },
 ]
 
+const PAGE_SIZE_OPTIONS = [12, 24, 48]
+const PAGE_SIZE_STORAGE_KEY = 'sublinkx_templates_page_size'
+
 const templates = ref<TemplateItem[]>([])
 const loading = ref(false)
 const saving = ref(false)
@@ -70,6 +74,8 @@ const showEditor = ref(false)
 const editingId = ref<number | null>(null)
 const selectedIds = ref<number[]>([])
 const kindFilter = ref<TemplateKind | 'all'>('all')
+const page = ref(1)
+const pageSize = ref(readStoredPageSize(PAGE_SIZE_STORAGE_KEY, PAGE_SIZE_OPTIONS, 12))
 const errorMessage = ref('')
 const successMessage = ref('')
 
@@ -83,13 +89,18 @@ const isEditing = computed(() => editingId.value !== null)
 const filteredTemplates = computed(() =>
   kindFilter.value === 'all' ? templates.value : templates.value.filter((item) => item.kind === kindFilter.value),
 )
-const visibleCustomTemplates = computed(() => filteredTemplates.value.filter((item) => !item.is_builtin))
+const pageCount = computed(() => Math.max(1, Math.ceil(filteredTemplates.value.length / pageSize.value)))
+const pagedTemplates = computed(() => {
+  const start = (page.value - 1) * pageSize.value
+  return filteredTemplates.value.slice(start, start + pageSize.value)
+})
+const currentPageCustomTemplates = computed(() => pagedTemplates.value.filter((item) => !item.is_builtin))
 const selectedTemplates = computed(() => templates.value.filter((item) => selectedIds.value.includes(item.id)))
 const selectedCount = computed(() => selectedTemplates.value.length)
 const allCustomTemplatesSelected = computed(
   () =>
-    visibleCustomTemplates.value.length > 0 &&
-    visibleCustomTemplates.value.every((item) => selectedIds.value.includes(item.id)),
+    currentPageCustomTemplates.value.length > 0 &&
+    currentPageCustomTemplates.value.every((item) => selectedIds.value.includes(item.id)),
 )
 const selectedKindNote = computed(
   () => t(TEMPLATE_KIND_OPTIONS.find((item) => item.value === form.kind)?.noteKey ?? 'templateKindCommonNote'),
@@ -100,6 +111,15 @@ const submitLabel = computed(() => {
   }
 
   return isEditing.value ? t('saveTemplate') : t('createTemplate')
+})
+
+watch([filteredTemplates, pageSize], () => {
+  page.value = Math.min(page.value, pageCount.value)
+  selectedIds.value = selectedIds.value.filter((id) => filteredTemplates.value.some((item) => item.id === id && !item.is_builtin))
+})
+
+watch(pageSize, (value) => {
+  storePageSize(PAGE_SIZE_STORAGE_KEY, value)
 })
 
 function normalizeKind(kind: string): TemplateKind {
@@ -148,6 +168,7 @@ function templateCountByKind(kind: TemplateKind) {
 
 function setKindFilter(kind: TemplateKind | 'all') {
   kindFilter.value = kind
+  page.value = 1
   selectedIds.value = selectedIds.value.filter((id) =>
     templates.value.some((item) => item.id === id && !item.is_builtin && (kind === 'all' || item.kind === kind)),
   )
@@ -155,12 +176,12 @@ function setKindFilter(kind: TemplateKind | 'all') {
 
 function selectAllCustomTemplates(checked: boolean) {
   if (!checked) {
-    const visibleIds = new Set(visibleCustomTemplates.value.map((item) => item.id))
+    const visibleIds = new Set(currentPageCustomTemplates.value.map((item) => item.id))
     selectedIds.value = selectedIds.value.filter((id) => !visibleIds.has(id))
     return
   }
 
-  selectedIds.value = Array.from(new Set([...selectedIds.value, ...visibleCustomTemplates.value.map((item) => item.id)]))
+  selectedIds.value = Array.from(new Set([...selectedIds.value, ...currentPageCustomTemplates.value.map((item) => item.id)]))
 }
 
 function toggleTemplateSelection(id: number, checked: boolean) {
@@ -375,7 +396,7 @@ onMounted(load)
               <input
                 type="checkbox"
                 :checked="allCustomTemplatesSelected"
-                :disabled="visibleCustomTemplates.length === 0"
+                :disabled="currentPageCustomTemplates.length === 0"
                 :aria-label="allCustomTemplatesSelected ? t('unselectCurrentPage') : t('selectCurrentPage')"
                 @change="selectAllCustomTemplates(($event.target as HTMLInputElement).checked)"
               />
@@ -386,7 +407,7 @@ onMounted(load)
 
           <div class="template-card-grid">
             <article
-              v-for="item in filteredTemplates"
+              v-for="item in pagedTemplates"
               :key="item.id"
               class="template-card"
               :class="{ 'is-selected': selectedIds.includes(item.id), 'is-builtin': item.is_builtin }"
@@ -429,6 +450,17 @@ onMounted(load)
               </div>
             </article>
           </div>
+
+          <footer class="pagination-bar template-pagination-bar">
+            <span class="hint">{{ t('pageLabel', { page, count: pageCount }) }}</span>
+            <select v-model.number="pageSize" class="select page-size-select" :aria-label="t('pageSize', { size: pageSize })">
+              <option v-for="size in PAGE_SIZE_OPTIONS" :key="size" :value="size">{{ t('pageSize', { size }) }}</option>
+            </select>
+            <div class="inline-actions">
+              <button class="button button-ghost button-compact" type="button" :disabled="page <= 1" @click="page -= 1">{{ t('previousPage') }}</button>
+              <button class="button button-ghost button-compact" type="button" :disabled="page >= pageCount" @click="page += 1">{{ t('nextPage') }}</button>
+            </div>
+          </footer>
         </div>
       </article>
     </section>

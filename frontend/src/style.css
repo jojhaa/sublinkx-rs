@@ -1967,6 +1967,10 @@ button {
   font-weight: 800;
 }
 
+.template-pagination-bar {
+  margin-top: 2px;
+}
+
 .template-card-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(285px, 1fr));
