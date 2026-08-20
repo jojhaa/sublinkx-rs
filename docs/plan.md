@@ -384,3 +384,4 @@ backend/src/protocols/
 - 2026-08-20 Docker 发布：构建并推送后端、前端 Linux/amd64 镜像的 `latest`、`0.1.7`、`v0.1.7` 标签；后端远端 digest 为 `sha256:ed0e195af40cae7987d9e88f7204e0fac24ab2984c1026e3174b63566535b8c2`，安全依赖更新后的前端远端 digest 为 `sha256:73cca776f4f9461081464fd38e640fb31b7e787850a85f9d2d62b445f2e0a2e6`。
 - 2026-08-20 Docker 验证：六个 Docker Hub 标签均通过 `docker buildx imagetools inspect` 读取到对应远端 digest；后端首次构建遇到 Debian Security 源临时 `502`，重试后构建及推送成功。
 - 2026-08-20 依赖安全：发布构建审计发现 Axios、FormData、NanoID、PostCSS、Vite 等 5 项高危公告，使用兼容范围内版本完成修复；`npm audit --omit=dev --audit-level=high` 降为 0，前端生产构建通过，并已覆盖推送前端 `0.1.7` 镜像。
+- 2026-08-20 GitHub 发布：最终代码提交 `c5325a9` 已推送到 `main`，tag `v0.1.7` 已推送，并创建中文 GitHub Release：`https://github.com/jojhaa/sublinkx-rs/releases/tag/v0.1.7`。
