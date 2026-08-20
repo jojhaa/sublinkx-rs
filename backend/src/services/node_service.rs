@@ -320,6 +320,10 @@ async fn import_nodes_from_subscription_with_mode(
                 as usize;
     }
 
+    if mode == SubscriptionImportMode::SyncOverwrite {
+        state.clear_public_export_cache().await;
+    }
+
     let response = NodeImportResponse {
         code: "00000",
         imported: imported_count,
@@ -2293,6 +2297,13 @@ pub async fn delete_node(state: &AppState, id: i64) -> Result<(), AppError> {
     let existing = node_repo::find_by_id(&state.db, id)
         .await?
         .ok_or_else(|| AppError::NotFound("node not found".to_string()))?;
+    let subscription_count =
+        node_repo::count_subscriptions_using_node(&state.db, existing.id).await?;
+    if subscription_count > 0 {
+        return Err(AppError::BadRequest(format!(
+            "node is used by {subscription_count} subscription(s); remove it from subscriptions or disable it instead"
+        )));
+    }
     node_repo::delete(&state.db, existing.id).await?;
     Ok(())
 }

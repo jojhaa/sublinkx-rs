@@ -149,6 +149,10 @@ impl AppState {
         cache.insert(key, entry);
     }
 
+    pub async fn clear_public_export_cache(&self) {
+        self.public_export_cache.lock().await.clear();
+    }
+
     pub async fn check_rate_limit(
         &self,
         key: &str,

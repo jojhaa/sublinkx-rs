@@ -177,6 +177,17 @@ async fn init_mysql_schema(pool: &DbPool) -> Result<(), sqlx::Error> {
         )
         "#,
         r#"
+        CREATE TABLE IF NOT EXISTS subscription_node_groups (
+          subscription_id BIGINT NOT NULL,
+          node_group_id BIGINT NOT NULL,
+          sort_order BIGINT NOT NULL DEFAULT 0,
+          PRIMARY KEY (subscription_id, node_group_id),
+          KEY idx_subscription_node_groups_sort (subscription_id, sort_order),
+          CONSTRAINT fk_subscription_node_groups_subscription_id FOREIGN KEY (subscription_id) REFERENCES subscriptions(id) ON DELETE CASCADE,
+          CONSTRAINT fk_subscription_node_groups_node_group_id FOREIGN KEY (node_group_id) REFERENCES node_groups(id) ON DELETE CASCADE
+        )
+        "#,
+        r#"
         CREATE TABLE IF NOT EXISTS access_logs (
           id BIGINT PRIMARY KEY AUTO_INCREMENT,
           subscription_id BIGINT NOT NULL,

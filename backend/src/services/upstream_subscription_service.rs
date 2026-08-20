@@ -133,6 +133,14 @@ pub async fn delete(state: &AppState, id: i64, delete_nodes: bool) -> Result<(u6
         .await?
         .ok_or_else(|| AppError::NotFound("upstream subscription not found".to_string()))?;
     let (deleted_nodes, detached_nodes) = if delete_nodes {
+        let subscription_count =
+            node_repo::count_subscriptions_using_upstream_source_ref(&state.db, &record.url)
+                .await?;
+        if subscription_count > 0 {
+            return Err(AppError::BadRequest(format!(
+                "upstream nodes are used by {subscription_count} subscription(s); detach the upstream source or remove those nodes from subscriptions first"
+            )));
+        }
         (
             node_repo::delete_upstream_source_ref(&state.db, &record.url).await?,
             0,

@@ -26,6 +26,14 @@ pub struct SubscriptionNodeRecord {
     pub sort_order: i64,
 }
 
+#[allow(dead_code)]
+#[derive(Debug, Clone, FromRow)]
+pub struct SubscriptionNodeGroupRecord {
+    pub subscription_id: i64,
+    pub node_group_id: i64,
+    pub sort_order: i64,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct SubscriptionView {
     pub id: i64,
@@ -38,6 +46,7 @@ pub struct SubscriptionView {
     pub enabled: bool,
     pub expires_at: Option<String>,
     pub status: String,
+    pub node_group_ids: Vec<i64>,
     pub node_ids: Vec<i64>,
     pub nodes: Vec<NodeView>,
     pub created_at: String,

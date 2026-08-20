@@ -11,6 +11,8 @@ pub struct CreateSubscriptionRequest {
     pub group_id: Option<i64>,
     pub enabled: Option<bool>,
     pub expires_at: Option<String>,
+    #[serde(default)]
+    pub node_group_ids: Vec<i64>,
     pub node_ids: Vec<i64>,
 }
 
@@ -23,6 +25,8 @@ pub struct UpdateSubscriptionRequest {
     pub group_id: Option<i64>,
     pub enabled: Option<bool>,
     pub expires_at: Option<String>,
+    #[serde(default)]
+    pub node_group_ids: Vec<i64>,
     pub node_ids: Vec<i64>,
 }
 

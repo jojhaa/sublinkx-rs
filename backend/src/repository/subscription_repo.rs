@@ -1,6 +1,8 @@
 use crate::db::DbPool;
 
-use crate::domain::subscription::{SubscriptionNodeRecord, SubscriptionRecord};
+use crate::domain::subscription::{
+    SubscriptionNodeGroupRecord, SubscriptionNodeRecord, SubscriptionRecord,
+};
 
 pub struct NewSubscriptionRecord<'a> {
     pub name: &'a str,
@@ -88,6 +90,7 @@ pub async fn insert_with_nodes(
     pool: &DbPool,
     item: &NewSubscriptionRecord<'_>,
     node_ids: &[i64],
+    node_group_ids: &[i64],
 ) -> Result<SubscriptionRecord, sqlx::Error> {
     let mut tx = pool.begin().await?;
 
@@ -124,6 +127,7 @@ pub async fn insert_with_nodes(
     .ok_or(sqlx::Error::RowNotFound)?;
 
     replace_subscription_nodes_in_tx(&mut tx, record.id, node_ids).await?;
+    replace_subscription_node_groups_in_tx(&mut tx, record.id, node_group_ids).await?;
     tx.commit().await?;
 
     Ok(record)
@@ -170,6 +174,7 @@ pub async fn update_with_nodes(
     id: i64,
     item: &UpdateSubscriptionRecord<'_>,
     node_ids: &[i64],
+    node_group_ids: &[i64],
 ) -> Result<SubscriptionRecord, sqlx::Error> {
     let mut tx = pool.begin().await?;
 
@@ -202,6 +207,7 @@ pub async fn update_with_nodes(
     .await?;
 
     replace_subscription_nodes_in_tx(&mut tx, id, node_ids).await?;
+    replace_subscription_node_groups_in_tx(&mut tx, id, node_group_ids).await?;
 
     let record = sqlx::query_as::<_, SubscriptionRecord>(
         r#"
@@ -244,6 +250,23 @@ pub async fn list_subscription_nodes(
     .await
 }
 
+pub async fn list_subscription_node_groups(
+    pool: &DbPool,
+    subscription_id: i64,
+) -> Result<Vec<SubscriptionNodeGroupRecord>, sqlx::Error> {
+    sqlx::query_as::<_, SubscriptionNodeGroupRecord>(
+        r#"
+        SELECT subscription_id, node_group_id, sort_order
+        FROM subscription_node_groups
+        WHERE subscription_id = ?
+        ORDER BY sort_order ASC, node_group_id ASC
+        "#,
+    )
+    .bind(subscription_id)
+    .fetch_all(pool)
+    .await
+}
+
 async fn replace_subscription_nodes_in_tx(
     tx: &mut sqlx::Transaction<'_, sqlx::Any>,
     subscription_id: i64,
@@ -271,6 +294,33 @@ async fn replace_subscription_nodes_in_tx(
     Ok(())
 }
 
+async fn replace_subscription_node_groups_in_tx(
+    tx: &mut sqlx::Transaction<'_, sqlx::Any>,
+    subscription_id: i64,
+    node_group_ids: &[i64],
+) -> Result<(), sqlx::Error> {
+    sqlx::query("DELETE FROM subscription_node_groups WHERE subscription_id = ?")
+        .bind(subscription_id)
+        .execute(&mut **tx)
+        .await?;
+
+    for (sort_order, node_group_id) in node_group_ids.iter().enumerate() {
+        sqlx::query(
+            r#"
+            INSERT INTO subscription_node_groups (subscription_id, node_group_id, sort_order)
+            VALUES (?, ?, ?)
+            "#,
+        )
+        .bind(subscription_id)
+        .bind(*node_group_id)
+        .bind(sort_order as i64)
+        .execute(&mut **tx)
+        .await?;
+    }
+
+    Ok(())
+}
+
 pub async fn count_by_template_id(pool: &DbPool, template_id: i64) -> Result<i64, sqlx::Error> {
     sqlx::query_scalar::<_, i64>(
         r#"
@@ -282,4 +332,123 @@ pub async fn count_by_template_id(pool: &DbPool, template_id: i64) -> Result<i64
     .bind(template_id)
     .fetch_one(pool)
     .await
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    use super::*;
+
+    #[tokio::test]
+    async fn persists_followed_node_groups_and_resolves_their_nodes() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time should be after unix epoch")
+            .as_nanos();
+        let database_relative_path = format!(
+            "backend/target/test-data/sublinkx-subscription-groups-{}-{nonce}.db",
+            std::process::id()
+        );
+        let database_path = std::env::current_dir()
+            .expect("current directory should exist")
+            .join(&database_relative_path);
+        let database_url = format!("sqlite://{database_relative_path}");
+        let pool = crate::db::new_database_pool(&database_url)
+            .await
+            .expect("test database should initialize");
+        let now = "2026-08-20T00:00:00Z";
+
+        sqlx::query(
+            "INSERT INTO node_groups (name, sort_order, created_at, updated_at) VALUES (?, 0, ?, ?)",
+        )
+        .bind(format!("upstream-{nonce}"))
+        .bind(now)
+        .bind(now)
+        .execute(&pool)
+        .await
+        .expect("node group should insert");
+        let node_group_id =
+            sqlx::query_scalar::<_, i64>("SELECT id FROM node_groups WHERE name = ?")
+                .bind(format!("upstream-{nonce}"))
+                .fetch_one(&pool)
+                .await
+                .expect("node group should exist");
+
+        sqlx::query(
+            r#"
+            INSERT INTO nodes (
+                name, protocol, raw_link, server, port, enabled, group_id, source_type,
+                source_ref, upstream_missing, fingerprint, fingerprint_scope, settings_json,
+                remark, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, 1, ?, 'upstream_subscription', ?, 0, ?, ?, '{}', '', ?, ?)
+            "#,
+        )
+        .bind("group-node")
+        .bind("trojan")
+        .bind("trojan://test@example.com:443")
+        .bind("example.com")
+        .bind(443_i64)
+        .bind(node_group_id)
+        .bind("https://example.com/sub")
+        .bind(format!("fingerprint-{nonce}"))
+        .bind(node_group_id)
+        .bind(now)
+        .bind(now)
+        .execute(&pool)
+        .await
+        .expect("node should insert");
+
+        let subscription_name = format!("subscription-{nonce}");
+        let subscription_token = format!("token-{nonce}");
+        let record = insert_with_nodes(
+            &pool,
+            &NewSubscriptionRecord {
+                name: &subscription_name,
+                token: &subscription_token,
+                description: "",
+                default_client: Some("mihomo"),
+                template_id: None,
+                group_id: None,
+                enabled: 1,
+                expires_at: None,
+                created_at: now,
+                updated_at: now,
+            },
+            &[],
+            &[node_group_id],
+        )
+        .await
+        .expect("subscription should insert");
+
+        let followed_groups = list_subscription_node_groups(&pool, record.id)
+            .await
+            .expect("followed groups should load");
+        assert_eq!(followed_groups.len(), 1);
+        assert_eq!(followed_groups[0].node_group_id, node_group_id);
+
+        let group_nodes = crate::repository::node_repo::list_by_group_ids(&pool, &[node_group_id])
+            .await
+            .expect("group nodes should resolve");
+        assert_eq!(group_nodes.len(), 1);
+        assert_eq!(group_nodes[0].name, "group-node");
+        assert_eq!(
+            crate::repository::node_repo::count_subscriptions_using_node(&pool, group_nodes[0].id)
+                .await
+                .expect("group-followed node references should count"),
+            1
+        );
+        assert_eq!(
+            crate::repository::node_repo::count_subscriptions_using_upstream_source_ref(
+                &pool,
+                "https://example.com/sub"
+            )
+            .await
+            .expect("group-followed upstream references should count"),
+            1
+        );
+
+        pool.close().await;
+        let _ = std::fs::remove_file(database_path);
+    }
 }

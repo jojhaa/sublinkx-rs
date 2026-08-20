@@ -162,6 +162,7 @@ const form = reactive({
   group_id: null as number | null,
   enabled: true,
   expires_at: '',
+  node_group_ids: [] as number[],
   node_ids: [] as number[],
 })
 
@@ -230,24 +231,33 @@ const currentPageSelected = computed(
   () => currentPageIds.value.length > 0 && currentPageIds.value.every((id) => selectedIds.value.includes(id)),
 )
 const selectedCount = computed(() => selectedIds.value.length)
-const selectedNodeCount = computed(() => form.node_ids.length)
+const effectiveFormNodeIds = computed(() => {
+  const ids = new Set(form.node_ids)
+  for (const node of nodes.value) {
+    if (node.group_id !== null && form.node_group_ids.includes(node.group_id)) {
+      ids.add(node.id)
+    }
+  }
+  return [...ids]
+})
+const selectedNodeCount = computed(() => effectiveFormNodeIds.value.length)
 const isEditing = computed(() => editingId.value !== null)
 const isEditingGroup = computed(() => editingGroupId.value !== null)
 const currentTargetLabel = computed(() => TARGET_LABELS[form.default_client])
 const currentModeLabel = computed(() => (
   exportMode.value === 'strict' ? t('exportModeStrict') : t('exportModeBestEffort')
 ))
-const selectedNodes = computed(() => nodes.value.filter((item) => form.node_ids.includes(item.id)))
+const selectedNodes = computed(() => nodes.value.filter((item) => effectiveFormNodeIds.value.includes(item.id)))
 const selectedFormNodes = computed(() => {
   const byId = new Map(nodes.value.map((item) => [item.id, item]))
-  return form.node_ids.map((id) => byId.get(id)).filter((item): item is NodeItem => Boolean(item))
+  return effectiveFormNodeIds.value.map((id) => byId.get(id)).filter((item): item is NodeItem => Boolean(item))
 })
-const missingSelectedNodeCount = computed(() => form.node_ids.length - selectedFormNodes.value.length)
+const missingSelectedNodeCount = computed(() => effectiveFormNodeIds.value.length - selectedFormNodes.value.length)
 const formCompatibility = computed(() => summarizeCompatibility(selectedNodes.value, form.default_client))
 const selectedTemplate = computed(() => templates.value.find((item) => item.id === form.template_id) ?? null)
 const usesUpstreamRawTemplate = computed(() => isUpstreamRawTemplate(selectedTemplate.value))
 const canSubmitSubscription = computed(
-  () => !saving.value && !!form.name && (form.node_ids.length > 0 || usesUpstreamRawTemplate.value),
+  () => !saving.value && !!form.name && (effectiveFormNodeIds.value.length > 0 || form.node_group_ids.length > 0 || usesUpstreamRawTemplate.value),
 )
 const selectedTemplateMessage = computed(() => {
   if (!selectedTemplate.value) {
@@ -367,7 +377,7 @@ function publicExportLink(token: string, target: ExportTarget) {
 }
 
 function publicSubscriptionLink(item: SubscriptionItem) {
-  return `${subscriptionBaseUrl()}/s/${item.token}?mode=${exportMode.value}`
+  return publicExportLink(item.token, defaultTarget(item))
 }
 
 async function openSubscriptionQr(item: SubscriptionItem) {
@@ -785,6 +795,7 @@ function resetForm() {
   form.group_id = null
   form.enabled = true
   form.expires_at = ''
+  form.node_group_ids = []
   form.node_ids = []
   nodeGroupFilter.value = 'all'
   nodeStatusFilter.value = 'enabled'
@@ -831,6 +842,7 @@ function startEdit(item: SubscriptionItem) {
   form.group_id = item.group_id
   form.enabled = item.enabled
   form.expires_at = toDateTimeLocal(item.expires_at)
+  form.node_group_ids = [...(item.node_group_ids ?? [])]
   form.node_ids = [...item.node_ids]
   nodeGroupFilter.value = 'all'
   nodeStatusFilter.value = 'enabled'
@@ -884,7 +896,18 @@ function toggleCurrentPage(checked: boolean) {
 }
 
 function toggleFilteredNodes(checked: boolean) {
-  const filteredIds = filteredFormNodes.value.map((item) => item.id)
+  const filteredIds = (
+    !checked && typeof nodeGroupFilter.value === 'number'
+      ? nodes.value.filter((item) => item.group_id === nodeGroupFilter.value)
+      : filteredFormNodes.value
+  ).map((item) => item.id)
+  if (typeof nodeGroupFilter.value === 'number') {
+    if (checked && !form.node_group_ids.includes(nodeGroupFilter.value)) {
+      form.node_group_ids.push(nodeGroupFilter.value)
+    } else if (!checked) {
+      form.node_group_ids = form.node_group_ids.filter((id) => id !== nodeGroupFilter.value)
+    }
+  }
   if (checked) {
     form.node_ids = Array.from(new Set([...form.node_ids, ...filteredIds]))
     return
@@ -893,11 +916,20 @@ function toggleFilteredNodes(checked: boolean) {
 }
 
 function removeFormNode(nodeId: number) {
+  const node = nodes.value.find((item) => item.id === nodeId)
+  if (node?.group_id !== null && node?.group_id !== undefined && form.node_group_ids.includes(node.group_id)) {
+    return
+  }
   form.node_ids = form.node_ids.filter((id) => id !== nodeId)
 }
 
 function clearFormNodes() {
+  form.node_group_ids = []
   form.node_ids = []
+}
+
+function isNodeManagedByGroup(item: NodeItem) {
+  return item.group_id !== null && form.node_group_ids.includes(item.group_id)
 }
 
 function clearSelection() {
@@ -959,6 +991,7 @@ async function submit() {
       group_id: form.group_id,
       enabled: form.enabled,
       expires_at: fromDateTimeLocal(form.expires_at),
+      node_group_ids: form.node_group_ids,
       node_ids: form.node_ids,
     }
 
@@ -1000,6 +1033,7 @@ async function moveSelectedSubscriptions() {
           group_id: batchGroupId.value,
           enabled: item.enabled,
           expires_at: item.expires_at,
+          node_group_ids: item.node_group_ids,
           node_ids: item.node_ids,
         }),
       ),
@@ -1041,9 +1075,13 @@ async function submitGroup() {
   }
 }
 
-async function rotateToken(id: number) {
+async function rotateToken(item: SubscriptionItem) {
+  if (!window.confirm(t('confirmRotateToken', { name: item.name }))) {
+    return
+  }
+
   try {
-    await rotateSubscriptionToken(id)
+    await rotateSubscriptionToken(item.id)
     successMessage.value = t('tokenRotated')
     await load()
   } catch (error) {
@@ -1061,6 +1099,7 @@ async function toggleSubscriptionEnabled(item: SubscriptionItem) {
       group_id: item.group_id,
       enabled: !item.enabled,
       expires_at: item.expires_at,
+      node_group_ids: item.node_group_ids ?? [],
       node_ids: item.node_ids,
     })
     successMessage.value = item.enabled ? t('subscriptionDisabled') : t('subscriptionEnabled')
@@ -1251,6 +1290,9 @@ onMounted(load)
                 <div class="subscription-chip-rail">
                   <span class="status-badge status-badge-neutral">{{ groupName(item.group_id) }}</span>
                   <span class="metric-chip">{{ t('nodesUnit', { count: item.node_ids.length }) }}</span>
+                  <span v-if="item.node_group_ids?.length" class="metric-chip metric-chip-ok">
+                    {{ t('followingGroupsUnit', { count: item.node_group_ids.length }) }}
+                  </span>
                   <span class="metric-chip" :class="{ 'metric-chip-warn': subscriptionStatus(item) === 'expired' }">
                     {{ formatExpiry(item.expires_at) }}
                   </span>
@@ -1284,7 +1326,7 @@ onMounted(load)
                     {{ item.enabled ? t('disabled') : t('enabled') }}
                   </button>
                   <button class="button button-ghost button-compact" type="button" @click="renew(item, 30)">{{ t('renew30Days') }}</button>
-                  <button class="button button-ghost button-compact" type="button" @click="rotateToken(item.id)">{{ t('rotate') }}</button>
+                  <button class="button button-ghost button-compact" type="button" @click="rotateToken(item)">{{ t('rotate') }}</button>
                   <button class="button button-danger button-compact" type="button" @click="removeSubscription(item.id)">{{ t('delete') }}</button>
                 </div>
               </td>
@@ -1319,6 +1361,7 @@ onMounted(load)
             <div><span>{{ t('subscriptionGroup') }}</span><strong>{{ groupName(detailSubscription.group_id) }}</strong></div>
             <div><span>{{ t('expiresAt') }}</span><strong>{{ formatExpiry(detailSubscription.expires_at) }}</strong></div>
             <div><span>{{ t('node') }}</span><strong>{{ t('nodesUnit', { count: detailSubscription.node_ids.length }) }}</strong></div>
+            <div><span>{{ t('followNodeGroups') }}</span><strong>{{ t('groupsUnit', { count: detailSubscription.node_group_ids?.length ?? 0 }) }}</strong></div>
             <div><span>{{ t('defaultClientLabel') }}</span><strong>{{ TARGET_LABELS[defaultTarget(detailSubscription)] }}</strong></div>
           </div>
           <div class="modal-actions">
@@ -1431,6 +1474,23 @@ onMounted(load)
                 </div>
 
                 <div v-if="!usesUpstreamRawTemplate" class="stack compact-stack">
+                  <div class="follow-group-panel">
+                    <div class="selected-node-panel-head">
+                      <div>
+                        <strong>{{ t('followNodeGroups') }}</strong>
+                        <span class="hint">{{ t('groupsUnit', { count: form.node_group_ids.length }) }}</span>
+                      </div>
+                    </div>
+                    <p class="hint">{{ t('followNodeGroupsHint') }}</p>
+                    <div v-if="nodeGroups.length === 0" class="hint">{{ t('noNodeGroups') }}</div>
+                    <div v-else class="follow-group-list">
+                      <label v-for="group in nodeGroups" :key="group.id" class="follow-group-chip">
+                        <input v-model="form.node_group_ids" :value="group.id" type="checkbox" />
+                        <span>{{ group.name }}</span>
+                      </label>
+                    </div>
+                  </div>
+
                   <div class="selected-node-panel">
                     <div class="selected-node-panel-head">
                       <div>
@@ -1456,7 +1516,13 @@ onMounted(load)
                           <strong>{{ item.name }}</strong>
                           <small>{{ item.protocol }} · {{ nodeLatencyText(item) }}</small>
                         </span>
-                        <button type="button" :aria-label="t('removeNode')" @click="removeFormNode(item.id)">×</button>
+                        <button
+                          type="button"
+                          :aria-label="t('removeNode')"
+                          :disabled="isNodeManagedByGroup(item)"
+                          :title="isNodeManagedByGroup(item) ? t('followedGroupNodeHint') : undefined"
+                          @click="removeFormNode(item.id)"
+                        >×</button>
                       </span>
                     </div>
                   </div>
@@ -1501,7 +1567,7 @@ onMounted(load)
                       :disabled="filteredFormNodes.length === 0"
                       @click="toggleFilteredNodes(true)"
                     >
-                      {{ t('selectCurrentGroup') }}
+                      {{ typeof nodeGroupFilter === 'number' ? t('followCurrentGroup') : t('selectCurrentGroup') }}
                     </button>
                     <button
                       class="button button-ghost button-compact"
@@ -1520,7 +1586,12 @@ onMounted(load)
                   <div v-else-if="filteredFormNodes.length === 0" class="empty-state">{{ t('noMatchedNodes') }}</div>
                   <div v-else class="checkbox-list modal-node-list">
                     <label v-for="item in filteredFormNodes" :key="item.id" class="checkbox-item">
-                      <input v-model="form.node_ids" :value="item.id" type="checkbox" />
+                      <input
+                        v-model="form.node_ids"
+                        :value="item.id"
+                        type="checkbox"
+                        :disabled="isNodeManagedByGroup(item)"
+                      />
                       <span class="node-option-body">
                         <span class="node-option-title">
                           <strong>{{ item.name }}</strong>

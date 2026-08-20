@@ -250,6 +250,10 @@ async fn export_subscription_view_with_resolved_target(
     canonical_target: &'static str,
     template_target: &str,
 ) -> Result<Response, AppError> {
+    subscription
+        .nodes
+        .retain(|node| node.enabled && !node.upstream_missing);
+    subscription.node_ids = subscription.nodes.iter().map(|node| node.id).collect();
     sort_subscription_nodes_for_export(state, &mut subscription).await?;
     let template = load_export_template(state, subscription.template_id, template_target).await?;
 

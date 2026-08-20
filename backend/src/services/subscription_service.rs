@@ -79,13 +79,20 @@ pub async fn create_subscription(
         ));
     }
 
-    let node_ids = dedupe_node_ids(payload.node_ids);
+    let node_group_ids = dedupe_node_ids(payload.node_group_ids);
+    ensure_node_groups_exist(state, &node_group_ids).await?;
+    let node_ids = normalize_explicit_node_ids(state, payload.node_ids, &node_group_ids).await?;
     let token = generate_unique_token(state).await?;
-    ensure_nodes_exist(state, &node_ids).await?;
     ensure_template_exists(state, payload.template_id).await?;
     ensure_group_exists(state, payload.group_id).await?;
     validate_expires_at(payload.expires_at.as_deref())?;
-    ensure_subscription_has_nodes_or_raw_template(state, &node_ids, payload.template_id).await?;
+    ensure_subscription_has_nodes_or_raw_template(
+        state,
+        &node_ids,
+        &node_group_ids,
+        payload.template_id,
+    )
+    .await?;
 
     let now = now_rfc3339();
     let record = subscription_repo::insert_with_nodes(
@@ -103,6 +110,7 @@ pub async fn create_subscription(
             updated_at: &now,
         },
         &node_ids,
+        &node_group_ids,
     )
     .await?;
 
@@ -132,12 +140,19 @@ pub async fn update_subscription(
         ));
     }
 
-    let node_ids = dedupe_node_ids(payload.node_ids);
-    ensure_nodes_exist(state, &node_ids).await?;
+    let node_group_ids = dedupe_node_ids(payload.node_group_ids);
+    ensure_node_groups_exist(state, &node_group_ids).await?;
+    let node_ids = normalize_explicit_node_ids(state, payload.node_ids, &node_group_ids).await?;
     ensure_template_exists(state, payload.template_id).await?;
     ensure_group_exists(state, payload.group_id).await?;
     validate_expires_at(payload.expires_at.as_deref())?;
-    ensure_subscription_has_nodes_or_raw_template(state, &node_ids, payload.template_id).await?;
+    ensure_subscription_has_nodes_or_raw_template(
+        state,
+        &node_ids,
+        &node_group_ids,
+        payload.template_id,
+    )
+    .await?;
 
     let record = subscription_repo::update_with_nodes(
         &state.db,
@@ -154,6 +169,7 @@ pub async fn update_subscription(
             updated_at: &now_rfc3339(),
         },
         &node_ids,
+        &node_group_ids,
     )
     .await?;
 
@@ -260,17 +276,32 @@ async fn build_view(
 ) -> Result<SubscriptionView, AppError> {
     let status = subscription_status(&record).to_string();
     let relation_rows = subscription_repo::list_subscription_nodes(&state.db, record.id).await?;
+    let group_rows = subscription_repo::list_subscription_node_groups(&state.db, record.id).await?;
+    let node_group_ids = group_rows
+        .iter()
+        .map(|row| row.node_group_id)
+        .collect::<Vec<_>>();
     let mut node_ids = Vec::with_capacity(relation_rows.len());
     let mut nodes = Vec::with_capacity(relation_rows.len());
+    let mut seen_node_ids = HashSet::new();
 
     for row in relation_rows {
-        node_ids.push(row.node_id);
         let node = node_repo::find_by_id(&state.db, row.node_id)
             .await?
             .ok_or_else(|| {
                 AppError::NotFound("subscription references missing node".to_string())
             })?;
-        nodes.push(NodeView::try_from(node).map_err(|_| AppError::Internal)?);
+        if seen_node_ids.insert(node.id) {
+            node_ids.push(node.id);
+            nodes.push(NodeView::try_from(node).map_err(|_| AppError::Internal)?);
+        }
+    }
+
+    for node in node_repo::list_by_group_ids(&state.db, &node_group_ids).await? {
+        if seen_node_ids.insert(node.id) {
+            node_ids.push(node.id);
+            nodes.push(NodeView::try_from(node).map_err(|_| AppError::Internal)?);
+        }
     }
 
     Ok(SubscriptionView {
@@ -284,6 +315,7 @@ async fn build_view(
         enabled: record.enabled != 0,
         expires_at: record.expires_at.clone(),
         status,
+        node_group_ids,
         node_ids,
         nodes,
         created_at: record.created_at,
@@ -291,10 +323,43 @@ async fn build_view(
     })
 }
 
-async fn ensure_nodes_exist(state: &AppState, node_ids: &[i64]) -> Result<(), AppError> {
+async fn normalize_explicit_node_ids(
+    state: &AppState,
+    node_ids: Vec<i64>,
+    node_group_ids: &[i64],
+) -> Result<Vec<i64>, AppError> {
+    let selected_groups = node_group_ids.iter().copied().collect::<HashSet<_>>();
+    let mut normalized = Vec::new();
+    let mut seen = HashSet::new();
+
     for node_id in node_ids {
-        if node_repo::find_by_id(&state.db, *node_id).await?.is_none() {
-            return Err(AppError::BadRequest(format!("node not found: {}", node_id)));
+        if !seen.insert(node_id) {
+            continue;
+        }
+        let node = node_repo::find_by_id(&state.db, node_id)
+            .await?
+            .ok_or_else(|| AppError::BadRequest(format!("node not found: {node_id}")))?;
+        if node
+            .group_id
+            .is_some_and(|group_id| selected_groups.contains(&group_id))
+        {
+            continue;
+        }
+        normalized.push(node_id);
+    }
+
+    Ok(normalized)
+}
+
+async fn ensure_node_groups_exist(state: &AppState, group_ids: &[i64]) -> Result<(), AppError> {
+    for group_id in group_ids {
+        if group_repo::find_by_id(&state.db, GroupTable::Node, *group_id)
+            .await?
+            .is_none()
+        {
+            return Err(AppError::BadRequest(format!(
+                "node group not found: {group_id}"
+            )));
         }
     }
     Ok(())
@@ -336,9 +401,10 @@ async fn ensure_group_exists(state: &AppState, group_id: Option<i64>) -> Result<
 async fn ensure_subscription_has_nodes_or_raw_template(
     state: &AppState,
     node_ids: &[i64],
+    node_group_ids: &[i64],
     template_id: Option<i64>,
 ) -> Result<(), AppError> {
-    if !node_ids.is_empty() {
+    if !node_ids.is_empty() || !node_group_ids.is_empty() {
         return Ok(());
     }
 

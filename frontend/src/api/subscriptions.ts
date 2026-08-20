@@ -12,6 +12,7 @@ export interface SubscriptionItem {
   enabled: boolean
   expires_at: string | null
   status: 'active' | 'disabled' | 'expired'
+  node_group_ids: number[]
   node_ids: number[]
   nodes: NodeItem[]
   created_at: string
@@ -36,6 +37,7 @@ export interface SubscriptionPayload {
   group_id?: number | null
   enabled?: boolean
   expires_at?: string | null
+  node_group_ids?: number[]
   node_ids: number[]
 }
 

@@ -61,6 +61,28 @@ pub async fn list(pool: &DbPool) -> Result<Vec<NodeRecord>, sqlx::Error> {
     .await
 }
 
+pub async fn list_by_group_ids(
+    pool: &DbPool,
+    group_ids: &[i64],
+) -> Result<Vec<NodeRecord>, sqlx::Error> {
+    if group_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let mut query = QueryBuilder::<Any>::new(format!(
+        "SELECT {NODE_SELECT_FIELDS} FROM nodes WHERE group_id IN ("
+    ));
+    {
+        let mut separated = query.separated(", ");
+        for group_id in group_ids {
+            separated.push_bind(*group_id);
+        }
+    }
+    query.push(") ORDER BY id ASC");
+
+    query.build_query_as::<NodeRecord>().fetch_all(pool).await
+}
+
 pub async fn find_by_id(pool: &DbPool, id: i64) -> Result<Option<NodeRecord>, sqlx::Error> {
     sqlx::query_as::<_, NodeRecord>(
         r#"
@@ -253,6 +275,60 @@ pub async fn delete(pool: &DbPool, id: i64) -> Result<(), sqlx::Error> {
         .execute(pool)
         .await?;
     Ok(())
+}
+
+pub async fn count_subscriptions_using_node(pool: &DbPool, id: i64) -> Result<i64, sqlx::Error> {
+    sqlx::query_scalar::<_, i64>(
+        r#"
+        SELECT COUNT(*)
+        FROM (
+            SELECT subscription_id
+            FROM subscription_nodes
+            WHERE node_id = ?
+            UNION
+            SELECT subscription_node_groups.subscription_id
+            FROM subscription_node_groups
+            INNER JOIN nodes ON nodes.group_id = subscription_node_groups.node_group_id
+            WHERE nodes.id = ?
+        ) AS subscription_refs
+        "#,
+    )
+    .bind(id)
+    .bind(id)
+    .fetch_one(pool)
+    .await
+}
+
+pub async fn count_subscriptions_using_upstream_source_ref(
+    pool: &DbPool,
+    url: &str,
+) -> Result<i64, sqlx::Error> {
+    sqlx::query_scalar::<_, i64>(
+        r#"
+        SELECT COUNT(*)
+        FROM (
+            SELECT subscription_nodes.subscription_id
+            FROM subscription_nodes
+            INNER JOIN nodes ON nodes.id = subscription_nodes.node_id
+            WHERE nodes.source_type = 'upstream_subscription'
+              AND nodes.source_ref = ?
+            UNION
+            SELECT subscription_node_groups.subscription_id
+            FROM subscription_node_groups
+            WHERE EXISTS (
+                SELECT 1
+                FROM nodes
+                WHERE nodes.group_id = subscription_node_groups.node_group_id
+                  AND nodes.source_type = 'upstream_subscription'
+                  AND nodes.source_ref = ?
+            )
+        ) AS subscription_refs
+        "#,
+    )
+    .bind(url)
+    .bind(url)
+    .fetch_one(pool)
+    .await
 }
 
 pub async fn detach_upstream_source_ref(
