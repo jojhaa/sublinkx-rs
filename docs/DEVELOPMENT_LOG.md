@@ -22,3 +22,4 @@
 - Docker Hub 远端核验：后端 `v0.1.9` 与 `latest` 均指向 `sha256:62c53048117c9a138e73e1de1fd4950e1de2002eb6f1d1b45c0c2ce25db23d00`；前端两个标签均指向 `sha256:d77981e811df569d11c5ec1fd7d0e616ee03afa93cbc5d35313d9f117429904c`；均包含 `linux/amd64` 清单，两个仓库的纯数字 `0.1.9` 标签均确认不存在。
 - `v0.1.9` 验证：`cargo test --locked` 56 项通过，`cargo clippy --locked --all-targets -- -D warnings` 与 `cargo fmt --check` 通过；前端生产构建通过，生产依赖审计为 0 个漏洞。尚未在 Linux 生产服务器拉取运行，也未使用真实 Trojan 节点完成联网测速验收。
 - 本次发布未新增依赖、字体、图片、图标、音视频、第三方代码或外部文案，无新增署名、NOTICE、源代码提供或素材授权要求；未新增数据库迁移。
+- GitHub `v0.1.9` 发布：发布提交 `667abf15e9418d508282e374712eaf1026bdb638` 已推送到 `main`，带注释标签 `v0.1.9` 指向该提交，并创建中文 Release：`https://github.com/jojhaa/sublinkx-rs/releases/tag/v0.1.9`。
