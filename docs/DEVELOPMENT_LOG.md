@@ -10,7 +10,12 @@
 - Windows 自动验证：后端 59 项测试全部通过，`cargo fmt --check` 和 Clippy `-D warnings` 通过；前端 `v0.2.0` 生产构建通过，生产依赖审计为 0 个漏洞。
 - Windows 真实浏览器验收：使用隔离 SQLite 临时数据库完成首次登录、统计总览、节点分页、订阅轻量列表、模板两页与类型筛选、上游订阅和设置页面验证；覆盖 `1280x720` 与 `390x844`，验收数据和浏览器临时产物已清理。
 - 依赖与知识产权：本次未新增依赖、字体、图片、图标、音视频、第三方代码或外部文案，无新增署名、NOTICE、源代码提供或素材授权要求。
-- 尚未执行：生产 MySQL 查询时延对比、Linux Docker 部署、生产容器挂载/日志/健康检查和公网访问验收。
+- GitHub 发布：提交 `7b3a612001d1e54e12e6aea06ccf408f3ef0d1a4` 已推送到 `main`，带注释标签 `v0.2.0` 指向该提交，并创建中文 Release：`https://github.com/jojhaa/sublinkx-rs/releases/tag/v0.2.0`。
+- Docker Hub 发布：后端 `0.2.0`、`v0.2.0`、`latest` 均指向 `sha256:45fab4f3b5c322f4164f663bc92d31ee1541b9204e66afe111d3931dfebaf4e9`；前端三个标签均指向 `sha256:358896ad4ddc43d1a3d7aba4670bb78ccd7e9539a4ffe54aeef9f5a1ea5fa22b`，远端清单包含 `linux/amd64`。后端标准运行层构建受 Debian 官方软件源连接失败影响，发布时复用已验证的 `v0.1.9` 官方运行层并仅替换经测试的 `v0.2.0` 后端二进制，临时 Dockerfile 未提交且已删除。
+- Linux 生产部署：先只读确认 `/data/sublinkx-rs` 的容器、镜像、挂载和实际数据库配置；生产业务实际使用 `sqlite:///app/data/app.db`，MySQL 容器中没有 SublinkX 业务表。本次仅执行 `docker compose pull backend frontend` 和 `docker compose up -d --no-deps backend frontend`，未停止或重建 MySQL，未改动数据挂载和密钥配置。
+- 生产备份：部署前通过 SQLite 在线备份 API 创建 `/data/sublinkx-rs/backups/app-before-v0.2.0-20260827T100244Z.db`，完整性为 `ok`，SHA-256 为 `fde97ec8b2f6481c57434b12114812cf8de564a02bd62dd2a2613f37bad4baa4`；服务器保留前后端 `rollback-before-v0.2.0` 本地回滚镜像标签。
+- 生产数据与接口验收：部署前后均为节点 260、普通订阅 13、模板 75、上游订阅 4，迁移记录 17 条且最大版本 17，SQLite 完整性为 `ok`；前后端容器持续运行且重启次数为 0；本机反代和 `https://sub.rwyyd.xyz/`、`/healthz`、`/api/v1/version` 均返回 200，版本接口返回 `0.2.0`，未认证分页节点请求返回预期 401。
+- 生产已知风险：日志发现 1 次 Mihomo 测速子进程临时端口 `45867` 占用，未引发后端退出或容器重启，发布后需继续观察后台与手动测速并发场景。
 
 - 扩展 Mihomo YAML 上游订阅解析，新增 VMess、TUIC、WireGuard 和 AnyTLS 转换，连同既有 Shadowsocks、VLESS、Trojan、Hysteria2 共覆盖 8 类当前可完整导出的协议。
 - TUIC 同时支持 v4 token 和 v5 UUID/password，保留 SNI、ALPN、证书校验、拥塞控制、UDP 中继及常用连接参数。
