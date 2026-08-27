@@ -1,5 +1,33 @@
 # Changelog
 
+## v0.1.9 - 2026-08-27
+
+本版本修复 Trojan 节点从 Mihomo YAML 导入后无法连接、延迟检测直接失败的问题，重点恢复密码、SNI、传输层和 TLS 扩展配置的完整往返。
+
+### Trojan 兼容性
+
+- 修复 Trojan URI 百分号编码密码未解码的问题，包含 `@`、`:`、`%` 等字符的密码可正确往返。
+- Mihomo Trojan 导出改用协议要求的 `sni` 字段，不再错误输出 VMess/VLESS 使用的 `servername`。
+- 保留 Trojan Reality、完整 WebSocket/gRPC、证书指纹、ECH、ShadowTLS、ResTLS、JLS、Trojan-Go Shadowsocks、SMUX 及常用网络选项，避免上游转换后握手参数丢失。
+- 延迟测试继续复用统一 Mihomo 渲染器，因此重新同步后的 Trojan 节点会使用修复后的配置进行检测。
+
+## v0.1.8 - 2026-08-27
+
+本版本扩展 Mihomo YAML 上游订阅导入能力，减少多协议订阅中节点被静默忽略的情况，并加强复杂协议配置的字段保真与失败保护。
+
+### 上游协议导入
+
+- Mihomo YAML 上游新增 VMess、TUIC、WireGuard 和 AnyTLS 导入，连同既有 Shadowsocks、VLESS、Trojan、Hysteria2，共覆盖 8 类当前具有完整导出链路的协议。
+- TUIC 同时支持 v4 token 与 v5 UUID/password，并保留 TLS、拥塞控制、UDP 中继等常用参数。
+- AnyTLS 保留 SNI、ALPN、客户端指纹、空闲会话参数、证书校验以及 ShadowTLS、ResTLS、JLS 扩展配置。
+- WireGuard 支持简化配置与单 peer 完整配置，保留双栈地址、密钥、Allowed IPs、reserved、keepalive、DNS 和 MTU。
+
+### 导入安全
+
+- 未支持协议或字段不完整的节点会进入导入失败明细，不再被静默跳过。
+- WireGuard 多 peer 配置会明确失败，避免只导入第一个 peer 后产生行为不一致的节点。
+- 上游同步出现解析失败时保留已有节点，不会因为一次异常订阅响应而自动停用仍可用的历史节点。
+
 ## v0.1.7 - 2026-08-20
 
 本版本聚焦普通订阅链接的数据稳定性，并让订阅链接能够按节点分组自动跟随上游同步结果。

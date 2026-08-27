@@ -52,6 +52,11 @@ pub enum SubscriptionImportMode {
     SyncOverwrite,
 }
 
+struct ExtractedSubscription {
+    raw_links: Vec<String>,
+    failures: Vec<NodeImportFailure>,
+}
+
 pub async fn require_auth(state: &AppState, headers: &HeaderMap) -> Result<(), AppError> {
     auth_service::require_user(state, headers).await.map(|_| ())
 }
@@ -166,11 +171,17 @@ async fn import_nodes_from_subscription_with_mode(
     let fidelity_warnings = check_mihomo_conversion_fidelity(&body);
     let saved_template =
         save_upstream_template_if_mihomo_yaml(state, url, &body, payload.group_id).await?;
-    let raw_links = extract_subscription_links(&body)?;
+    let extracted = extract_subscription_links(&body)?;
+    let raw_links = extracted.raw_links;
     if raw_links.is_empty() {
-        return Err(AppError::BadRequest(
-            "no supported node links found in subscription".to_string(),
-        ));
+        let detail = extracted
+            .failures
+            .first()
+            .map(|failure| format!(": {}", failure.reason))
+            .unwrap_or_default();
+        return Err(AppError::BadRequest(format!(
+            "no supported node links found in subscription{detail}"
+        )));
     }
     if raw_links.len() > MAX_IMPORT_SUBSCRIPTION_NODES {
         return Err(AppError::BadRequest(format!(
@@ -180,7 +191,7 @@ async fn import_nodes_from_subscription_with_mode(
 
     let now = now_rfc3339();
     let mut imported = Vec::new();
-    let mut failures = Vec::new();
+    let mut failures = extracted.failures;
     let mut skipped = 0usize;
     let mut imported_count = 0usize;
     let mut updated_count = 0usize;
@@ -1236,7 +1247,7 @@ async fn fetch_subscription_body(url: &str) -> Result<String, AppError> {
     })
 }
 
-fn extract_subscription_links(body: &str) -> Result<Vec<String>, AppError> {
+fn extract_subscription_links(body: &str) -> Result<ExtractedSubscription, AppError> {
     let trimmed = body.trim();
     let candidates = if looks_like_node_lines(trimmed) {
         trimmed.to_string()
@@ -1244,21 +1255,26 @@ fn extract_subscription_links(body: &str) -> Result<Vec<String>, AppError> {
         && looks_like_node_lines(&decoded)
     {
         decoded
-    } else if let Ok(links) = extract_mihomo_yaml_links(trimmed)
-        && !links.is_empty()
+    } else if let Some(decoded) = decode_base64_text(trimmed)
+        && is_mihomo_profile_yaml(&decoded)
     {
-        return Ok(links);
+        return extract_mihomo_yaml_links(&decoded);
+    } else if is_mihomo_profile_yaml(trimmed) {
+        return extract_mihomo_yaml_links(trimmed);
     } else {
         trimmed.to_string()
     };
 
-    Ok(candidates
-        .lines()
-        .flat_map(|line| line.split_whitespace())
-        .map(str::trim)
-        .filter(|line| is_supported_raw_link(line))
-        .map(str::to_string)
-        .collect())
+    Ok(ExtractedSubscription {
+        raw_links: candidates
+            .lines()
+            .flat_map(|line| line.split_whitespace())
+            .map(str::trim)
+            .filter(|line| is_supported_raw_link(line))
+            .map(str::to_string)
+            .collect(),
+        failures: Vec::new(),
+    })
 }
 
 fn check_mihomo_conversion_fidelity(body: &str) -> Vec<NodeFidelityWarning> {
@@ -1298,7 +1314,7 @@ fn check_proxy_fidelity_for_targets(proxy: &Mapping) -> Vec<NodeFidelityWarning>
     let Some(protocol) = yaml_string(proxy, "type").map(str::to_string) else {
         return Vec::new();
     };
-    let Some(raw_link) = mihomo_proxy_to_raw_link(proxy) else {
+    let Ok(raw_link) = mihomo_proxy_to_raw_link(proxy) else {
         return Vec::new();
     };
     let Ok(parsed) = protocol_parser_service::parse_raw_link(&raw_link, None) else {
@@ -1691,6 +1707,20 @@ fn important_mihomo_fields(protocol: &str) -> &'static [&'static str] {
             "skip-cert-verify",
             "servername",
             "sni",
+            "client-fingerprint",
+            "fingerprint",
+            "alpn",
+            "name-cert-verify",
+            "reality-opts",
+            "ech-opts",
+            "shadow-tls-opts",
+            "restls-opts",
+            "jls-opts",
+            "ss-opts",
+            "smux",
+            "ip-version",
+            "tfo",
+            "mptcp",
             "ws-opts",
             "grpc-opts",
             "udp",
@@ -1706,8 +1736,67 @@ fn important_mihomo_fields(protocol: &str) -> &'static [&'static str] {
             "tls",
             "skip-cert-verify",
             "servername",
+            "client-fingerprint",
+            "alpn",
             "ws-opts",
             "grpc-opts",
+            "udp",
+        ],
+        "anytls" | "any-tls" => &[
+            "type",
+            "server",
+            "port",
+            "password",
+            "client-fingerprint",
+            "udp",
+            "idle-session-check-interval",
+            "idle-session-timeout",
+            "min-idle-session",
+            "sni",
+            "alpn",
+            "skip-cert-verify",
+            "name-cert-verify",
+            "shadow-tls-opts",
+            "restls-opts",
+            "jls-opts",
+        ],
+        "tuic" => &[
+            "type",
+            "server",
+            "port",
+            "token",
+            "uuid",
+            "password",
+            "ip",
+            "heartbeat-interval",
+            "alpn",
+            "disable-sni",
+            "reduce-rtt",
+            "request-timeout",
+            "udp-relay-mode",
+            "congestion-controller",
+            "bbr-profile",
+            "max-udp-relay-packet-size",
+            "fast-open",
+            "skip-cert-verify",
+            "name-cert-verify",
+            "max-open-streams",
+            "sni",
+        ],
+        "wireguard" | "wg" => &[
+            "type",
+            "server",
+            "port",
+            "ip",
+            "private-key",
+            "public-key",
+            "allowed-ips",
+            "pre-shared-key",
+            "reserved",
+            "persistent-keepalive",
+            "mtu",
+            "remote-dns-resolve",
+            "dns",
             "udp",
         ],
         "ss" | "shadowsocks" => &["type", "server", "port", "cipher", "password", "udp"],
@@ -1999,7 +2088,7 @@ fn pad_base64(input: &str) -> String {
     padded
 }
 
-fn extract_mihomo_yaml_links(body: &str) -> Result<Vec<String>, AppError> {
+fn extract_mihomo_yaml_links(body: &str) -> Result<ExtractedSubscription, AppError> {
     let root = serde_yaml::from_str::<Value>(body)
         .map_err(|_| AppError::BadRequest("subscription is not valid YAML".to_string()))?;
     let proxies = root
@@ -2007,27 +2096,68 @@ fn extract_mihomo_yaml_links(body: &str) -> Result<Vec<String>, AppError> {
         .and_then(|mapping| mapping.get(Value::String("proxies".to_string())))
         .and_then(Value::as_sequence)
         .ok_or_else(|| AppError::BadRequest("YAML subscription missing proxies".to_string()))?;
+    if proxies.len() > MAX_IMPORT_SUBSCRIPTION_NODES {
+        return Err(AppError::BadRequest(format!(
+            "at most {MAX_IMPORT_SUBSCRIPTION_NODES} nodes can be imported at once"
+        )));
+    }
 
     let mut links = Vec::new();
+    let mut failures = Vec::new();
     for proxy in proxies {
-        if let Some(mapping) = proxy.as_mapping()
-            && let Some(link) = mihomo_proxy_to_raw_link(mapping)
-        {
-            links.push(link);
+        let Some(mapping) = proxy.as_mapping() else {
+            failures.push(NodeImportFailure {
+                source: "Mihomo YAML proxy".to_string(),
+                reason: "proxy entry must be a mapping".to_string(),
+            });
+            continue;
+        };
+        match mihomo_proxy_to_raw_link(mapping) {
+            Ok(link) => links.push(link),
+            Err(reason) => failures.push(NodeImportFailure {
+                source: mihomo_proxy_source(mapping),
+                reason,
+            }),
         }
     }
-    Ok(links)
+    Ok(ExtractedSubscription {
+        raw_links: links,
+        failures,
+    })
 }
 
-fn mihomo_proxy_to_raw_link(proxy: &Mapping) -> Option<String> {
-    let proxy_type = yaml_string(proxy, "type")?;
-    match proxy_type {
+fn mihomo_proxy_source(proxy: &Mapping) -> String {
+    let name = yaml_string(proxy, "name").unwrap_or("unnamed");
+    let proxy_type = yaml_string(proxy, "type").unwrap_or("unknown");
+    truncate_source(&format!("Mihomo YAML: {name} ({proxy_type})"))
+}
+
+fn mihomo_proxy_to_raw_link(proxy: &Mapping) -> Result<String, String> {
+    let proxy_type = yaml_string(proxy, "type")
+        .ok_or_else(|| "mihomo proxy missing type".to_string())?
+        .to_ascii_lowercase();
+    let converted = match proxy_type.as_str() {
         "ss" | "shadowsocks" => mihomo_shadowsocks_to_uri(proxy),
+        "vmess" => mihomo_vmess_to_uri(proxy),
         "vless" => mihomo_vless_to_uri(proxy),
         "trojan" => mihomo_trojan_to_uri(proxy),
         "hysteria2" | "hy2" => mihomo_hysteria2_to_uri(proxy),
-        _ => None,
-    }
+        "tuic" => mihomo_tuic_to_uri(proxy),
+        "wireguard" | "wg" => {
+            if yaml_sequence_len(proxy, "peers").is_some_and(|count| count > 1) {
+                return Err(
+                    "mihomo wireguard multi-peer nodes cannot be represented safely".to_string(),
+                );
+            }
+            mihomo_wireguard_to_uri(proxy)
+        }
+        "anytls" | "any-tls" => mihomo_anytls_to_uri(proxy),
+        _ => {
+            return Err(format!("unsupported mihomo proxy type: {proxy_type}"));
+        }
+    };
+
+    converted.ok_or_else(|| format!("mihomo {proxy_type} proxy is missing required fields"))
 }
 
 fn mihomo_shadowsocks_to_uri(proxy: &Mapping) -> Option<String> {
@@ -2056,6 +2186,78 @@ fn mihomo_shadowsocks_to_uri(proxy: &Mapping) -> Option<String> {
         query,
         encode_uri_component(name)
     ))
+}
+
+fn mihomo_vmess_to_uri(proxy: &Mapping) -> Option<String> {
+    let uuid = yaml_string(proxy, "uuid")?;
+    let server = yaml_string(proxy, "server")?;
+    let port = yaml_i64(proxy, "port")?;
+    let name = yaml_string(proxy, "name").unwrap_or("vmess");
+    let network = yaml_string(proxy, "network").unwrap_or("tcp");
+    let mut payload = serde_json::Map::new();
+    payload.insert("v".to_string(), serde_json::json!("2"));
+    payload.insert("ps".to_string(), serde_json::json!(name));
+    payload.insert("add".to_string(), serde_json::json!(server));
+    payload.insert("port".to_string(), serde_json::json!(port));
+    payload.insert("id".to_string(), serde_json::json!(uuid));
+    payload.insert(
+        "aid".to_string(),
+        serde_json::json!(yaml_i64(proxy, "alterId").unwrap_or(0)),
+    );
+    payload.insert(
+        "scy".to_string(),
+        serde_json::json!(yaml_string(proxy, "cipher").unwrap_or("auto")),
+    );
+    payload.insert("net".to_string(), serde_json::json!(network));
+    payload.insert(
+        "tls".to_string(),
+        serde_json::json!(if yaml_bool(proxy, "tls").unwrap_or(false) {
+            "tls"
+        } else {
+            ""
+        }),
+    );
+
+    if let Some(sni) = yaml_string(proxy, "servername").or_else(|| yaml_string(proxy, "sni")) {
+        payload.insert("sni".to_string(), serde_json::json!(sni));
+    }
+    if let Some(fp) = yaml_string(proxy, "client-fingerprint") {
+        payload.insert("fp".to_string(), serde_json::json!(fp));
+    }
+    if let Some(insecure) = yaml_bool(proxy, "skip-cert-verify") {
+        payload.insert("insecure".to_string(), serde_json::json!(insecure));
+    }
+    if let Some(udp) = yaml_bool(proxy, "udp") {
+        payload.insert("udp".to_string(), serde_json::json!(udp));
+    }
+    if let Some(alpn) = yaml_string_or_csv(proxy, "alpn") {
+        payload.insert("alpn".to_string(), serde_json::json!(alpn));
+    }
+    if network.eq_ignore_ascii_case("ws")
+        && let Some(ws_opts) = yaml_mapping(proxy, "ws-opts")
+    {
+        if let Some(path) = yaml_string(ws_opts, "path") {
+            payload.insert("path".to_string(), serde_json::json!(path));
+        }
+        if let Some(headers) = yaml_mapping(ws_opts, "headers")
+            && let Some(host) =
+                yaml_string(headers, "Host").or_else(|| yaml_string(headers, "host"))
+        {
+            payload.insert("host".to_string(), serde_json::json!(host));
+        }
+    }
+    if network.eq_ignore_ascii_case("grpc")
+        && let Some(grpc_opts) = yaml_mapping(proxy, "grpc-opts")
+        && let Some(service_name) = yaml_string(grpc_opts, "grpc-service-name")
+    {
+        payload.insert(
+            "grpc-service-name".to_string(),
+            serde_json::json!(service_name),
+        );
+    }
+
+    let encoded = general_purpose::STANDARD.encode(serde_json::to_vec(&payload).ok()?);
+    Some(format!("vmess://{encoded}"))
 }
 
 fn mihomo_vless_to_uri(proxy: &Mapping) -> Option<String> {
@@ -2092,6 +2294,9 @@ fn mihomo_vless_to_uri(proxy: &Mapping) -> Option<String> {
         yaml_string(proxy, "servername").or_else(|| yaml_string(proxy, "sni")),
     );
     push_optional_param(&mut params, "fp", yaml_string(proxy, "client-fingerprint"));
+    if let Some(alpn) = yaml_string_or_csv(proxy, "alpn") {
+        push_param(&mut params, "alpn", &alpn);
+    }
     push_optional_param(
         &mut params,
         "packet-encoding",
@@ -2140,11 +2345,46 @@ fn mihomo_trojan_to_uri(proxy: &Mapping) -> Option<String> {
     let mut params = Vec::new();
     let network = yaml_string(proxy, "network");
     push_optional_param(&mut params, "type", network);
+    push_param(
+        &mut params,
+        "security",
+        if yaml_mapping(proxy, "reality-opts").is_some() {
+            "reality"
+        } else {
+            "tls"
+        },
+    );
     push_optional_param(
         &mut params,
         "sni",
         yaml_string(proxy, "servername").or_else(|| yaml_string(proxy, "sni")),
     );
+    push_optional_param(&mut params, "fp", yaml_string(proxy, "client-fingerprint"));
+    push_optional_param(
+        &mut params,
+        "certificate-fingerprint",
+        yaml_string(proxy, "fingerprint"),
+    );
+    if let Some(alpn) = yaml_string_or_csv(proxy, "alpn") {
+        push_param(&mut params, "alpn", &alpn);
+    }
+    if let Some(insecure) = yaml_bool(proxy, "skip-cert-verify") {
+        push_param(&mut params, "insecure", if insecure { "1" } else { "0" });
+    }
+    if let Some(udp) = yaml_bool(proxy, "udp") {
+        push_param(&mut params, "udp", if udp { "true" } else { "false" });
+    }
+    push_optional_param(
+        &mut params,
+        "name-cert-verify",
+        yaml_string(proxy, "name-cert-verify"),
+    );
+    push_optional_param(&mut params, "ip-version", yaml_string(proxy, "ip-version"));
+    for key in ["tfo", "mptcp"] {
+        if let Some(value) = yaml_bool(proxy, key) {
+            push_param(&mut params, key, if value { "true" } else { "false" });
+        }
+    }
     if network.is_some_and(|value| value.eq_ignore_ascii_case("ws"))
         && let Some(ws_opts) = yaml_mapping(proxy, "ws-opts")
     {
@@ -2155,6 +2395,38 @@ fn mihomo_trojan_to_uri(proxy: &Mapping) -> Option<String> {
                 "host",
                 yaml_string(headers, "Host").or_else(|| yaml_string(headers, "host")),
             );
+        }
+        if let Some(value) = yaml_json_string(proxy, "ws-opts") {
+            push_param(&mut params, "ws-opts", &value);
+        }
+    }
+    if network.is_some_and(|value| value.eq_ignore_ascii_case("grpc"))
+        && let Some(grpc_opts) = yaml_mapping(proxy, "grpc-opts")
+    {
+        push_optional_param(
+            &mut params,
+            "serviceName",
+            yaml_string(grpc_opts, "grpc-service-name"),
+        );
+        if let Some(value) = yaml_json_string(proxy, "grpc-opts") {
+            push_param(&mut params, "grpc-opts", &value);
+        }
+    }
+    if let Some(reality) = yaml_mapping(proxy, "reality-opts") {
+        push_optional_param(&mut params, "pbk", yaml_string(reality, "public-key"));
+        push_optional_param(&mut params, "sid", yaml_string(reality, "short-id"));
+    }
+    for key in [
+        "reality-opts",
+        "ech-opts",
+        "shadow-tls-opts",
+        "restls-opts",
+        "jls-opts",
+        "ss-opts",
+        "smux",
+    ] {
+        if let Some(value) = yaml_json_string(proxy, key) {
+            push_param(&mut params, key, &value);
         }
     }
     Some(format!(
@@ -2207,6 +2479,204 @@ fn mihomo_hysteria2_to_uri(proxy: &Mapping) -> Option<String> {
     ))
 }
 
+fn mihomo_tuic_to_uri(proxy: &Mapping) -> Option<String> {
+    let server = yaml_string(proxy, "server")?;
+    let port = yaml_i64(proxy, "port")?;
+    let name = yaml_string(proxy, "name").unwrap_or("tuic");
+    let token = yaml_string(proxy, "token");
+    let uuid = yaml_string(proxy, "uuid");
+    let password = yaml_string(proxy, "password");
+    let authority = if let Some(token) = token {
+        let _ = token;
+        String::new()
+    } else {
+        format!(
+            "{}:{}@",
+            encode_uri_userinfo(uuid?),
+            encode_uri_userinfo(password?)
+        )
+    };
+    let mut params = Vec::new();
+    push_optional_param(&mut params, "token", token);
+    push_optional_param(
+        &mut params,
+        "sni",
+        yaml_string(proxy, "sni").or_else(|| yaml_string(proxy, "servername")),
+    );
+    if let Some(insecure) = yaml_bool(proxy, "skip-cert-verify") {
+        push_param(&mut params, "insecure", if insecure { "1" } else { "0" });
+    }
+    if let Some(alpn) = yaml_string_or_csv(proxy, "alpn") {
+        push_param(&mut params, "alpn", &alpn);
+    }
+    for (query_key, yaml_key) in [
+        ("ip", "ip"),
+        ("congestion-controller", "congestion-controller"),
+        ("udp-relay-mode", "udp-relay-mode"),
+        ("bbr-profile", "bbr-profile"),
+        ("name-cert-verify", "name-cert-verify"),
+    ] {
+        push_optional_param(&mut params, query_key, yaml_string(proxy, yaml_key));
+    }
+    for (query_key, yaml_key) in [
+        ("heartbeat-interval", "heartbeat-interval"),
+        ("request-timeout", "request-timeout"),
+        ("max-udp-relay-packet-size", "max-udp-relay-packet-size"),
+        ("max-open-streams", "max-open-streams"),
+    ] {
+        if let Some(value) = yaml_i64(proxy, yaml_key) {
+            push_param(&mut params, query_key, &value.to_string());
+        }
+    }
+    for (query_key, yaml_key) in [
+        ("disable-sni", "disable-sni"),
+        ("reduce-rtt", "reduce-rtt"),
+        ("fast-open", "fast-open"),
+    ] {
+        if let Some(value) = yaml_bool(proxy, yaml_key) {
+            push_param(&mut params, query_key, if value { "true" } else { "false" });
+        }
+    }
+
+    Some(format!(
+        "tuic://{authority}{server}:{port}?{}#{}",
+        params.join("&"),
+        encode_uri_component(name)
+    ))
+}
+
+fn mihomo_wireguard_to_uri(proxy: &Mapping) -> Option<String> {
+    let peer = yaml_first_mapping(proxy, "peers");
+    let public_key = yaml_string(proxy, "public-key")
+        .or_else(|| peer.and_then(|mapping| yaml_string(mapping, "public-key")))?;
+    let server = yaml_string(proxy, "server")
+        .or_else(|| peer.and_then(|mapping| yaml_string(mapping, "server")))?;
+    let port =
+        yaml_i64(proxy, "port").or_else(|| peer.and_then(|mapping| yaml_i64(mapping, "port")))?;
+    let name = yaml_string(proxy, "name").unwrap_or("wireguard");
+    let mut params = Vec::new();
+    push_optional_param(
+        &mut params,
+        "private-key",
+        yaml_string(proxy, "private-key"),
+    );
+    push_optional_param(
+        &mut params,
+        "pre-shared-key",
+        yaml_string(proxy, "pre-shared-key")
+            .or_else(|| peer.and_then(|mapping| yaml_string(mapping, "pre-shared-key"))),
+    );
+    let addresses = [
+        yaml_string_or_csv(proxy, "ip"),
+        yaml_string_or_csv(proxy, "ipv6"),
+    ]
+    .into_iter()
+    .flatten()
+    .collect::<Vec<_>>()
+    .join(",");
+    if !addresses.is_empty() {
+        let (ipv6, ipv4): (Vec<_>, Vec<_>) = addresses
+            .split(',')
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .partition(|value| value.contains(':'));
+        if !ipv4.is_empty() {
+            push_param(&mut params, "ip", &ipv4.join(","));
+        }
+        if !ipv6.is_empty() {
+            push_param(&mut params, "ipv6", &ipv6.join(","));
+        }
+    }
+    for key in ["allowed-ips", "reserved"] {
+        let value = yaml_string_or_csv(proxy, key)
+            .or_else(|| peer.and_then(|mapping| yaml_string_or_csv(mapping, key)));
+        if let Some(value) = value {
+            push_param(&mut params, key, &value);
+        }
+    }
+    push_optional_param(&mut params, "dns", yaml_string(proxy, "dns"));
+    if let Some(dns) = yaml_string_or_csv(proxy, "dns") {
+        params.retain(|value| !value.starts_with("dns="));
+        push_param(&mut params, "dns", &dns);
+    }
+    if let Some(keepalive) = yaml_i64(proxy, "persistent-keepalive") {
+        push_param(&mut params, "persistent-keepalive", &keepalive.to_string());
+    }
+    if let Some(remote_dns) = yaml_bool(proxy, "remote-dns-resolve") {
+        push_param(
+            &mut params,
+            "remote-dns-resolve",
+            if remote_dns { "true" } else { "false" },
+        );
+    }
+    if let Some(mtu) = yaml_i64(proxy, "mtu") {
+        push_param(&mut params, "mtu", &mtu.to_string());
+    }
+    if let Some(udp) = yaml_bool(proxy, "udp") {
+        push_param(&mut params, "udp", if udp { "true" } else { "false" });
+    }
+
+    Some(format!(
+        "wireguard://{}@{}:{}?{}#{}",
+        encode_uri_userinfo(public_key),
+        server,
+        port,
+        params.join("&"),
+        encode_uri_component(name)
+    ))
+}
+
+fn mihomo_anytls_to_uri(proxy: &Mapping) -> Option<String> {
+    let password = yaml_string(proxy, "password")?;
+    let server = yaml_string(proxy, "server")?;
+    let port = yaml_i64(proxy, "port")?;
+    let name = yaml_string(proxy, "name").unwrap_or("anytls");
+    let mut params = Vec::new();
+    push_optional_param(
+        &mut params,
+        "sni",
+        yaml_string(proxy, "sni").or_else(|| yaml_string(proxy, "servername")),
+    );
+    if let Some(alpn) = yaml_string_or_csv(proxy, "alpn") {
+        push_param(&mut params, "alpn", &alpn);
+    }
+    push_optional_param(&mut params, "fp", yaml_string(proxy, "client-fingerprint"));
+    if let Some(insecure) = yaml_bool(proxy, "skip-cert-verify") {
+        push_param(&mut params, "insecure", if insecure { "1" } else { "0" });
+    }
+    if let Some(udp) = yaml_bool(proxy, "udp") {
+        push_param(&mut params, "udp", if udp { "true" } else { "false" });
+    }
+    push_optional_param(
+        &mut params,
+        "name-cert-verify",
+        yaml_string(proxy, "name-cert-verify"),
+    );
+    for key in ["shadow-tls-opts", "restls-opts", "jls-opts"] {
+        if let Some(value) = yaml_json_string(proxy, key) {
+            push_param(&mut params, key, &value);
+        }
+    }
+    for key in [
+        "idle-session-check-interval",
+        "idle-session-timeout",
+        "min-idle-session",
+    ] {
+        if let Some(value) = yaml_i64(proxy, key) {
+            push_param(&mut params, key, &value.to_string());
+        }
+    }
+
+    Some(format!(
+        "anytls://{}@{}:{}?{}#{}",
+        encode_uri_userinfo(password),
+        server,
+        port,
+        params.join("&"),
+        encode_uri_component(name)
+    ))
+}
+
 fn yaml_string<'a>(mapping: &'a Mapping, key: &str) -> Option<&'a str> {
     mapping
         .get(Value::String(key.to_string()))
@@ -2250,6 +2720,27 @@ fn yaml_mapping<'a>(mapping: &'a Mapping, key: &str) -> Option<&'a Mapping> {
     mapping
         .get(Value::String(key.to_string()))
         .and_then(Value::as_mapping)
+}
+
+fn yaml_first_mapping<'a>(mapping: &'a Mapping, key: &str) -> Option<&'a Mapping> {
+    mapping
+        .get(Value::String(key.to_string()))
+        .and_then(Value::as_sequence)
+        .and_then(|items| items.first())
+        .and_then(Value::as_mapping)
+}
+
+fn yaml_sequence_len(mapping: &Mapping, key: &str) -> Option<usize> {
+    mapping
+        .get(Value::String(key.to_string()))
+        .and_then(Value::as_sequence)
+        .map(Vec::len)
+}
+
+fn yaml_json_string(mapping: &Mapping, key: &str) -> Option<String> {
+    mapping
+        .get(Value::String(key.to_string()))
+        .and_then(|value| serde_json::to_string(value).ok())
 }
 
 fn push_param(params: &mut Vec<String>, key: &str, value: &str) {
@@ -2326,10 +2817,12 @@ async fn ensure_group_exists(state: &AppState, group_id: Option<i64>) -> Result<
 #[cfg(test)]
 mod tests {
     use super::{
-        check_mihomo_conversion_fidelity, mihomo_proxy_to_raw_link, sanitize_mihomo_profile_yaml,
+        check_mihomo_conversion_fidelity, extract_subscription_links, mihomo_proxy_to_raw_link,
+        sanitize_mihomo_profile_yaml,
     };
     use crate::services::url_safety::validate_public_http_url;
     use serde_yaml::Value;
+    use std::collections::HashSet;
 
     #[test]
     fn checks_vless_reality_across_client_renderers_without_missing_fields() {
@@ -2431,6 +2924,291 @@ udp: true
             parsed.settings.get("udp").and_then(|value| value.as_str()),
             Some("true")
         );
+    }
+
+    #[test]
+    fn extracts_all_currently_exportable_protocols_from_mihomo_yaml() {
+        let yaml = r#"
+proxies:
+  - { name: SS, type: ss, server: ss.example.com, port: 8388, cipher: aes-256-gcm, password: secret }
+  - { name: VMess, type: vmess, server: vmess.example.com, port: 443, uuid: 4c374a1d-e334-4ec1-b010-489bfa360ba9, alterId: 0, cipher: auto, network: ws, tls: true }
+  - { name: VLESS, type: vless, server: vless.example.com, port: 443, uuid: 4c374a1d-e334-4ec1-b010-489bfa360ba9, encryption: none, tls: true }
+  - { name: Trojan, type: trojan, server: trojan.example.com, port: 443, password: secret }
+  - { name: HY2, type: hysteria2, server: hy2.example.com, port: 443, password: secret }
+  - { name: TUIC, type: tuic, server: tuic.example.com, port: 443, uuid: 4c374a1d-e334-4ec1-b010-489bfa360ba9, password: secret }
+  - name: WireGuard
+    type: wireguard
+    server: wg.example.com
+    port: 51820
+    public-key: public-key-value
+    private-key: private-key-value
+    ip: [10.0.0.2/32, 2001:db8::2/128]
+  - name: AnyTLS
+    type: anytls
+    server: anytls.example.com
+    port: 443
+    password: secret
+    sni: edge.example.com
+    alpn: [h2, http/1.1]
+    client-fingerprint: chrome
+  - { name: SSH, type: ssh, server: ssh.example.com, port: 22, username: root, password: secret }
+"#;
+
+        let extracted = extract_subscription_links(yaml).expect("mihomo YAML should extract");
+        let nodes = extracted
+            .raw_links
+            .iter()
+            .map(|link| {
+                let parsed = crate::services::protocol_parser_service::parse_raw_link(link, None)
+                    .expect("converted URI should parse");
+                let node = super::fidelity_node_from_parsed(link.clone(), parsed);
+                crate::services::export_service::render_mihomo_proxy(&node)
+                    .expect("converted node should render back to Mihomo");
+                node
+            })
+            .collect::<Vec<_>>();
+        let protocols = nodes
+            .iter()
+            .map(|node| node.protocol.as_str())
+            .collect::<HashSet<_>>();
+
+        assert_eq!(nodes.len(), 8);
+        assert_eq!(
+            protocols,
+            HashSet::from([
+                "shadowsocks",
+                "vmess",
+                "vless",
+                "trojan",
+                "hysteria2",
+                "tuic",
+                "wireguard",
+                "anytls",
+            ])
+        );
+        assert_eq!(extracted.failures.len(), 1);
+        assert!(extracted.failures[0].source.contains("SSH (ssh)"));
+        assert!(
+            extracted.failures[0]
+                .reason
+                .contains("unsupported mihomo proxy type")
+        );
+    }
+
+    #[test]
+    fn preserves_mihomo_anytls_fields_during_yaml_conversion() {
+        let yaml = r#"
+name: AnyTLS Full
+type: anytls
+server: anytls.example.com
+port: 443
+password: secret
+client-fingerprint: chrome
+udp: true
+idle-session-check-interval: 30
+idle-session-timeout: 45
+min-idle-session: 2
+sni: edge.example.com
+alpn: [h2, http/1.1]
+skip-cert-verify: true
+name-cert-verify: cert.example.com
+shadow-tls-opts:
+  version: 3
+  password: shadow-secret
+"#;
+        let proxy = serde_yaml::from_str::<Value>(yaml).unwrap();
+        let mapping = proxy.as_mapping().unwrap();
+        let link = mihomo_proxy_to_raw_link(mapping).expect("anytls proxy should convert");
+        let parsed = crate::services::protocol_parser_service::parse_raw_link(&link, None)
+            .expect("converted anytls URI should parse");
+
+        assert_eq!(parsed.protocol.as_str(), "anytls");
+        assert_eq!(parsed.name, "AnyTLS Full");
+        assert_eq!(parsed.settings["password"], "secret");
+        assert_eq!(parsed.settings["fp"], "chrome");
+        assert_eq!(parsed.settings["alpn"], "h2,http/1.1");
+        assert_eq!(parsed.settings["idle-session-timeout"], "45");
+        assert_eq!(parsed.settings["name-cert-verify"], "cert.example.com");
+        assert!(
+            parsed.settings["shadow-tls-opts"]
+                .as_str()
+                .is_some_and(|value| value.contains("shadow-secret"))
+        );
+        let node = super::fidelity_node_from_parsed(link, parsed);
+        let rendered = crate::services::export_service::render_mihomo_proxy(&node)
+            .expect("anytls node should render back to Mihomo");
+        let shadow_tls = rendered
+            .get(Value::String("shadow-tls-opts".to_string()))
+            .and_then(Value::as_mapping)
+            .expect("shadow-tls-opts should be preserved");
+        assert_eq!(
+            shadow_tls
+                .get(Value::String("password".to_string()))
+                .and_then(Value::as_str),
+            Some("shadow-secret")
+        );
+    }
+
+    #[test]
+    fn preserves_mihomo_trojan_ws_fields_and_password() {
+        let yaml = r#"
+name: Trojan WS Full
+type: trojan
+server: trojan.example.com
+port: 443
+password: "pa:ss@word%"
+network: ws
+sni: edge.example.com
+client-fingerprint: chrome
+fingerprint: certificate-sha256
+alpn: [http/1.1]
+skip-cert-verify: false
+name-cert-verify: cert.example.com
+ip-version: ipv4
+tfo: true
+mptcp: false
+udp: true
+ws-opts:
+  path: /trojan?ed=2048
+  headers:
+    Host: ws.example.com
+  max-early-data: 2048
+  early-data-header-name: Sec-WebSocket-Protocol
+smux:
+  enabled: true
+  protocol: smux
+"#;
+        let proxy = serde_yaml::from_str::<Value>(yaml).unwrap();
+        let mapping = proxy.as_mapping().unwrap();
+        let link = mihomo_proxy_to_raw_link(mapping).expect("trojan proxy should convert");
+        let parsed = crate::services::protocol_parser_service::parse_raw_link(&link, None)
+            .expect("converted trojan URI should parse");
+
+        assert_eq!(parsed.settings["password"], "pa:ss@word%");
+        assert_eq!(parsed.settings["sni"], "edge.example.com");
+        let node = super::fidelity_node_from_parsed(link, parsed);
+        let rendered = crate::services::export_service::render_mihomo_proxy(&node)
+            .expect("trojan node should render back to Mihomo");
+
+        assert_eq!(
+            rendered
+                .get(Value::String("sni".to_string()))
+                .and_then(Value::as_str),
+            Some("edge.example.com")
+        );
+        assert!(
+            rendered
+                .get(Value::String("servername".to_string()))
+                .is_none()
+        );
+        assert_eq!(
+            rendered
+                .get(Value::String("password".to_string()))
+                .and_then(Value::as_str),
+            Some("pa:ss@word%")
+        );
+        let ws_opts = rendered
+            .get(Value::String("ws-opts".to_string()))
+            .and_then(Value::as_mapping)
+            .expect("ws-opts should be preserved");
+        assert_eq!(
+            ws_opts
+                .get(Value::String("max-early-data".to_string()))
+                .and_then(Value::as_i64),
+            Some(2048)
+        );
+        assert!(
+            rendered
+                .get(Value::String("smux".to_string()))
+                .and_then(Value::as_mapping)
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn preserves_mihomo_trojan_reality_options() {
+        let yaml = r#"
+name: Trojan Reality
+type: trojan
+server: reality.example.com
+port: 443
+password: secret
+sni: cover.example.com
+client-fingerprint: chrome
+reality-opts:
+  public-key: public-key-value
+  short-id: abcd1234
+  support-x25519mlkem768: true
+"#;
+        let proxy = serde_yaml::from_str::<Value>(yaml).unwrap();
+        let mapping = proxy.as_mapping().unwrap();
+        let link = mihomo_proxy_to_raw_link(mapping).expect("reality trojan should convert");
+        let parsed = crate::services::protocol_parser_service::parse_raw_link(&link, None)
+            .expect("converted reality trojan URI should parse");
+
+        assert_eq!(parsed.settings["security"], "reality");
+        let node = super::fidelity_node_from_parsed(link, parsed);
+        let rendered = crate::services::export_service::render_mihomo_proxy(&node)
+            .expect("reality trojan should render back to Mihomo");
+        let reality = rendered
+            .get(Value::String("reality-opts".to_string()))
+            .and_then(Value::as_mapping)
+            .expect("reality-opts should be preserved");
+        assert_eq!(
+            reality
+                .get(Value::String("public-key".to_string()))
+                .and_then(Value::as_str),
+            Some("public-key-value")
+        );
+        assert_eq!(
+            reality
+                .get(Value::String("support-x25519mlkem768".to_string()))
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn converts_mihomo_tuic_v4_token_proxy() {
+        let yaml = r#"
+name: TUIC v4
+type: tuic
+server: tuic.example.com
+port: 443
+token: token-secret
+congestion-controller: bbr
+udp-relay-mode: native
+reduce-rtt: true
+"#;
+        let proxy = serde_yaml::from_str::<Value>(yaml).unwrap();
+        let mapping = proxy.as_mapping().unwrap();
+        let link = mihomo_proxy_to_raw_link(mapping).expect("tuic v4 proxy should convert");
+        let parsed = crate::services::protocol_parser_service::parse_raw_link(&link, None)
+            .expect("converted tuic v4 URI should parse");
+
+        assert_eq!(parsed.protocol.as_str(), "tuic");
+        assert_eq!(parsed.settings["token"], "token-secret");
+        assert_eq!(parsed.settings["congestion-controller"], "bbr");
+        assert_eq!(parsed.settings["reduce-rtt"], "true");
+    }
+
+    #[test]
+    fn rejects_mihomo_wireguard_multi_peer_without_silent_truncation() {
+        let yaml = r#"
+name: WireGuard Multi Peer
+type: wireguard
+private-key: private-key-value
+ip: 10.0.0.2/32
+peers:
+  - { server: one.example.com, port: 51820, public-key: public-key-one, allowed-ips: [0.0.0.0/1] }
+  - { server: two.example.com, port: 51820, public-key: public-key-two, allowed-ips: [128.0.0.0/1] }
+"#;
+        let proxy = serde_yaml::from_str::<Value>(yaml).unwrap();
+        let mapping = proxy.as_mapping().unwrap();
+        let error = mihomo_proxy_to_raw_link(mapping)
+            .expect_err("multi-peer wireguard must not be truncated to the first peer");
+
+        assert!(error.contains("multi-peer"));
     }
 
     #[tokio::test]

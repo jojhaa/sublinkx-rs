@@ -175,10 +175,11 @@ fn parse_trojan(raw_link: &str, custom_name: Option<&str>) -> Result<ParsedNode,
     let port = url
         .port()
         .ok_or_else(|| AppError::BadRequest("trojan missing port".to_string()))?;
-    let password = url.username();
-    if password.is_empty() {
+    let encoded_password = url.username();
+    if encoded_password.is_empty() {
         return Err(AppError::BadRequest("trojan missing password".to_string()));
     }
+    let password = percent_decode_to_string(encoded_password);
 
     let name = node_name(custom_name, url.fragment(), "trojan");
     let query = query_map(&url);
@@ -197,7 +198,26 @@ fn parse_trojan(raw_link: &str, custom_name: Option<&str>) -> Result<ParsedNode,
             "path": query.get("path"),
             "sni": query.get("sni"),
             "alpn": query.get("alpn"),
-            "fp": query.get("fp")
+            "fp": query.get("fp"),
+            "certificate-fingerprint": query.get("certificate-fingerprint").or_else(|| query.get("cert-fingerprint")),
+            "insecure": query.get("insecure").or_else(|| query.get("skip-cert-verify")),
+            "name-cert-verify": query.get("name_cert_verify").or_else(|| query.get("name-cert-verify")),
+            "reality-opts": query.get("reality_opts").or_else(|| query.get("reality-opts")),
+            "ech-opts": query.get("ech_opts").or_else(|| query.get("ech-opts")),
+            "shadow-tls-opts": query.get("shadow_tls_opts").or_else(|| query.get("shadow-tls-opts")),
+            "restls-opts": query.get("restls_opts").or_else(|| query.get("restls-opts")),
+            "jls-opts": query.get("jls_opts").or_else(|| query.get("jls-opts")),
+            "ss-opts": query.get("ss_opts").or_else(|| query.get("ss-opts")),
+            "smux": query.get("smux"),
+            "ws-opts": query.get("ws_opts").or_else(|| query.get("ws-opts")),
+            "grpc-opts": query.get("grpc_opts").or_else(|| query.get("grpc-opts")),
+            "pbk": query.get("pbk"),
+            "sid": query.get("sid"),
+            "ip-version": query.get("ip_version").or_else(|| query.get("ip-version")),
+            "tfo": query.get("tfo"),
+            "mptcp": query.get("mptcp"),
+            "udp": query.get("udp"),
+            "grpc-service-name": query.get("serviceName").or_else(|| query.get("service-name"))
         }),
         fingerprint,
     })
@@ -257,19 +277,40 @@ fn parse_tuic(raw_link: &str, custom_name: Option<&str>) -> Result<ParsedNode, A
     let port = url
         .port()
         .ok_or_else(|| AppError::BadRequest("tuic missing port".to_string()))?;
-    let uuid = url.username();
-    if uuid.is_empty() {
-        return Err(AppError::BadRequest("tuic missing uuid".to_string()));
-    }
     let query = query_map(&url);
+    let token = query.get("token").cloned();
+    let uuid = if url.username().is_empty() {
+        query.get("uuid").cloned()
+    } else {
+        Some(decode_name(url.username()))
+    };
     let password = url
         .password()
-        .map(str::to_string)
-        .or_else(|| query.get("password").cloned())
-        .ok_or_else(|| AppError::BadRequest("tuic missing password".to_string()))?;
+        .map(decode_name)
+        .or_else(|| query.get("password").cloned());
+    if token.is_none() && uuid.as_deref().is_none_or(str::is_empty) {
+        return Err(AppError::BadRequest(
+            "tuic missing uuid or token".to_string(),
+        ));
+    }
+    if token.is_none() && password.as_deref().is_none_or(str::is_empty) {
+        return Err(AppError::BadRequest(
+            "tuic missing password or token".to_string(),
+        ));
+    }
 
     let name = node_name(custom_name, url.fragment(), "tuic");
-    let fingerprint = fingerprint("tuic", &format!("{uuid}|{password}|{server}|{port}"));
+    let identity = token
+        .as_deref()
+        .map(|value| format!("token:{value}"))
+        .unwrap_or_else(|| {
+            format!(
+                "uuid:{}|password:{}",
+                uuid.as_deref().unwrap_or_default(),
+                password.as_deref().unwrap_or_default()
+            )
+        });
+    let fingerprint = fingerprint("tuic", &format!("{identity}|{server}|{port}"));
 
     Ok(ParsedNode {
         protocol: Protocol::Tuic,
@@ -277,13 +318,24 @@ fn parse_tuic(raw_link: &str, custom_name: Option<&str>) -> Result<ParsedNode, A
         server: server.to_string(),
         port,
         settings: json!({
+            "token": token,
             "uuid": uuid,
             "password": password,
             "sni": query.get("sni"),
             "insecure": query.get("insecure"),
             "alpn": query.get("alpn"),
             "congestion-controller": query.get("congestion_control").or_else(|| query.get("congestion-controller")),
-            "udp-relay-mode": query.get("udp_relay_mode").or_else(|| query.get("udp-relay-mode"))
+            "udp-relay-mode": query.get("udp_relay_mode").or_else(|| query.get("udp-relay-mode")),
+            "ip": query.get("ip"),
+            "heartbeat-interval": query.get("heartbeat_interval").or_else(|| query.get("heartbeat-interval")),
+            "disable-sni": query.get("disable_sni").or_else(|| query.get("disable-sni")),
+            "reduce-rtt": query.get("reduce_rtt").or_else(|| query.get("reduce-rtt")),
+            "request-timeout": query.get("request_timeout").or_else(|| query.get("request-timeout")),
+            "bbr-profile": query.get("bbr_profile").or_else(|| query.get("bbr-profile")),
+            "max-udp-relay-packet-size": query.get("max_udp_relay_packet_size").or_else(|| query.get("max-udp-relay-packet-size")),
+            "max-open-streams": query.get("max_open_streams").or_else(|| query.get("max-open-streams")),
+            "fast-open": query.get("fast_open").or_else(|| query.get("fast-open")),
+            "name-cert-verify": query.get("name_cert_verify").or_else(|| query.get("name-cert-verify"))
         }),
         fingerprint,
     })
@@ -320,6 +372,11 @@ fn parse_wireguard(raw_link: &str, custom_name: Option<&str>) -> Result<ParsedNo
             "pre-shared-key": query.get("pre_shared_key").or_else(|| query.get("pre-shared-key")),
             "ip": query.get("ip"),
             "ipv6": query.get("ipv6"),
+            "allowed-ips": query.get("allowed_ips").or_else(|| query.get("allowed-ips")),
+            "reserved": query.get("reserved"),
+            "persistent-keepalive": query.get("persistent_keepalive").or_else(|| query.get("persistent-keepalive")),
+            "remote-dns-resolve": query.get("remote_dns_resolve").or_else(|| query.get("remote-dns-resolve")),
+            "dns": query.get("dns"),
             "mtu": query.get("mtu"),
             "udp": query.get("udp")
         }),
@@ -359,6 +416,10 @@ fn parse_anytls(raw_link: &str, custom_name: Option<&str>) -> Result<ParsedNode,
             "alpn": query.get("alpn"),
             "fp": query.get("fp").or_else(|| query.get("fingerprint")),
             "insecure": query.get("insecure").or_else(|| query.get("skip-cert-verify")),
+            "name-cert-verify": query.get("name_cert_verify").or_else(|| query.get("name-cert-verify")),
+            "shadow-tls-opts": query.get("shadow_tls_opts").or_else(|| query.get("shadow-tls-opts")),
+            "restls-opts": query.get("restls_opts").or_else(|| query.get("restls-opts")),
+            "jls-opts": query.get("jls_opts").or_else(|| query.get("jls-opts")),
             "udp": query.get("udp"),
             "idle-session-check-interval": query.get("idle_session_check_interval").or_else(|| query.get("idle-session-check-interval")),
             "idle-session-timeout": query.get("idle_session_timeout").or_else(|| query.get("idle-session-timeout")),
@@ -511,6 +572,27 @@ mod tests {
         assert_eq!(
             parsed.settings.get("uuid").and_then(|value| value.as_str()),
             Some("4c374a1d-e334-4ec1-b010-489bfa360ba9")
+        );
+    }
+
+    #[test]
+    fn parses_percent_encoded_trojan_password() {
+        let parsed = parse_raw_link(
+            "trojan://pa%3Ass%40word%25@example.com:443?sni=edge.example.com#Trojan",
+            None,
+        )
+        .expect("trojan link with encoded password should parse");
+
+        assert_eq!(
+            parsed
+                .settings
+                .get("password")
+                .and_then(|value| value.as_str()),
+            Some("pa:ss@word%")
+        );
+        assert_eq!(
+            parsed.settings.get("sni").and_then(|value| value.as_str()),
+            Some("edge.example.com")
         );
     }
 

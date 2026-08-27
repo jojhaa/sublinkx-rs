@@ -1034,6 +1034,52 @@ pub(crate) fn render_mihomo_proxy(node: &NodeView) -> Result<Mapping, AppError> 
                     Value::String(sni.to_string()),
                 );
             }
+            if let Some(fp) = node.settings.get("fp").and_then(|v| v.as_str())
+                && !fp.is_empty()
+            {
+                map.insert(
+                    Value::String("client-fingerprint".to_string()),
+                    Value::String(fp.to_string()),
+                );
+            }
+            if let Some(insecure) = node.settings.get("insecure").and_then(json_to_bool) {
+                map.insert(
+                    Value::String("skip-cert-verify".to_string()),
+                    Value::Bool(insecure),
+                );
+            }
+            insert_optional_json_bool(&mut map, "udp", &node.settings, "udp");
+            if let Some(alpn) = node.settings.get("alpn").and_then(|v| v.as_str())
+                && !alpn.is_empty()
+            {
+                map.insert(
+                    Value::String("alpn".to_string()),
+                    Value::Sequence(split_csv(alpn)),
+                );
+            }
+            if node
+                .settings
+                .get("net")
+                .and_then(|v| v.as_str())
+                .is_some_and(|network| network.eq_ignore_ascii_case("grpc"))
+                && let Some(service_name) = node
+                    .settings
+                    .get("grpc-service-name")
+                    .and_then(|v| v.as_str())
+                && !service_name.is_empty()
+            {
+                map.insert(
+                    Value::String("grpc-opts".to_string()),
+                    Value::Mapping({
+                        let mut grpc = Mapping::new();
+                        grpc.insert(
+                            Value::String("grpc-service-name".to_string()),
+                            Value::String(service_name.to_string()),
+                        );
+                        grpc
+                    }),
+                );
+            }
         }
         "vless" => {
             map.insert(
@@ -1189,6 +1235,20 @@ pub(crate) fn render_mihomo_proxy(node: &NodeView) -> Result<Mapping, AppError> 
                 );
             }
             insert_optional_json_bool(&mut map, "skip-cert-verify", &node.settings, "insecure");
+            insert_optional_json_string(
+                &mut map,
+                "name-cert-verify",
+                &node.settings,
+                "name-cert-verify",
+            );
+            for key in ["shadow-tls-opts", "restls-opts", "jls-opts"] {
+                if let Some(raw) = node.settings.get(key).and_then(|value| value.as_str())
+                    && let Ok(value) = serde_json::from_str::<serde_json::Value>(raw)
+                    && let Ok(value) = serde_yaml::to_value(value)
+                {
+                    map.insert(Value::String(key.to_string()), value);
+                }
+            }
             insert_optional_json_i64(
                 &mut map,
                 "idle-session-check-interval",
@@ -1230,7 +1290,8 @@ pub(crate) fn render_mihomo_proxy(node: &NodeView) -> Result<Mapping, AppError> 
                     Value::String(network.to_string()),
                 );
             }
-            if let Some(path) = node.settings.get("path").and_then(|v| v.as_str())
+            if !insert_serialized_json_mapping(&mut map, "ws-opts", &node.settings, "ws-opts")
+                && let Some(path) = node.settings.get("path").and_then(|v| v.as_str())
                 && !path.is_empty()
             {
                 map.insert(
@@ -1260,13 +1321,96 @@ pub(crate) fn render_mihomo_proxy(node: &NodeView) -> Result<Mapping, AppError> 
                     }),
                 );
             }
+            if !insert_serialized_json_mapping(&mut map, "grpc-opts", &node.settings, "grpc-opts")
+                && node
+                    .settings
+                    .get("type")
+                    .and_then(|v| v.as_str())
+                    .is_some_and(|network| network.eq_ignore_ascii_case("grpc"))
+                && let Some(service_name) = node
+                    .settings
+                    .get("grpc-service-name")
+                    .and_then(|v| v.as_str())
+                && !service_name.is_empty()
+            {
+                map.insert(
+                    Value::String("grpc-opts".to_string()),
+                    Value::Mapping({
+                        let mut grpc = Mapping::new();
+                        grpc.insert(
+                            Value::String("grpc-service-name".to_string()),
+                            Value::String(service_name.to_string()),
+                        );
+                        grpc
+                    }),
+                );
+            }
             map.insert(Value::String("tls".to_string()), Value::Bool(true));
             if let Some(sni) = node.settings.get("sni").and_then(|v| v.as_str())
                 && !sni.is_empty()
             {
                 map.insert(
-                    Value::String("servername".to_string()),
+                    Value::String("sni".to_string()),
                     Value::String(sni.to_string()),
+                );
+            }
+            insert_optional_json_string(&mut map, "client-fingerprint", &node.settings, "fp");
+            insert_optional_json_string(
+                &mut map,
+                "fingerprint",
+                &node.settings,
+                "certificate-fingerprint",
+            );
+            insert_optional_json_bool(&mut map, "skip-cert-verify", &node.settings, "insecure");
+            insert_optional_json_bool(&mut map, "udp", &node.settings, "udp");
+            insert_optional_json_string(
+                &mut map,
+                "name-cert-verify",
+                &node.settings,
+                "name-cert-verify",
+            );
+            insert_optional_json_string(&mut map, "ip-version", &node.settings, "ip-version");
+            insert_optional_json_bool(&mut map, "tfo", &node.settings, "tfo");
+            insert_optional_json_bool(&mut map, "mptcp", &node.settings, "mptcp");
+            for key in [
+                "reality-opts",
+                "ech-opts",
+                "shadow-tls-opts",
+                "restls-opts",
+                "jls-opts",
+                "ss-opts",
+                "smux",
+            ] {
+                insert_serialized_json_mapping(&mut map, key, &node.settings, key);
+            }
+            if map.get(Value::String("reality-opts".to_string())).is_none()
+                && let Some(public_key) = node.settings.get("pbk").and_then(|v| v.as_str())
+                && !public_key.is_empty()
+            {
+                let mut reality = Mapping::new();
+                reality.insert(
+                    Value::String("public-key".to_string()),
+                    Value::String(public_key.to_string()),
+                );
+                if let Some(short_id) = node.settings.get("sid").and_then(|v| v.as_str())
+                    && !short_id.is_empty()
+                {
+                    reality.insert(
+                        Value::String("short-id".to_string()),
+                        Value::String(short_id.to_string()),
+                    );
+                }
+                map.insert(
+                    Value::String("reality-opts".to_string()),
+                    Value::Mapping(reality),
+                );
+            }
+            if let Some(alpn) = node.settings.get("alpn").and_then(|v| v.as_str())
+                && !alpn.is_empty()
+            {
+                map.insert(
+                    Value::String("alpn".to_string()),
+                    Value::Sequence(split_csv(alpn)),
                 );
             }
         }
@@ -1337,8 +1481,17 @@ pub(crate) fn render_mihomo_proxy(node: &NodeView) -> Result<Mapping, AppError> 
                 Value::String("type".to_string()),
                 Value::String("tuic".to_string()),
             );
-            insert_json_string(&mut map, "uuid", &node.settings, "uuid")?;
-            insert_json_string(&mut map, "password", &node.settings, "password")?;
+            if let Some(token) = node.settings.get("token").and_then(|v| v.as_str())
+                && !token.is_empty()
+            {
+                map.insert(
+                    Value::String("token".to_string()),
+                    Value::String(token.to_string()),
+                );
+            } else {
+                insert_json_string(&mut map, "uuid", &node.settings, "uuid")?;
+                insert_json_string(&mut map, "password", &node.settings, "password")?;
+            }
             if let Some(sni) = node.settings.get("sni").and_then(|v| v.as_str())
                 && !sni.is_empty()
             {
@@ -1380,6 +1533,20 @@ pub(crate) fn render_mihomo_proxy(node: &NodeView) -> Result<Mapping, AppError> 
                     Value::String(mode.to_string()),
                 );
             }
+            for key in ["ip", "bbr-profile", "name-cert-verify"] {
+                insert_optional_json_string(&mut map, key, &node.settings, key);
+            }
+            for key in [
+                "heartbeat-interval",
+                "request-timeout",
+                "max-udp-relay-packet-size",
+                "max-open-streams",
+            ] {
+                insert_optional_json_i64(&mut map, key, &node.settings, key);
+            }
+            for key in ["disable-sni", "reduce-rtt", "fast-open"] {
+                insert_optional_json_bool(&mut map, key, &node.settings, key);
+            }
         }
         "wireguard" => {
             map.insert(
@@ -1413,6 +1580,45 @@ pub(crate) fn render_mihomo_proxy(node: &NodeView) -> Result<Mapping, AppError> 
             }
             if !ip_values.is_empty() {
                 map.insert(Value::String("ip".to_string()), Value::Sequence(ip_values));
+            }
+
+            if let Some(allowed_ips) = node.settings.get("allowed-ips").and_then(|v| v.as_str())
+                && !allowed_ips.is_empty()
+            {
+                map.insert(
+                    Value::String("allowed-ips".to_string()),
+                    Value::Sequence(split_csv(allowed_ips)),
+                );
+            }
+            if let Some(reserved) = node.settings.get("reserved").and_then(|v| v.as_str())
+                && !reserved.is_empty()
+            {
+                let value = if reserved.contains(',') {
+                    Value::Sequence(split_csv_scalars(reserved))
+                } else {
+                    Value::String(reserved.to_string())
+                };
+                map.insert(Value::String("reserved".to_string()), value);
+            }
+            insert_optional_json_i64(
+                &mut map,
+                "persistent-keepalive",
+                &node.settings,
+                "persistent-keepalive",
+            );
+            insert_optional_json_bool(
+                &mut map,
+                "remote-dns-resolve",
+                &node.settings,
+                "remote-dns-resolve",
+            );
+            if let Some(dns) = node.settings.get("dns").and_then(|v| v.as_str())
+                && !dns.is_empty()
+            {
+                map.insert(
+                    Value::String("dns".to_string()),
+                    Value::Sequence(split_csv(dns)),
+                );
             }
 
             if let Some(mtu) = node.settings.get("mtu").and_then(json_to_i64) {
@@ -2926,6 +3132,42 @@ fn split_csv(input: &str) -> Vec<Value> {
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(|value| Value::String(value.to_string()))
+        .collect()
+}
+
+fn insert_serialized_json_mapping(
+    map: &mut Mapping,
+    output_key: &str,
+    settings: &serde_json::Value,
+    settings_key: &str,
+) -> bool {
+    let Some(raw) = settings.get(settings_key).and_then(|value| value.as_str()) else {
+        return false;
+    };
+    let Ok(json_value) = serde_json::from_str::<serde_json::Value>(raw) else {
+        return false;
+    };
+    let Ok(Value::Mapping(mapping)) = serde_yaml::to_value(json_value) else {
+        return false;
+    };
+    map.insert(
+        Value::String(output_key.to_string()),
+        Value::Mapping(mapping),
+    );
+    true
+}
+
+fn split_csv_scalars(input: &str) -> Vec<Value> {
+    input
+        .split(',')
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| {
+            value
+                .parse::<i64>()
+                .map(|number| Value::Number(number.into()))
+                .unwrap_or_else(|_| Value::String(value.to_string()))
+        })
         .collect()
 }
 
