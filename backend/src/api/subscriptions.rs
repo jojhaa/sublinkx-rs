@@ -8,8 +8,8 @@ use axum::{
 use crate::{
     api::exports::ExportQuery,
     dto::subscriptions::{
-        CreateSubscriptionRequest, RenewSubscriptionRequest, SubscriptionListResponse,
-        SubscriptionResponse, UpdateSubscriptionRequest,
+        CreateSubscriptionRequest, RenewSubscriptionRequest, SubscriptionListQuery,
+        SubscriptionListResponse, SubscriptionResponse, UpdateSubscriptionRequest,
     },
     errors::AppError,
     services::{export_service, subscription_service},
@@ -19,9 +19,10 @@ use crate::{
 pub async fn list(
     State(state): State<AppState>,
     headers: HeaderMap,
+    Query(query): Query<SubscriptionListQuery>,
 ) -> Result<Json<SubscriptionListResponse>, AppError> {
     subscription_service::require_auth(&state, &headers).await?;
-    let response = subscription_service::list_subscriptions(&state).await?;
+    let response = subscription_service::list_subscriptions(&state, query).await?;
     Ok(Json(response))
 }
 

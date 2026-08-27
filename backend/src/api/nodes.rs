@@ -1,6 +1,6 @@
 use axum::{
     Json,
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::{HeaderMap, header},
     response::{IntoResponse, Response},
 };
@@ -9,7 +9,7 @@ use crate::{
     dto::nodes::{
         CreateNodeRequest, ImportNodesFromSubscriptionRequest, MoveNodesRequest,
         NodeImportResponse, NodeLatencyBatchRequest, NodeLatencyBatchResponse, NodeLatencyResponse,
-        NodeListResponse, NodeResponse, UpdateNodeRequest,
+        NodeListQuery, NodeListResponse, NodeResponse, UpdateNodeRequest,
     },
     errors::AppError,
     services::node_service,
@@ -19,9 +19,10 @@ use crate::{
 pub async fn list(
     State(state): State<AppState>,
     headers: HeaderMap,
+    Query(query): Query<NodeListQuery>,
 ) -> Result<Json<NodeListResponse>, AppError> {
     node_service::require_auth(&state, &headers).await?;
-    let response = node_service::list_nodes(&state).await?;
+    let response = node_service::list_nodes(&state, query).await?;
     Ok(Json(response))
 }
 

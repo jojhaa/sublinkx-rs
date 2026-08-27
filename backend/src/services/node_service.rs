@@ -22,8 +22,8 @@ use crate::{
     dto::nodes::{
         CreateNodeRequest, ImportNodesFromSubscriptionRequest, MoveNodesRequest,
         NodeFidelityWarning, NodeImportFailure, NodeImportResponse, NodeLatencyBatchRequest,
-        NodeLatencyBatchResponse, NodeLatencyResponse, NodeLatencyResult, NodeListResponse,
-        NodeResponse, UpdateNodeRequest,
+        NodeLatencyBatchResponse, NodeLatencyResponse, NodeLatencyResult, NodeListQuery,
+        NodeListResponse, NodeResponse, UpdateNodeRequest,
     },
     errors::AppError,
     repository::{
@@ -61,8 +61,23 @@ pub async fn require_auth(state: &AppState, headers: &HeaderMap) -> Result<(), A
     auth_service::require_user(state, headers).await.map(|_| ())
 }
 
-pub async fn list_nodes(state: &AppState) -> Result<NodeListResponse, AppError> {
-    let records = node_repo::list(&state.db).await?;
+pub async fn list_nodes(
+    state: &AppState,
+    query: NodeListQuery,
+) -> Result<NodeListResponse, AppError> {
+    let page = query.pagination().normalized();
+    let total =
+        node_repo::count_filtered(&state.db, query.group_id, query.ungrouped, query.enabled)
+            .await?;
+    let records = node_repo::list_page(
+        &state.db,
+        query.group_id,
+        query.ungrouped,
+        query.enabled,
+        i64::from(page.page_size),
+        page.offset,
+    )
+    .await?;
     let data = records
         .into_iter()
         .map(NodeView::try_from)
@@ -72,6 +87,7 @@ pub async fn list_nodes(state: &AppState) -> Result<NodeListResponse, AppError> 
     Ok(NodeListResponse {
         code: "00000",
         data,
+        pagination: Some(page.meta(total)),
     })
 }
 
@@ -517,6 +533,7 @@ pub async fn move_nodes(
         return Ok(NodeListResponse {
             code: "00000",
             data: Vec::new(),
+            pagination: None,
         });
     }
     if payload.ids.len() > 500 {
@@ -541,6 +558,7 @@ pub async fn move_nodes(
     Ok(NodeListResponse {
         code: "00000",
         data,
+        pagination: None,
     })
 }
 

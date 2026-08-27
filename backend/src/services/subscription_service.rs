@@ -1,16 +1,16 @@
 use axum::http::HeaderMap;
 use rand::{Rng, distr::Alphanumeric};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use time::{Duration, OffsetDateTime, format_description::well_known::Rfc3339};
 
 use crate::{
     domain::{
         node::NodeView,
-        subscription::{SubscriptionRecord, SubscriptionView},
+        subscription::{SubscriptionListItem, SubscriptionRecord, SubscriptionView},
     },
     dto::subscriptions::{
-        CreateSubscriptionRequest, RenewSubscriptionRequest, SubscriptionListResponse,
-        SubscriptionResponse, UpdateSubscriptionRequest,
+        CreateSubscriptionRequest, RenewSubscriptionRequest, SubscriptionListQuery,
+        SubscriptionListResponse, SubscriptionResponse, UpdateSubscriptionRequest,
     },
     errors::AppError,
     repository::{
@@ -27,17 +27,88 @@ pub async fn require_auth(state: &AppState, headers: &HeaderMap) -> Result<(), A
     auth_service::require_user(state, headers).await.map(|_| ())
 }
 
-pub async fn list_subscriptions(state: &AppState) -> Result<SubscriptionListResponse, AppError> {
-    let subscriptions = subscription_repo::list(&state.db).await?;
-    let mut data = Vec::with_capacity(subscriptions.len());
-
-    for item in subscriptions {
-        data.push(build_view(state, item).await?);
+pub async fn list_subscriptions(
+    state: &AppState,
+    query: SubscriptionListQuery,
+) -> Result<SubscriptionListResponse, AppError> {
+    let page = query.pagination().normalized();
+    let total =
+        subscription_repo::count_filtered(&state.db, query.group_id, query.ungrouped).await?;
+    let subscriptions = subscription_repo::list_page(
+        &state.db,
+        query.group_id,
+        query.ungrouped,
+        i64::from(page.page_size),
+        page.offset,
+    )
+    .await?;
+    let subscription_ids = subscriptions.iter().map(|item| item.id).collect::<Vec<_>>();
+    let relation_rows =
+        subscription_repo::list_subscription_nodes_batch(&state.db, &subscription_ids).await?;
+    let group_rows =
+        subscription_repo::list_subscription_node_groups_batch(&state.db, &subscription_ids)
+            .await?;
+    let mut explicit_ids: HashMap<i64, Vec<i64>> = HashMap::new();
+    let mut group_ids: HashMap<i64, Vec<i64>> = HashMap::new();
+    let all_group_ids = group_rows
+        .iter()
+        .map(|row| row.node_group_id)
+        .collect::<HashSet<_>>();
+    for row in relation_rows {
+        explicit_ids
+            .entry(row.subscription_id)
+            .or_default()
+            .push(row.node_id);
     }
+    for row in group_rows {
+        group_ids
+            .entry(row.subscription_id)
+            .or_default()
+            .push(row.node_group_id);
+    }
+    let all_group_ids = all_group_ids.into_iter().collect::<Vec<_>>();
+    let group_nodes = node_repo::list_by_group_ids(&state.db, &all_group_ids).await?;
+    let mut nodes_by_group: HashMap<i64, Vec<i64>> = HashMap::new();
+    for node in group_nodes {
+        if let Some(group_id) = node.group_id {
+            nodes_by_group.entry(group_id).or_default().push(node.id);
+        }
+    }
+    let data = subscriptions
+        .into_iter()
+        .map(|record| {
+            let status = subscription_status(&record).to_string();
+            let node_group_ids = group_ids.remove(&record.id).unwrap_or_default();
+            let mut node_ids = explicit_ids.remove(&record.id).unwrap_or_default();
+            let mut seen = node_ids.iter().copied().collect::<HashSet<_>>();
+            for group_id in &node_group_ids {
+                if let Some(group_node_ids) = nodes_by_group.get(group_id) {
+                    node_ids.extend(group_node_ids.iter().copied().filter(|id| seen.insert(*id)));
+                }
+            }
+            SubscriptionListItem {
+                id: record.id,
+                name: record.name,
+                token: record.token,
+                description: record.description,
+                default_client: record.default_client,
+                template_id: record.template_id,
+                group_id: record.group_id,
+                enabled: record.enabled != 0,
+                expires_at: record.expires_at.clone(),
+                status,
+                node_group_ids,
+                node_ids,
+                created_at: record.created_at,
+                updated_at: record.updated_at,
+            }
+        })
+        .collect();
 
     Ok(SubscriptionListResponse {
         code: "00000",
         data,
+        pagination: page.meta(total),
     })
 }
 
@@ -285,12 +356,30 @@ async fn build_view(
     let mut nodes = Vec::with_capacity(relation_rows.len());
     let mut seen_node_ids = HashSet::new();
 
+    let explicit_node_ids = relation_rows
+        .iter()
+        .map(|row| row.node_id)
+        .collect::<Vec<_>>();
+    let explicit_nodes = node_repo::find_by_ids(&state.db, &explicit_node_ids).await?;
+    if explicit_nodes.len()
+        != explicit_node_ids
+            .iter()
+            .copied()
+            .collect::<HashSet<_>>()
+            .len()
+    {
+        return Err(AppError::NotFound(
+            "subscription references missing node".to_string(),
+        ));
+    }
+    let explicit_by_id = explicit_nodes
+        .into_iter()
+        .map(|node| (node.id, node))
+        .collect::<HashMap<_, _>>();
     for row in relation_rows {
-        let node = node_repo::find_by_id(&state.db, row.node_id)
-            .await?
-            .ok_or_else(|| {
-                AppError::NotFound("subscription references missing node".to_string())
-            })?;
+        let node = explicit_by_id.get(&row.node_id).cloned().ok_or_else(|| {
+            AppError::NotFound("subscription references missing node".to_string())
+        })?;
         if seen_node_ids.insert(node.id) {
             node_ids.push(node.id);
             nodes.push(NodeView::try_from(node).map_err(|_| AppError::Internal)?);

@@ -1,12 +1,13 @@
 use axum::{
     Json,
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::HeaderMap,
 };
 
 use crate::{
     dto::templates::{
-        CreateTemplateRequest, TemplateListResponse, TemplateResponse, UpdateTemplateRequest,
+        CreateTemplateRequest, TemplateListQuery, TemplateListResponse, TemplateResponse,
+        UpdateTemplateRequest,
     },
     errors::AppError,
     services::template_service,
@@ -16,9 +17,10 @@ use crate::{
 pub async fn list(
     State(state): State<AppState>,
     headers: HeaderMap,
+    Query(query): Query<TemplateListQuery>,
 ) -> Result<Json<TemplateListResponse>, AppError> {
     template_service::require_auth(&state, &headers).await?;
-    let response = template_service::list_templates(&state).await?;
+    let response = template_service::list_templates(&state, query).await?;
     Ok(Json(response))
 }
 

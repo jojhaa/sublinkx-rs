@@ -1,4 +1,4 @@
-import apiClient from './client'
+import apiClient, { type PaginationMeta } from './client'
 import type { NodeItem } from './nodes'
 
 export interface SubscriptionItem {
@@ -14,7 +14,7 @@ export interface SubscriptionItem {
   status: 'active' | 'disabled' | 'expired'
   node_group_ids: number[]
   node_ids: number[]
-  nodes: NodeItem[]
+  nodes?: NodeItem[]
   created_at: string
   updated_at: string
 }
@@ -22,6 +22,14 @@ export interface SubscriptionItem {
 interface SubscriptionListResponse {
   code: string
   data: SubscriptionItem[]
+  pagination: PaginationMeta
+}
+
+export interface SubscriptionListParams {
+  page?: number
+  page_size?: number
+  group_id?: number
+  ungrouped?: boolean
 }
 
 interface SubscriptionResponse {
@@ -41,8 +49,8 @@ export interface SubscriptionPayload {
   node_ids: number[]
 }
 
-export async function listSubscriptions() {
-  const { data } = await apiClient.get<SubscriptionListResponse>('/api/v1/subscriptions')
+export async function listSubscriptions(params: SubscriptionListParams = {}) {
+  const { data } = await apiClient.get<SubscriptionListResponse>('/api/v1/subscriptions', { params })
   return data
 }
 

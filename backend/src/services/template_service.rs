@@ -3,7 +3,8 @@ use axum::http::HeaderMap;
 use crate::{
     domain::{client::is_known_template_kind, template::TemplateView},
     dto::templates::{
-        CreateTemplateRequest, TemplateListResponse, TemplateResponse, UpdateTemplateRequest,
+        CreateTemplateRequest, TemplateKindCount, TemplateListQuery, TemplateListResponse,
+        TemplateResponse, UpdateTemplateRequest,
     },
     errors::AppError,
     repository::{subscription_repo, template_repo},
@@ -17,8 +18,23 @@ pub async fn require_auth(state: &AppState, headers: &HeaderMap) -> Result<(), A
     auth_service::require_user(state, headers).await.map(|_| ())
 }
 
-pub async fn list_templates(state: &AppState) -> Result<TemplateListResponse, AppError> {
-    let data = template_repo::list(&state.db)
+pub async fn list_templates(
+    state: &AppState,
+    query: TemplateListQuery,
+) -> Result<TemplateListResponse, AppError> {
+    let page = query.pagination().normalized();
+    let kind = query
+        .kind
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let total = template_repo::count_filtered(&state.db, kind).await?;
+    let kind_counts = template_repo::count_by_kind(&state.db)
+        .await?
+        .into_iter()
+        .map(|(kind, count)| TemplateKindCount { kind, count })
+        .collect();
+    let data = template_repo::list_page(&state.db, kind, i64::from(page.page_size), page.offset)
         .await?
         .into_iter()
         .map(TemplateView::from)
@@ -27,6 +43,8 @@ pub async fn list_templates(state: &AppState) -> Result<TemplateListResponse, Ap
     Ok(TemplateListResponse {
         code: "00000",
         data,
+        pagination: page.meta(total),
+        kind_counts,
     })
 }
 

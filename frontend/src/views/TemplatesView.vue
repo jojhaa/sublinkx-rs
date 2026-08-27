@@ -76,6 +76,9 @@ const selectedIds = ref<number[]>([])
 const kindFilter = ref<TemplateKind | 'all'>('all')
 const page = ref(1)
 const pageSize = ref(readStoredPageSize(PAGE_SIZE_STORAGE_KEY, PAGE_SIZE_OPTIONS, 12))
+const totalTemplates = ref(0)
+const totalPages = ref(0)
+const templateKindCounts = ref<Record<string, number>>({})
 const errorMessage = ref('')
 const successMessage = ref('')
 
@@ -86,14 +89,10 @@ const form = reactive({
 })
 
 const isEditing = computed(() => editingId.value !== null)
-const filteredTemplates = computed(() =>
-  kindFilter.value === 'all' ? templates.value : templates.value.filter((item) => item.kind === kindFilter.value),
-)
-const pageCount = computed(() => Math.max(1, Math.ceil(filteredTemplates.value.length / pageSize.value)))
-const pagedTemplates = computed(() => {
-  const start = (page.value - 1) * pageSize.value
-  return filteredTemplates.value.slice(start, start + pageSize.value)
-})
+const filteredTemplates = computed(() => templates.value)
+const pageCount = computed(() => Math.max(1, totalPages.value))
+const overallTemplateCount = computed(() => Object.values(templateKindCounts.value).reduce((sum, count) => sum + count, 0))
+const pagedTemplates = computed(() => templates.value)
 const currentPageCustomTemplates = computed(() => pagedTemplates.value.filter((item) => !item.is_builtin))
 const selectedTemplates = computed(() => templates.value.filter((item) => selectedIds.value.includes(item.id)))
 const selectedCount = computed(() => selectedTemplates.value.length)
@@ -113,13 +112,14 @@ const submitLabel = computed(() => {
   return isEditing.value ? t('saveTemplate') : t('createTemplate')
 })
 
-watch([filteredTemplates, pageSize], () => {
-  page.value = Math.min(page.value, pageCount.value)
-  selectedIds.value = selectedIds.value.filter((id) => filteredTemplates.value.some((item) => item.id === id && !item.is_builtin))
-})
-
 watch(pageSize, (value) => {
   storePageSize(PAGE_SIZE_STORAGE_KEY, value)
+  reloadFirstTemplatePage()
+})
+
+watch(page, () => {
+  selectedIds.value = []
+  void load()
 })
 
 function normalizeKind(kind: string): TemplateKind {
@@ -163,15 +163,23 @@ function kindLabel(kind: string) {
 }
 
 function templateCountByKind(kind: TemplateKind) {
-  return templates.value.filter((item) => item.kind === kind).length
+  return templateKindCounts.value[kind] ?? 0
 }
 
 function setKindFilter(kind: TemplateKind | 'all') {
   kindFilter.value = kind
-  page.value = 1
+  reloadFirstTemplatePage()
   selectedIds.value = selectedIds.value.filter((id) =>
     templates.value.some((item) => item.id === id && !item.is_builtin && (kind === 'all' || item.kind === kind)),
   )
+}
+
+function reloadFirstTemplatePage() {
+  if (page.value === 1) {
+    void load()
+  } else {
+    page.value = 1
+  }
 }
 
 function selectAllCustomTemplates(checked: boolean) {
@@ -202,8 +210,15 @@ async function load() {
   errorMessage.value = ''
 
   try {
-    const response = await listTemplates()
+    const response = await listTemplates({
+      page: page.value,
+      page_size: pageSize.value,
+      ...(kindFilter.value === 'all' ? {} : { kind: kindFilter.value }),
+    })
     templates.value = response.data
+    totalTemplates.value = response.pagination.total
+    totalPages.value = response.pagination.total_pages
+    templateKindCounts.value = Object.fromEntries(response.kind_counts.map((item) => [item.kind, item.count]))
     selectedIds.value = selectedIds.value.filter((id) =>
       response.data.some((item) => item.id === id && !item.is_builtin),
     )
@@ -357,7 +372,7 @@ onMounted(load)
             @click="setKindFilter('all')"
           >
             <span>{{ t('allTemplateKinds') }}</span>
-            <strong>{{ templates.length }}</strong>
+            <strong>{{ overallTemplateCount }}</strong>
           </button>
           <button
             v-for="option in TEMPLATE_KIND_OPTIONS"
@@ -377,7 +392,7 @@ onMounted(load)
         <div class="section-bar template-list-bar">
           <div>
             <div class="hint">{{ t('templateList') }}</div>
-            <p class="card-copy">{{ t('templateListSummary', { count: filteredTemplates.length, selected: selectedCount }) }}</p>
+            <p class="card-copy">{{ t('templateListSummary', { count: totalTemplates, selected: selectedCount }) }}</p>
           </div>
           <div class="inline-actions bulk-actions" :class="{ 'is-empty-selection': selectedCount === 0 }">
             <button class="button button-ghost" type="button" :disabled="selectedCount === 0" @click="clearSelection">{{ t('clearSelection') }}</button>

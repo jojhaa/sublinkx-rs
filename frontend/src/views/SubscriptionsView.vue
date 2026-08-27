@@ -146,6 +146,8 @@ const displayMode = ref<'detailed' | 'minimal'>('minimal')
 const detailSubscription = ref<SubscriptionItem | null>(null)
 const page = ref(1)
 const pageSize = ref(readStoredPageSize(PAGE_SIZE_STORAGE_KEY, PAGE_SIZE_OPTIONS))
+const totalSubscriptions = ref(0)
+const totalPages = ref(0)
 const errorMessage = ref('')
 const successMessage = ref('')
 const exportMode = ref<ExportMode>('strict')
@@ -171,15 +173,7 @@ const groupForm = reactive({
   sort_order: 0,
 })
 
-const filteredSubscriptions = computed(() => {
-  if (groupFilter.value === 'all') {
-    return subscriptions.value
-  }
-  if (groupFilter.value === 'none') {
-    return subscriptions.value.filter((item) => item.group_id === null)
-  }
-  return subscriptions.value.filter((item) => item.group_id === groupFilter.value)
-})
+const filteredSubscriptions = computed(() => subscriptions.value)
 
 const filteredFormNodes = computed(() => {
   let list = nodes.value
@@ -220,11 +214,8 @@ const filteredFormNodes = computed(() => {
   )
 })
 
-const pageCount = computed(() => Math.max(1, Math.ceil(filteredSubscriptions.value.length / pageSize.value)))
-const pagedSubscriptions = computed(() => {
-  const start = (page.value - 1) * pageSize.value
-  return filteredSubscriptions.value.slice(start, start + pageSize.value)
-})
+const pageCount = computed(() => Math.max(1, totalPages.value))
+const pagedSubscriptions = computed(() => subscriptions.value)
 const selectedSubscriptions = computed(() => subscriptions.value.filter((item) => selectedIds.value.includes(item.id)))
 const currentPageIds = computed(() => pagedSubscriptions.value.map((item) => item.id))
 const currentPageSelected = computed(
@@ -280,19 +271,28 @@ const submitLabel = computed(() => {
 })
 const groupSubmitLabel = computed(() => (isEditingGroup.value ? t('saveGroup') : t('createGroup')))
 
-watch([filteredSubscriptions, pageSize], () => {
-  page.value = Math.min(page.value, pageCount.value)
-  selectedIds.value = selectedIds.value.filter((id) => filteredSubscriptions.value.some((item) => item.id === id))
-})
-
 watch(pageSize, (value) => {
   storePageSize(PAGE_SIZE_STORAGE_KEY, value)
+  reloadFirstSubscriptionPage()
 })
 
 watch(groupFilter, () => {
-  page.value = 1
   selectedIds.value = []
+  reloadFirstSubscriptionPage()
 })
+
+watch(page, () => {
+  selectedIds.value = []
+  void loadSubscriptions()
+})
+
+function reloadFirstSubscriptionPage() {
+  if (page.value === 1) {
+    void loadSubscriptions()
+  } else {
+    page.value = 1
+  }
+}
 
 function isNodeSupportedForTarget(node: Pick<NodeItem, 'protocol'>, target: ExportTarget) {
   return TARGET_SUPPORT[target].has(node.protocol)
@@ -331,7 +331,9 @@ function openCompatibilityDetail(item: SubscriptionItem, target: ExportTarget) {
 }
 
 function subscriptionCompatibility(item: SubscriptionItem, target: ExportTarget) {
-  return summarizeCompatibility(item.nodes, target)
+  const byId = new Map(nodes.value.map((node) => [node.id, node]))
+  const itemNodes = item.node_ids.map((id) => byId.get(id)).filter((node): node is NodeItem => Boolean(node))
+  return summarizeCompatibility(itemNodes, target)
 }
 
 function defaultTarget(item: SubscriptionItem): ExportTarget {
@@ -941,9 +943,9 @@ async function load() {
   errorMessage.value = ''
 
   const [nodeResponse, subscriptionResponse, templateResponse, groupResponse, nodeGroupResponse, settingsResponse] = await Promise.allSettled([
-    listNodes(),
-    listSubscriptions(),
-    listTemplates(),
+    listNodes({ page_size: 1000 }),
+    fetchSubscriptionPage(),
+    listTemplates({ page_size: 1000 }),
     listSubscriptionGroups(),
     listNodeGroups(),
     getSettings(),
@@ -954,6 +956,8 @@ async function load() {
   }
   if (subscriptionResponse.status === 'fulfilled') {
     subscriptions.value = subscriptionResponse.value.data
+    totalSubscriptions.value = subscriptionResponse.value.pagination.total
+    totalPages.value = subscriptionResponse.value.pagination.total_pages
   }
   if (templateResponse.status === 'fulfilled') {
     templates.value = templateResponse.value.data
@@ -975,6 +979,33 @@ async function load() {
     errorMessage.value = extractApiError(failure.reason)
   }
   loading.value = false
+}
+
+function fetchSubscriptionPage() {
+  return listSubscriptions({
+    page: page.value,
+    page_size: pageSize.value,
+    ...(groupFilter.value === 'none' ? { ungrouped: true } : {}),
+    ...(typeof groupFilter.value === 'number' ? { group_id: groupFilter.value } : {}),
+  })
+}
+
+async function loadSubscriptions() {
+  loading.value = true
+  errorMessage.value = ''
+  try {
+    const response = await fetchSubscriptionPage()
+    subscriptions.value = response.data
+    totalSubscriptions.value = response.pagination.total
+    totalPages.value = response.pagination.total_pages
+    if (page.value > pageCount.value) {
+      page.value = pageCount.value
+    }
+  } catch (error) {
+    errorMessage.value = extractApiError(error)
+  } finally {
+    loading.value = false
+  }
 }
 
 async function submit() {
@@ -1006,6 +1037,7 @@ async function submit() {
     }
 
     closeEditor()
+    await loadSubscriptions()
   } catch (error) {
     errorMessage.value = extractApiError(error)
   } finally {
@@ -1043,7 +1075,7 @@ async function moveSelectedSubscriptions() {
       group: groupName(batchGroupId.value),
     })
     clearSelection()
-    await load()
+    await loadSubscriptions()
   } catch (error) {
     errorMessage.value = extractApiError(error)
   } finally {
@@ -1083,7 +1115,7 @@ async function rotateToken(item: SubscriptionItem) {
   try {
     await rotateSubscriptionToken(item.id)
     successMessage.value = t('tokenRotated')
-    await load()
+    await loadSubscriptions()
   } catch (error) {
     errorMessage.value = extractApiError(error)
   }
@@ -1103,7 +1135,7 @@ async function toggleSubscriptionEnabled(item: SubscriptionItem) {
       node_ids: item.node_ids,
     })
     successMessage.value = item.enabled ? t('subscriptionDisabled') : t('subscriptionEnabled')
-    await load()
+    await loadSubscriptions()
   } catch (error) {
     errorMessage.value = extractApiError(error)
   }
@@ -1113,7 +1145,7 @@ async function renew(item: SubscriptionItem, days = 30) {
   try {
     await renewSubscription(item.id, days)
     successMessage.value = t('renewedDays', { name: item.name, days })
-    await load()
+    await loadSubscriptions()
   } catch (error) {
     errorMessage.value = extractApiError(error)
   }
@@ -1131,6 +1163,7 @@ async function removeSubscription(id: number) {
     }
     removeSubscriptionById(id)
     successMessage.value = t('subscriptionDeleted')
+    await loadSubscriptions()
   } catch (error) {
     errorMessage.value = extractApiError(error)
   }
@@ -1201,7 +1234,7 @@ onMounted(load)
       <div class="section-bar">
         <div>
           <div class="hint">{{ t('subscriptionList') }}</div>
-          <p class="card-copy">{{ t('subscriptionListSummary', { filtered: filteredSubscriptions.length, selected: selectedCount }) }}</p>
+          <p class="card-copy">{{ t('subscriptionListSummary', { filtered: totalSubscriptions, selected: selectedCount }) }}</p>
         </div>
         <div class="view-switch">
           <button class="view-switch-button" :class="{ active: displayMode === 'detailed' }" type="button" @click="displayMode = 'detailed'">

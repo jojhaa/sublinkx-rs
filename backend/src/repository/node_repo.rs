@@ -46,19 +46,69 @@ pub struct UpdateNodeRecord<'a> {
     pub updated_at: &'a str,
 }
 
-pub async fn list(pool: &DbPool) -> Result<Vec<NodeRecord>, sqlx::Error> {
-    sqlx::query_as::<_, NodeRecord>(
-        r#"
-        SELECT
-               id, name, protocol, raw_link, server, port, enabled + 0 AS enabled, group_id, source_type, source_ref,
-               upstream_missing + 0 AS upstream_missing, fingerprint, settings_json, remark, last_latency_ms, last_latency_status,
-               last_latency_message, last_latency_tested_at, created_at, updated_at
-        FROM nodes
-        ORDER BY id DESC
-        "#,
-    )
-    .fetch_all(pool)
-    .await
+pub async fn count_filtered(
+    pool: &DbPool,
+    group_id: Option<i64>,
+    ungrouped: bool,
+    enabled: Option<bool>,
+) -> Result<i64, sqlx::Error> {
+    let mut query = QueryBuilder::<Any>::new("SELECT COUNT(*) FROM nodes WHERE 1 = 1");
+    push_list_filters(&mut query, group_id, ungrouped, enabled);
+    query.build_query_scalar().fetch_one(pool).await
+}
+
+pub async fn list_page(
+    pool: &DbPool,
+    group_id: Option<i64>,
+    ungrouped: bool,
+    enabled: Option<bool>,
+    limit: i64,
+    offset: i64,
+) -> Result<Vec<NodeRecord>, sqlx::Error> {
+    let mut query = QueryBuilder::<Any>::new(format!(
+        "SELECT {NODE_SELECT_FIELDS} FROM nodes WHERE 1 = 1"
+    ));
+    push_list_filters(&mut query, group_id, ungrouped, enabled);
+    query.push(" ORDER BY id DESC LIMIT ");
+    query.push_bind(limit);
+    query.push(" OFFSET ");
+    query.push_bind(offset);
+    query.build_query_as().fetch_all(pool).await
+}
+
+fn push_list_filters(
+    query: &mut QueryBuilder<'_, Any>,
+    group_id: Option<i64>,
+    ungrouped: bool,
+    enabled: Option<bool>,
+) {
+    if ungrouped {
+        query.push(" AND group_id IS NULL");
+    } else if let Some(group_id) = group_id {
+        query.push(" AND group_id = ");
+        query.push_bind(group_id);
+    }
+    if let Some(enabled) = enabled {
+        query.push(" AND enabled = ");
+        query.push_bind(if enabled { 1_i64 } else { 0_i64 });
+    }
+}
+
+pub async fn find_by_ids(pool: &DbPool, ids: &[i64]) -> Result<Vec<NodeRecord>, sqlx::Error> {
+    if ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut query = QueryBuilder::<Any>::new(format!(
+        "SELECT {NODE_SELECT_FIELDS} FROM nodes WHERE id IN ("
+    ));
+    {
+        let mut separated = query.separated(", ");
+        for id in ids {
+            separated.push_bind(*id);
+        }
+    }
+    query.push(") ORDER BY id ASC");
+    query.build_query_as().fetch_all(pool).await
 }
 
 pub async fn list_by_group_ids(

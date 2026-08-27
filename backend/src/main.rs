@@ -29,6 +29,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     repository::user_repo::bootstrap_admin(&pool, &config).await?;
     services::template_seed_service::seed_default_templates(&pool).await?;
     let state = AppState::new(config.clone(), pool);
+    services::upstream_subscription_service::backfill_existing_node_source_refs(&state).await?;
     services::latency_scheduler_service::spawn_auto_latency_tester(state.clone());
     services::upstream_sync_scheduler_service::spawn_upstream_subscription_syncer(state.clone());
     let app = build_app(state);

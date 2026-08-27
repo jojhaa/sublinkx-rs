@@ -1,4 +1,4 @@
-import apiClient from './client'
+import apiClient, { type PaginationMeta } from './client'
 import type { NodeImportResponse } from './nodes'
 
 export interface UpstreamSubscriptionItem {
@@ -27,6 +27,7 @@ export interface UpstreamSubscriptionItem {
 interface UpstreamSubscriptionListResponse {
   code: string
   data: UpstreamSubscriptionItem[]
+  pagination: PaginationMeta
 }
 
 interface UpstreamSubscriptionResponse {
@@ -49,8 +50,8 @@ export interface UpstreamSubscriptionPayload {
   remark?: string
 }
 
-export async function listUpstreamSubscriptions() {
-  const { data } = await apiClient.get<UpstreamSubscriptionListResponse>('/api/v1/upstream-subscriptions')
+export async function listUpstreamSubscriptions(params: { page?: number; page_size?: number } = {}) {
+  const { data } = await apiClient.get<UpstreamSubscriptionListResponse>('/api/v1/upstream-subscriptions', { params })
   return data
 }
 

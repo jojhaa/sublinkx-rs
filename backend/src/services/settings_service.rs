@@ -62,30 +62,40 @@ pub async fn update_latency_core_path(state: &AppState, core_path: &str) -> Resu
 }
 
 pub async fn load_settings(state: &AppState) -> Result<AppSettingsView, AppError> {
-    let public_base_url = settings_repo::get(&state.db, PUBLIC_BASE_URL)
-        .await?
-        .unwrap_or_default();
-    let auto_enabled = settings_repo::get(&state.db, LATENCY_AUTO_ENABLED)
-        .await?
+    let values = settings_repo::get_many(
+        &state.db,
+        &[
+            PUBLIC_BASE_URL,
+            LATENCY_AUTO_ENABLED,
+            LATENCY_INTERVAL_MINUTES,
+            LATENCY_CONCURRENCY,
+            LATENCY_CORE_PATH,
+            LATENCY_TEST_URL,
+            LATENCY_TIMEOUT_SECS,
+        ],
+    )
+    .await?;
+    let public_base_url = values.get(PUBLIC_BASE_URL).cloned().unwrap_or_default();
+    let auto_enabled = values
+        .get(LATENCY_AUTO_ENABLED)
         .and_then(|value| value.parse::<bool>().ok())
         .unwrap_or(DEFAULT_LATENCY_AUTO_ENABLED);
-    let interval_minutes = settings_repo::get(&state.db, LATENCY_INTERVAL_MINUTES)
-        .await?
+    let interval_minutes = values
+        .get(LATENCY_INTERVAL_MINUTES)
         .and_then(|value| value.parse::<i64>().ok())
         .unwrap_or(DEFAULT_LATENCY_INTERVAL_MINUTES);
-    let concurrency = settings_repo::get(&state.db, LATENCY_CONCURRENCY)
-        .await?
+    let concurrency = values
+        .get(LATENCY_CONCURRENCY)
         .and_then(|value| value.parse::<i64>().ok())
         .unwrap_or(DEFAULT_LATENCY_CONCURRENCY);
-    let core_path = settings_repo::get(&state.db, LATENCY_CORE_PATH)
-        .await?
-        .unwrap_or_default();
-    let test_url = settings_repo::get(&state.db, LATENCY_TEST_URL)
-        .await?
+    let core_path = values.get(LATENCY_CORE_PATH).cloned().unwrap_or_default();
+    let test_url = values
+        .get(LATENCY_TEST_URL)
+        .cloned()
         .filter(|value| !value.trim().is_empty())
         .unwrap_or_else(|| DEFAULT_LATENCY_TEST_URL.to_string());
-    let timeout_secs = settings_repo::get(&state.db, LATENCY_TIMEOUT_SECS)
-        .await?
+    let timeout_secs = values
+        .get(LATENCY_TIMEOUT_SECS)
         .and_then(|value| value.parse::<i64>().ok())
         .unwrap_or(DEFAULT_LATENCY_TIMEOUT_SECS);
 

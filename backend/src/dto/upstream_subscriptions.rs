@@ -2,7 +2,20 @@ use serde::{Deserialize, Serialize};
 
 use crate::domain::upstream_subscription::UpstreamSubscriptionView;
 
+use super::common::{PaginationMeta, PaginationQuery};
 use super::nodes::NodeImportResponse;
+
+#[derive(Debug, Default, Deserialize)]
+pub struct UpstreamSubscriptionListQuery {
+    pub page: Option<u32>,
+    pub page_size: Option<u32>,
+}
+
+impl UpstreamSubscriptionListQuery {
+    pub fn pagination(&self) -> PaginationQuery {
+        PaginationQuery::from_options(self.page, self.page_size)
+    }
+}
 
 #[derive(Debug, Deserialize)]
 pub struct UpstreamSubscriptionPayload {
@@ -32,6 +45,7 @@ pub struct DeleteUpstreamSubscriptionResponse {
 pub struct UpstreamSubscriptionListResponse {
     pub code: &'static str,
     pub data: Vec<UpstreamSubscriptionView>,
+    pub pagination: PaginationMeta,
 }
 
 #[derive(Debug, Serialize)]

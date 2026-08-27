@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { extractApiError } from '../api/client'
 import {
   createUpstreamSubscription,
@@ -21,6 +21,9 @@ const showEditor = ref(false)
 const editingId = ref<number | null>(null)
 const errorMessage = ref('')
 const successMessage = ref('')
+const page = ref(1)
+const pageSize = 20
+const totalPages = ref(0)
 
 const form = reactive({
   name: '',
@@ -37,6 +40,11 @@ const submitLabel = computed(() => {
     return isEditing.value ? t('saving') : t('creating')
   }
   return isEditing.value ? t('saveUpstreamSubscription') : t('createUpstreamSubscription')
+})
+const pageCount = computed(() => Math.max(1, totalPages.value))
+
+watch(page, () => {
+  void load()
 })
 
 function resetForm() {
@@ -132,8 +140,12 @@ async function load() {
   errorMessage.value = ''
 
   try {
-    const upstreamResponse = await listUpstreamSubscriptions()
+    const upstreamResponse = await listUpstreamSubscriptions({ page: page.value, page_size: pageSize })
     upstreams.value = upstreamResponse.data
+    totalPages.value = upstreamResponse.pagination.total_pages
+    if (page.value > pageCount.value) {
+      page.value = pageCount.value
+    }
   } catch (error) {
     errorMessage.value = extractApiError(error)
   } finally {
@@ -308,6 +320,13 @@ onMounted(load)
           </div>
         </article>
       </div>
+      <footer v-if="upstreams.length > 0" class="pagination-bar">
+        <span class="hint">{{ t('pageLabel', { page, count: pageCount }) }}</span>
+        <div class="inline-actions">
+          <button class="button button-ghost button-compact" type="button" :disabled="page <= 1" @click="page -= 1">{{ t('previousPage') }}</button>
+          <button class="button button-ghost button-compact" type="button" :disabled="page >= pageCount" @click="page += 1">{{ t('nextPage') }}</button>
+        </div>
+      </footer>
     </article>
 
     <Teleport to="body">

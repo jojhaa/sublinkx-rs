@@ -1,6 +1,24 @@
 use serde::{Deserialize, Serialize};
 
-use crate::domain::subscription::SubscriptionView;
+use crate::{
+    domain::subscription::{SubscriptionListItem, SubscriptionView},
+    dto::common::{PaginationMeta, PaginationQuery},
+};
+
+#[derive(Debug, Default, Deserialize)]
+pub struct SubscriptionListQuery {
+    pub page: Option<u32>,
+    pub page_size: Option<u32>,
+    pub group_id: Option<i64>,
+    #[serde(default)]
+    pub ungrouped: bool,
+}
+
+impl SubscriptionListQuery {
+    pub fn pagination(&self) -> PaginationQuery {
+        PaginationQuery::from_options(self.page, self.page_size)
+    }
+}
 
 #[derive(Debug, Deserialize)]
 pub struct CreateSubscriptionRequest {
@@ -44,5 +62,6 @@ pub struct SubscriptionResponse {
 #[derive(Debug, Serialize)]
 pub struct SubscriptionListResponse {
     pub code: &'static str,
-    pub data: Vec<SubscriptionView>,
+    pub data: Vec<SubscriptionListItem>,
+    pub pagination: PaginationMeta,
 }

@@ -62,6 +62,8 @@ const displayMode = ref<'detailed' | 'minimal'>('minimal')
 const detailNode = ref<NodeItem | null>(null)
 const page = ref(1)
 const pageSize = ref(readStoredPageSize(PAGE_SIZE_STORAGE_KEY, PAGE_SIZE_OPTIONS))
+const totalNodes = ref(0)
+const totalPages = ref(0)
 const errorMessage = ref('')
 const successMessage = ref('')
 const latencyResults = ref<Record<number, NodeLatencyResult>>({})
@@ -88,30 +90,9 @@ const groupForm = reactive({
   sort_order: 0,
 })
 
-const filteredNodes = computed(() => {
-  let scopedNodes = nodes.value
-  if (groupFilter.value === 'all') {
-    scopedNodes = nodes.value
-  } else if (groupFilter.value === 'none') {
-    scopedNodes = nodes.value.filter((item) => item.group_id === null)
-  } else {
-    scopedNodes = nodes.value.filter((item) => item.group_id === groupFilter.value)
-  }
-
-  if (nodeStatusFilter.value === 'enabled') {
-    return scopedNodes.filter((item) => item.enabled)
-  }
-  if (nodeStatusFilter.value === 'disabled') {
-    return scopedNodes.filter((item) => !item.enabled)
-  }
-  return scopedNodes
-})
-
-const pageCount = computed(() => Math.max(1, Math.ceil(filteredNodes.value.length / pageSize.value)))
-const pagedNodes = computed(() => {
-  const start = (page.value - 1) * pageSize.value
-  return filteredNodes.value.slice(start, start + pageSize.value)
-})
+const filteredNodes = computed(() => nodes.value)
+const pageCount = computed(() => Math.max(1, totalPages.value))
+const pagedNodes = computed(() => nodes.value)
 const selectedNodes = computed(() => nodes.value.filter((item) => selectedIds.value.includes(item.id)))
 const currentPageIds = computed(() => pagedNodes.value.map((item) => item.id))
 const currentPageSelected = computed(
@@ -129,19 +110,28 @@ const submitLabel = computed(() => {
 })
 const groupSubmitLabel = computed(() => (isEditingGroup.value ? t('saveGroup') : t('createGroup')))
 
-watch([filteredNodes, pageSize], () => {
-  page.value = Math.min(page.value, pageCount.value)
-  selectedIds.value = selectedIds.value.filter((id) => filteredNodes.value.some((item) => item.id === id))
-})
-
 watch(pageSize, (value) => {
   storePageSize(PAGE_SIZE_STORAGE_KEY, value)
+  reloadFirstNodePage()
 })
 
 watch([groupFilter, nodeStatusFilter], () => {
-  page.value = 1
   selectedIds.value = []
+  reloadFirstNodePage()
 })
+
+watch(page, () => {
+  selectedIds.value = []
+  void loadNodes()
+})
+
+function reloadFirstNodePage() {
+  if (page.value === 1) {
+    void loadNodes()
+  } else {
+    page.value = 1
+  }
+}
 
 function splitRawLinks(rawText: string) {
   const directLinks = extractRawLinks(rawText)
@@ -505,10 +495,12 @@ async function load() {
   loading.value = true
   errorMessage.value = ''
 
-  const [nodeResponse, groupResponse] = await Promise.allSettled([listNodes(), listNodeGroups()])
+  const [nodeResponse, groupResponse] = await Promise.allSettled([fetchNodePage(), listNodeGroups()])
 
   if (nodeResponse.status === 'fulfilled') {
     nodes.value = nodeResponse.value.data
+    totalNodes.value = nodeResponse.value.pagination?.total ?? nodeResponse.value.data.length
+    totalPages.value = nodeResponse.value.pagination?.total_pages ?? 1
   }
   if (groupResponse.status === 'fulfilled') {
     groups.value = groupResponse.value.data
@@ -519,6 +511,34 @@ async function load() {
     errorMessage.value = extractApiError(failure.reason)
   }
   loading.value = false
+}
+
+function fetchNodePage() {
+  return listNodes({
+    page: page.value,
+    page_size: pageSize.value,
+    ...(groupFilter.value === 'none' ? { ungrouped: true } : {}),
+    ...(typeof groupFilter.value === 'number' ? { group_id: groupFilter.value } : {}),
+    ...(nodeStatusFilter.value === 'all' ? {} : { enabled: nodeStatusFilter.value === 'enabled' }),
+  })
+}
+
+async function loadNodes() {
+  loading.value = true
+  errorMessage.value = ''
+  try {
+    const response = await fetchNodePage()
+    nodes.value = response.data
+    totalNodes.value = response.pagination?.total ?? response.data.length
+    totalPages.value = response.pagination?.total_pages ?? 1
+    if (page.value > pageCount.value) {
+      page.value = pageCount.value
+    }
+  } catch (error) {
+    errorMessage.value = extractApiError(error)
+  } finally {
+    loading.value = false
+  }
 }
 
 async function submit() {
@@ -579,6 +599,7 @@ async function submit() {
     }
 
     closeEditor()
+    await loadNodes()
   } catch (error) {
     errorMessage.value = extractApiError(error)
   } finally {
@@ -603,6 +624,7 @@ async function moveSelectedNodes() {
     upsertNodes(response.data)
     successMessage.value = t('nodesMoved', { count: selectedNodes.value.length, group: groupName(batchGroupId.value) })
     clearSelection()
+    await loadNodes()
   } catch (error) {
     errorMessage.value = extractApiError(error)
   } finally {
@@ -639,6 +661,7 @@ async function importFromUpstreamSubscription() {
     }
     upsertNodes(response.data)
     closeUpstreamImporter()
+    await loadNodes()
   } catch (error) {
     errorMessage.value = extractApiError(error)
   } finally {
@@ -682,6 +705,7 @@ async function removeNode(id: number) {
     }
     removeNodesById([id])
     successMessage.value = t('nodeDeleted')
+    await loadNodes()
   } catch (error) {
     errorMessage.value = extractApiError(error)
   }
@@ -721,6 +745,7 @@ async function removeSelectedNodes() {
     if (failures.length > 0) {
       errorMessage.value = t('nodeDeleteFailures', { count: failures.length, reason: extractApiError(failures[0].reason) })
     }
+    await loadNodes()
   } catch (error) {
     errorMessage.value = extractApiError(error)
   } finally {
@@ -796,7 +821,7 @@ onMounted(load)
       <div class="section-bar">
         <div>
           <div class="hint">{{ t('nodeList') }}</div>
-          <p class="card-copy">{{ t('nodeListSummary', { filtered: filteredNodes.length, selected: selectedCount }) }}</p>
+          <p class="card-copy">{{ t('nodeListSummary', { filtered: totalNodes, selected: selectedCount }) }}</p>
         </div>
         <div class="view-switch">
           <button class="view-switch-button" :class="{ active: displayMode === 'detailed' }" type="button" @click="displayMode = 'detailed'">

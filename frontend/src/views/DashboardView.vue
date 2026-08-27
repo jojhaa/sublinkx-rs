@@ -1,8 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { extractApiError } from '../api/client'
-import { listNodes } from '../api/nodes'
-import { listSubscriptions } from '../api/subscriptions'
+import { getDashboardStats } from '../api/dashboard'
 import { useI18n } from '../i18n'
 
 const { t } = useI18n()
@@ -20,9 +19,9 @@ async function load() {
   errorMessage.value = ''
 
   try {
-    const [nodes, subscriptions] = await Promise.all([listNodes(), listSubscriptions()])
-    nodeCount.value = nodes.data.length
-    subscriptionCount.value = subscriptions.data.length
+    const response = await getDashboardStats()
+    nodeCount.value = response.data.nodes
+    subscriptionCount.value = response.data.subscriptions
   } catch (error) {
     errorMessage.value = extractApiError(error)
   } finally {

@@ -1,3 +1,5 @@
+use sqlx::{Any, QueryBuilder};
+
 use crate::db::DbPool;
 
 use crate::domain::subscription::{
@@ -29,16 +31,41 @@ pub struct UpdateSubscriptionRecord<'a> {
     pub updated_at: &'a str,
 }
 
-pub async fn list(pool: &DbPool) -> Result<Vec<SubscriptionRecord>, sqlx::Error> {
-    sqlx::query_as::<_, SubscriptionRecord>(
-        r#"
-        SELECT id, name, token, description, default_client, template_id, group_id, enabled + 0 AS enabled, expires_at, created_at, updated_at
-        FROM subscriptions
-        ORDER BY id DESC
-        "#,
-    )
-    .fetch_all(pool)
-    .await
+pub async fn count_filtered(
+    pool: &DbPool,
+    group_id: Option<i64>,
+    ungrouped: bool,
+) -> Result<i64, sqlx::Error> {
+    let mut query = QueryBuilder::<Any>::new("SELECT COUNT(*) FROM subscriptions WHERE 1 = 1");
+    push_group_filter(&mut query, group_id, ungrouped);
+    query.build_query_scalar().fetch_one(pool).await
+}
+
+pub async fn list_page(
+    pool: &DbPool,
+    group_id: Option<i64>,
+    ungrouped: bool,
+    limit: i64,
+    offset: i64,
+) -> Result<Vec<SubscriptionRecord>, sqlx::Error> {
+    let mut query = QueryBuilder::<Any>::new(
+        "SELECT id, name, token, description, default_client, template_id, group_id, enabled + 0 AS enabled, expires_at, created_at, updated_at FROM subscriptions WHERE 1 = 1",
+    );
+    push_group_filter(&mut query, group_id, ungrouped);
+    query.push(" ORDER BY id DESC LIMIT ");
+    query.push_bind(limit);
+    query.push(" OFFSET ");
+    query.push_bind(offset);
+    query.build_query_as().fetch_all(pool).await
+}
+
+fn push_group_filter(query: &mut QueryBuilder<'_, Any>, group_id: Option<i64>, ungrouped: bool) {
+    if ungrouped {
+        query.push(" AND group_id IS NULL");
+    } else if let Some(group_id) = group_id {
+        query.push(" AND group_id = ");
+        query.push_bind(group_id);
+    }
 }
 
 pub async fn find_by_id(pool: &DbPool, id: i64) -> Result<Option<SubscriptionRecord>, sqlx::Error> {
@@ -267,6 +294,43 @@ pub async fn list_subscription_node_groups(
     .await
 }
 
+pub async fn list_subscription_nodes_batch(
+    pool: &DbPool,
+    subscription_ids: &[i64],
+) -> Result<Vec<SubscriptionNodeRecord>, sqlx::Error> {
+    if subscription_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut query = QueryBuilder::<Any>::new(
+        "SELECT subscription_id, node_id, sort_order FROM subscription_nodes WHERE subscription_id IN (",
+    );
+    push_ids(&mut query, subscription_ids);
+    query.push(") ORDER BY subscription_id, sort_order, node_id");
+    query.build_query_as().fetch_all(pool).await
+}
+
+pub async fn list_subscription_node_groups_batch(
+    pool: &DbPool,
+    subscription_ids: &[i64],
+) -> Result<Vec<SubscriptionNodeGroupRecord>, sqlx::Error> {
+    if subscription_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut query = QueryBuilder::<Any>::new(
+        "SELECT subscription_id, node_group_id, sort_order FROM subscription_node_groups WHERE subscription_id IN (",
+    );
+    push_ids(&mut query, subscription_ids);
+    query.push(") ORDER BY subscription_id, sort_order, node_group_id");
+    query.build_query_as().fetch_all(pool).await
+}
+
+fn push_ids(query: &mut QueryBuilder<'_, Any>, ids: &[i64]) {
+    let mut separated = query.separated(", ");
+    for id in ids {
+        separated.push_bind(*id);
+    }
+}
+
 async fn replace_subscription_nodes_in_tx(
     tx: &mut sqlx::Transaction<'_, sqlx::Any>,
     subscription_id: i64,
@@ -426,6 +490,19 @@ mod tests {
             .expect("followed groups should load");
         assert_eq!(followed_groups.len(), 1);
         assert_eq!(followed_groups[0].node_group_id, node_group_id);
+
+        let page = list_page(&pool, None, false, 10, 0)
+            .await
+            .expect("subscription page should load");
+        assert_eq!(page.len(), 1);
+        assert_eq!(count_filtered(&pool, None, false).await.unwrap(), 1);
+        assert_eq!(
+            list_subscription_node_groups_batch(&pool, &[record.id])
+                .await
+                .expect("followed groups should batch load")
+                .len(),
+            1
+        );
 
         let group_nodes = crate::repository::node_repo::list_by_group_ids(&pool, &[node_group_id])
             .await

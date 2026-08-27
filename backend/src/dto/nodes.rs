@@ -1,6 +1,23 @@
 use serde::{Deserialize, Serialize};
 
 use crate::domain::node::NodeView;
+use crate::dto::common::{PaginationMeta, PaginationQuery};
+
+#[derive(Debug, Default, Deserialize)]
+pub struct NodeListQuery {
+    pub page: Option<u32>,
+    pub page_size: Option<u32>,
+    pub group_id: Option<i64>,
+    #[serde(default)]
+    pub ungrouped: bool,
+    pub enabled: Option<bool>,
+}
+
+impl NodeListQuery {
+    pub fn pagination(&self) -> PaginationQuery {
+        PaginationQuery::from_options(self.page, self.page_size)
+    }
+}
 
 #[derive(Debug, Deserialize)]
 pub struct CreateNodeRequest {
@@ -68,6 +85,8 @@ pub struct NodeResponse {
 pub struct NodeListResponse {
     pub code: &'static str,
     pub data: Vec<NodeView>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pagination: Option<PaginationMeta>,
 }
 
 #[derive(Debug, Serialize)]

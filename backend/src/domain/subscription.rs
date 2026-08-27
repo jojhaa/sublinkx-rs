@@ -52,3 +52,21 @@ pub struct SubscriptionView {
     pub created_at: String,
     pub updated_at: String,
 }
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SubscriptionListItem {
+    pub id: i64,
+    pub name: String,
+    pub token: String,
+    pub description: String,
+    pub default_client: Option<String>,
+    pub template_id: Option<i64>,
+    pub group_id: Option<i64>,
+    pub enabled: bool,
+    pub expires_at: Option<String>,
+    pub status: String,
+    pub node_group_ids: Vec<i64>,
+    pub node_ids: Vec<i64>,
+    pub created_at: String,
+    pub updated_at: String,
+}

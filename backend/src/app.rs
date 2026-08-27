@@ -36,6 +36,7 @@ pub fn build_app(state: AppState) -> Router {
         .route("/healthz", get(api::health::healthz))
         .route("/s/{token}", get(api::exports::get_subscription))
         .route("/api/v1/version", get(api::version::version))
+        .route("/api/v1/dashboard/stats", get(api::dashboard::stats))
         .route(
             "/api/v1/version/update-check",
             get(api::version::update_check),

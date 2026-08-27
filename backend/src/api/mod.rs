@@ -1,4 +1,5 @@
 pub mod auth;
+pub mod dashboard;
 pub mod exports;
 pub mod groups;
 pub mod health;

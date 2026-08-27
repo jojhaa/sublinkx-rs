@@ -5,8 +5,9 @@ use crate::{
     dto::{
         nodes::ImportNodesFromSubscriptionRequest,
         upstream_subscriptions::{
-            UpstreamSubscriptionImportResponse, UpstreamSubscriptionListResponse,
-            UpstreamSubscriptionPayload, UpstreamSubscriptionResponse,
+            UpstreamSubscriptionImportResponse, UpstreamSubscriptionListQuery,
+            UpstreamSubscriptionListResponse, UpstreamSubscriptionPayload,
+            UpstreamSubscriptionResponse,
         },
     },
     errors::AppError,
@@ -28,12 +29,19 @@ pub const MIN_SYNC_INTERVAL_MINUTES: i64 = 5;
 pub const MAX_SYNC_INTERVAL_MINUTES: i64 = 10080;
 pub const DEFAULT_SYNC_INTERVAL_MINUTES: i64 = 360;
 
-pub async fn list(state: &AppState) -> Result<UpstreamSubscriptionListResponse, AppError> {
-    backfill_existing_node_source_refs(state).await?;
-    let records = upstream_subscription_repo::list(&state.db).await?;
+pub async fn list(
+    state: &AppState,
+    query: UpstreamSubscriptionListQuery,
+) -> Result<UpstreamSubscriptionListResponse, AppError> {
+    let page = query.pagination().normalized();
+    let total = upstream_subscription_repo::count(&state.db).await?;
+    let records =
+        upstream_subscription_repo::list_page(&state.db, i64::from(page.page_size), page.offset)
+            .await?;
     Ok(UpstreamSubscriptionListResponse {
         code: "00000",
         data: records.into_iter().map(Into::into).collect(),
+        pagination: page.meta(total),
     })
 }
 
@@ -334,7 +342,7 @@ fn bool_to_db(value: bool) -> i64 {
     if value { 1 } else { 0 }
 }
 
-async fn backfill_existing_node_source_refs(state: &AppState) -> Result<(), AppError> {
+pub async fn backfill_existing_node_source_refs(state: &AppState) -> Result<(), AppError> {
     let now = now_rfc3339();
     for source in upstream_subscription_repo::list_existing_node_source_refs(&state.db).await? {
         if upstream_subscription_repo::find_by_url(&state.db, &source.url)

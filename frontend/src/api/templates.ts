@@ -1,4 +1,4 @@
-import apiClient from './client'
+import apiClient, { type PaginationMeta } from './client'
 
 export interface TemplateItem {
   id: number
@@ -13,6 +13,14 @@ export interface TemplateItem {
 interface TemplateListResponse {
   code: string
   data: TemplateItem[]
+  pagination: PaginationMeta
+  kind_counts: Array<{ kind: string; count: number }>
+}
+
+export interface TemplateListParams {
+  page?: number
+  page_size?: number
+  kind?: string
 }
 
 interface TemplateResponse {
@@ -26,8 +34,8 @@ export interface TemplatePayload {
   content: string
 }
 
-export async function listTemplates() {
-  const { data } = await apiClient.get<TemplateListResponse>('/api/v1/templates')
+export async function listTemplates(params: TemplateListParams = {}) {
+  const { data } = await apiClient.get<TemplateListResponse>('/api/v1/templates', { params })
   return data
 }
 

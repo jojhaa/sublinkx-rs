@@ -1,4 +1,4 @@
-import apiClient from './client'
+import apiClient, { type PaginationMeta } from './client'
 import { readAuthToken, readCsrfToken } from '../utils/authToken'
 
 const apiBaseUrl = import.meta.env.VITE_API_BASE_URL || ''
@@ -29,6 +29,15 @@ export interface NodeItem {
 interface NodeListResponse {
   code: string
   data: NodeItem[]
+  pagination?: PaginationMeta
+}
+
+export interface NodeListParams {
+  page?: number
+  page_size?: number
+  group_id?: number
+  ungrouped?: boolean
+  enabled?: boolean
 }
 
 interface NodeResponse {
@@ -103,8 +112,8 @@ export interface MoveNodesPayload {
   group_id?: number | null
 }
 
-export async function listNodes() {
-  const { data } = await apiClient.get<NodeListResponse>('/api/v1/nodes')
+export async function listNodes(params: NodeListParams = {}) {
+  const { data } = await apiClient.get<NodeListResponse>('/api/v1/nodes', { params })
   return data
 }
 

@@ -3,6 +3,13 @@ import { readAuthToken, readCsrfToken, writeCsrfToken } from '../utils/authToken
 
 const apiBaseUrl = import.meta.env.VITE_API_BASE_URL || ''
 
+export interface PaginationMeta {
+  page: number
+  page_size: number
+  total: number
+  total_pages: number
+}
+
 const apiClient = axios.create({
   baseURL: apiBaseUrl,
   timeout: 15000,

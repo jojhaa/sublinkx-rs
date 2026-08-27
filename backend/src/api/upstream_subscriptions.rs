@@ -7,8 +7,9 @@ use axum::{
 use crate::{
     dto::upstream_subscriptions::{
         DeleteUpstreamSubscriptionQuery, DeleteUpstreamSubscriptionResponse,
-        UpstreamSubscriptionImportResponse, UpstreamSubscriptionListResponse,
-        UpstreamSubscriptionPayload, UpstreamSubscriptionResponse,
+        UpstreamSubscriptionImportResponse, UpstreamSubscriptionListQuery,
+        UpstreamSubscriptionListResponse, UpstreamSubscriptionPayload,
+        UpstreamSubscriptionResponse,
     },
     errors::AppError,
     services::{auth_service, upstream_subscription_service},
@@ -18,9 +19,12 @@ use crate::{
 pub async fn list(
     State(state): State<AppState>,
     headers: HeaderMap,
+    Query(query): Query<UpstreamSubscriptionListQuery>,
 ) -> Result<Json<UpstreamSubscriptionListResponse>, AppError> {
     auth_service::require_user(&state, &headers).await?;
-    Ok(Json(upstream_subscription_service::list(&state).await?))
+    Ok(Json(
+        upstream_subscription_service::list(&state, query).await?,
+    ))
 }
 
 pub async fn create(

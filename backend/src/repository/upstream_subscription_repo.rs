@@ -49,15 +49,23 @@ pub struct ExistingNodeSourceRef {
     pub node_count: i64,
 }
 
-pub async fn list(pool: &DbPool) -> Result<Vec<UpstreamSubscriptionRecord>, sqlx::Error> {
+pub async fn count(pool: &DbPool) -> Result<i64, sqlx::Error> {
+    sqlx::query_scalar("SELECT COUNT(*) FROM upstream_subscriptions")
+        .fetch_one(pool)
+        .await
+}
+
+pub async fn list_page(
+    pool: &DbPool,
+    limit: i64,
+    offset: i64,
+) -> Result<Vec<UpstreamSubscriptionRecord>, sqlx::Error> {
     let query = format!(
-        r#"
-        SELECT {SELECT_FIELDS}
-        FROM upstream_subscriptions
-        ORDER BY id DESC
-        "#
+        "SELECT {SELECT_FIELDS} FROM upstream_subscriptions ORDER BY id DESC LIMIT ? OFFSET ?"
     );
-    sqlx::query_as::<_, UpstreamSubscriptionRecord>(&query)
+    sqlx::query_as(&query)
+        .bind(limit)
+        .bind(offset)
         .fetch_all(pool)
         .await
 }
