@@ -4,6 +4,12 @@
 
 ## 2026-08-27
 
+- Cloudflare Web Analytics CSP 兼容：运行时 Nginx 的 `script-src` 仅新增 `https://static.cloudflareinsights.com`，允许 Cloudflare 自动注入的 Beacon 加载；保留 `connect-src 'self'`，由自动注入模式通过本站 `/cdn-cgi/rum` 上报，不放开 `unsafe-inline`、通配符或额外连接域名。
+- Windows 验证：前端 `v0.2.0` 生产构建通过，生产依赖审计为 0 个漏洞；使用官方 `nginx:1.29-alpine` 验证配置语法成功。
+- Docker 与生产部署：前端 `v0.2.0-csp-hotfix.1` 和 `latest` 均指向 `sha256:d5ada9eb85e61bff9f136f864cecaef75d0ad88fb06486d298f750a42ac1be92`，包含 `linux/amd64`；服务器先保留 `rollback-before-v0.2.0-csp-hotfix.1` 本地回滚标签，再仅执行前端拉取和 `--no-deps` 重建，后端、SQLite、MySQL、密钥和数据挂载均未改动。
+- 生产验收：公网首页返回的新 CSP 已覆盖 Cloudflare 实际注入的版本化 Beacon URL；真实 Chrome 控制台为 0 错误、0 警告，同源 `/cdn-cgi/rum` POST 返回 204；前后端容器均运行且重启次数为 0，健康检查和 `0.2.0` 版本接口保持 200。
+- 依赖与知识产权：本次未引入 Cloudflare 脚本文件或新依赖，脚本由站点管理员已启用的 Cloudflare Web Analytics 在边缘自动注入；使用边界依据 Cloudflare 官方 CSP 文档，未新增字体、图片、图标、音视频或需归档许可证的本地资源。
+
 - `v0.2.0` 性能优化：节点、普通订阅、模板和上游订阅列表改为服务端分页与数据库筛选；普通订阅关联节点和节点分组改为批量读取，列表不再重复返回完整节点对象；新增总览统计接口和模板类型聚合统计。
 - 设置读取由 7 次逐键查询合并为 1 次批量查询；上游历史来源回填从每次列表 GET 移到服务启动阶段单次执行；新增、更新、移动和删除后只刷新相关列表，减少重复响应。
 - 兼容边界：本次没有新增数据库迁移，不修改现有节点、订阅、订阅 Token、JWT 密钥或加密数据；分页 API 未传参数时默认第 1 页、每页 20 条，最大每页 1000 条。

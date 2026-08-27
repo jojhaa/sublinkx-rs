@@ -234,7 +234,7 @@ http://127.0.0.1:3000
 
 Keep the outer reverse proxy pointed at the frontend port `3000`. The frontend container will proxy backend requests to the backend container internally. Do not point an outer `/api/` location directly at `127.0.0.1:8080` unless you intentionally expose the backend port yourself.
 
-The runtime Nginx config uses `connect-src 'self'` in its CSP. This is intentional: production deployments should keep the browser-facing frontend and API same-origin, with `/api/`, `/s/`, and `/healthz` proxied by the frontend container or by an equivalent same-origin reverse proxy rule.
+The runtime Nginx config uses `connect-src 'self'` in its CSP. This is intentional: production deployments should keep the browser-facing frontend and API same-origin, with `/api/`, `/s/`, and `/healthz` proxied by the frontend container or by an equivalent same-origin reverse proxy rule. `script-src` additionally permits only `https://static.cloudflareinsights.com` for Cloudflare's automatically injected Web Analytics beacon. Automatic injection reports to the same-origin `/cdn-cgi/rum` endpoint, so `connect-src` does not need to be broadened. Deployments that do not enable Cloudflare Web Analytics may remove this script source from their custom Nginx configuration.
 
 If you need a separate `/api/` location in BT Panel or Nginx, proxy it to `3000` and disable cache:
 

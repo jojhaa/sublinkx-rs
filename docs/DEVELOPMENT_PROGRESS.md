@@ -4,6 +4,7 @@
 
 | 功能或修复 | 当前状态 | 日期 | 主要实现内容 | 验证状态 | 已知限制 | 后续待办 |
 | --- | --- | --- | --- | --- | --- | --- |
+| Cloudflare Web Analytics CSP 兼容 | 已完成 | 2026-08-27 | CSP 的 `script-src` 仅新增 `https://static.cloudflareinsights.com`，保留同源默认策略且不启用 `unsafe-inline` 或通配符；自动注入继续使用同源 `/cdn-cgi/rum` | 前端生产构建、生产依赖审计和 Nginx 语法检查通过；已发布前端热修复镜像并只重建生产前端容器；公网响应头与注入 URL 匹配，真实 Chrome 控制台 0 错误/0 警告，RUM 上报返回 204 | 允许执行 Cloudflare 静态域名下的脚本；是否启用 Web Analytics 仍由 Cloudflare 控制台决定 | Cloudflare 关闭 Web Analytics 后，可在后续版本移除该脚本来源 |
 | `v0.2.0` 数据读取性能优化 | 已完成 | 2026-08-27 | 节点、普通订阅、模板和上游订阅接入服务端分页；订阅关联批量读取并使用轻量列表响应；新增总览统计和模板类型聚合；设置改为单次批量读取；上游历史回填移出 GET 热路径 | Windows：后端 59 项测试、格式检查和 Clippy `-D warnings` 通过；前端生产构建与生产依赖审计通过；隔离 SQLite 环境完成 1280x720 与 390x844 真实浏览器验收；Docker Hub 镜像、GitHub Release 和 Linux 生产部署完成，公网首页、健康检查及版本接口均为 200 | 订阅编辑器节点候选单次最多加载 1000 个；生产测速日志出现 1 次 Mihomo 临时端口占用但未导致服务重启；本次无数据库迁移 | 持续观察后台测速并发下的临时端口冲突；节点规模超过 1000 时再拆分订阅编辑器候选加载 |
 | Mihomo YAML 上游多协议导入 | 已完成 | 2026-08-27 | 上游 YAML 导入覆盖 Shadowsocks、VMess、VLESS、Trojan、Hysteria2、TUIC v4/v5、WireGuard、AnyTLS；保留主要 TLS、传输和协议字段；未知类型与字段不完整节点进入失败明细 | Windows：后端 53 项测试通过；Clippy `-D warnings` 通过；前端生产构建通过；`git diff --check` 通过 | SSH、Snell、SSR、HTTP、SOCKS、Hysteria1 等尚无完整导出链路；WireGuard 多 peer 不会截断导入，而是明确失败；尚未使用真实上游服务和 Linux 生产容器验收 | 后续按协议逐项补齐对应导出器后，再开放这些类型的上游导入 |
 | Docker `latest` 发布 | 已完成 | 2026-08-27 | 构建并推送前后端 `linux/amd64` 镜像，仅更新 Docker Hub 的 `latest` 标签 | Docker Hub 远端清单核验通过：后端 `sha256:152ca60c...`，前端 `sha256:e26a9ea6...` | 未覆盖 `0.1.7`/`v0.1.7` 固定标签；尚未在 Linux 生产服务器拉取和运行验收；镜像对应本地尚未提交的工作区 | 提交代码后发布新的固定版本标签，并在生产环境验证容器、挂载、日志与健康检查 |

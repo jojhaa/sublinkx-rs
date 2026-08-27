@@ -234,7 +234,7 @@ http://127.0.0.1:3000
 
 宝塔仍然转发到前端 `3000`，让前端容器内部再转发到后端。不要把外层 Nginx 的 `/api/` 直接转发到 `127.0.0.1:8080`，因为默认 Compose 中后端只 `expose` 给 Docker 内部网络，并没有映射到宿主机端口。
 
-运行时 Nginx CSP 使用 `connect-src 'self'`。生产部署应保持前端和 API 同源，并通过前端容器或等价的同源反代规则代理 `/api/`、`/s/`、`/healthz`。
+运行时 Nginx CSP 使用 `connect-src 'self'`。生产部署应保持前端和 API 同源，并通过前端容器或等价的同源反代规则代理 `/api/`、`/s/`、`/healthz`。`script-src` 仅额外允许 `https://static.cloudflareinsights.com`，用于 Cloudflare 自动注入的 Web Analytics Beacon；自动注入模式通过本站同源 `/cdn-cgi/rum` 上报，因此不需要扩大 `connect-src`。如果没有启用 Cloudflare Web Analytics，可以在自定义 Nginx 配置中移除该脚本来源。
 
 如果需要在宝塔里单独写 `/api/` 规则，也应该转发到 `3000`，并关闭缓存：
 
