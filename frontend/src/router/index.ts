@@ -30,6 +30,16 @@ const router = createRouter({
           component: () => import('../views/NodesView.vue'),
         },
         {
+          path: 'connectivity-tests',
+          name: 'connectivityTests',
+          component: () => import('../views/ConnectivityTestsView.vue'),
+        },
+        {
+          path: 'node-ip-probes',
+          name: 'nodeIpProbes',
+          component: () => import('../views/NodeIpProbesView.vue'),
+        },
+        {
           path: 'upstreams',
           name: 'upstreams',
           component: () => import('../views/UpstreamSubscriptionsView.vue'),

@@ -38,6 +38,7 @@ export interface NodeListParams {
   group_id?: number
   ungrouped?: boolean
   enabled?: boolean
+  compact?: boolean
 }
 
 interface NodeResponse {

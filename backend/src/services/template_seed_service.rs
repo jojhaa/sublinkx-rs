@@ -234,24 +234,50 @@ unified-delay: true
 tcp-concurrent: true
 profile:
   store-selected: true
+# Add fixed domain records here only when the address is controlled and stable.
+hosts: {}
 dns:
   enable: true
+  cache-algorithm: arc
+  use-hosts: true
+  use-system-hosts: true
   listen: 0.0.0.0:1053
-  ipv6: true
+  ipv6: false
   enhanced-mode: fake-ip
   fake-ip-filter:
     - rule-set:private_domain
+    - "+.lan"
+    - "+.local"
+    - localhost
+    - time.windows.com
+    - time.apple.com
+    - time.google.com
+    - localhost.ptlogin2.qq.com
+    - dns.msftncsi.com
+    - www.msftconnecttest.com
+    - captive.apple.com
+    - connectivitycheck.gstatic.com
   fake-ip-filter-mode: blacklist
   default-nameserver:
     - 223.5.5.5
     - 119.29.29.29
   nameserver:
-    - https://1.1.1.1/dns-query
-    - https://8.8.8.8/dns-query
+    - https://1.1.1.1/dns-query#PROXY
+    - https://8.8.8.8/dns-query#PROXY
+  nameserver-policy:
+    "rule-set:private_domain":
+      - https://dns.alidns.com/dns-query
+      - https://doh.pub/dns-query
+    "rule-set:cn_domain":
+      - https://dns.alidns.com/dns-query
+      - https://doh.pub/dns-query
+    "rule-set:geolocation-not-cn":
+      - https://1.1.1.1/dns-query#PROXY
+      - https://8.8.8.8/dns-query#PROXY
   proxy-server-nameserver:
     - https://dns.alidns.com/dns-query
     - https://doh.pub/dns-query
-  respect-rules: true
+  respect-rules: false
   direct-nameserver:
     - https://dns.alidns.com/dns-query
     - https://doh.pub/dns-query
@@ -262,6 +288,8 @@ proxy-groups:
     proxies:
       - MANUAL
       - AUTO
+      - FALLBACK
+      - LOAD-BALANCE
       - DIRECT
   - name: MANUAL
     type: select
@@ -272,6 +300,19 @@ proxy-groups:
     url: https://cp.cloudflare.com/generate_204
     interval: 300
     tolerance: 50
+  - name: FALLBACK
+    type: fallback
+    include-all-proxies: true
+    url: https://cp.cloudflare.com/generate_204
+    interval: 300
+    lazy: true
+  - name: LOAD-BALANCE
+    type: load-balance
+    strategy: consistent-hashing
+    include-all-proxies: true
+    url: https://cp.cloudflare.com/generate_204
+    interval: 300
+    lazy: true
   - name: AI
     type: select
     proxies:
@@ -279,18 +320,20 @@ proxy-groups:
       - AUTO
       - MANUAL
       - DIRECT
-  - name: YOUTUBE
+  - name: STREAMING
     type: select
     proxies:
       - PROXY
       - AUTO
       - MANUAL
-  - name: NETFLIX
+      - DIRECT
+  - name: GOOGLE
     type: select
     proxies:
       - PROXY
       - AUTO
       - MANUAL
+      - DIRECT
   - name: TELEGRAM
     type: select
     proxies:
@@ -310,18 +353,22 @@ proxy-groups:
       - DIRECT
       - PROXY
       - MANUAL
-  - name: MEDIA
+  - name: DOMESTIC
     type: select
     proxies:
+      - DIRECT
       - PROXY
-      - AUTO
-      - MANUAL
   - name: GAME
     type: select
     proxies:
       - PROXY
       - MANUAL
       - AUTO
+      - DIRECT
+  - name: DOWNLOAD-BLOCK
+    type: select
+    proxies:
+      - REJECT
       - DIRECT
   - name: FINAL
     type: select
@@ -456,9 +503,36 @@ rule-providers:
     behavior: ipcidr
     format: mrs
     url: https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/meta/geo/geoip/cn.mrs
+  tracker_domain:
+    type: http
+    interval: 86400
+    behavior: domain
+    format: mrs
+    url: https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/meta/geo/geosite/tracker.mrs
+  private_tracker_domain:
+    type: http
+    interval: 86400
+    behavior: domain
+    format: mrs
+    url: https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/meta/geo/geosite/category-pt.mrs
 rules:
   - RULE-SET,private_ip,DIRECT,no-resolve
   - RULE-SET,private_domain,DIRECT
+  - PROCESS-NAME-WILDCARD,*torrent*,DOWNLOAD-BLOCK
+  - PROCESS-NAME,qbittorrent,DOWNLOAD-BLOCK
+  - PROCESS-NAME,qbittorrent.exe,DOWNLOAD-BLOCK
+  - PROCESS-NAME,transmission-daemon,DOWNLOAD-BLOCK
+  - PROCESS-NAME,transmission-qt,DOWNLOAD-BLOCK
+  - PROCESS-NAME,deluge,DOWNLOAD-BLOCK
+  - PROCESS-NAME,deluged,DOWNLOAD-BLOCK
+  - PROCESS-NAME,aria2c,DOWNLOAD-BLOCK
+  - PROCESS-NAME,motrix,DOWNLOAD-BLOCK
+  - PROCESS-NAME,Thunder.exe,DOWNLOAD-BLOCK
+  - PROCESS-NAME,DownloadSDKServer.exe,DOWNLOAD-BLOCK
+  - RULE-SET,tracker_domain,DOWNLOAD-BLOCK
+  - RULE-SET,private_tracker_domain,DOWNLOAD-BLOCK
+  - DST-PORT,6881-6999,DOWNLOAD-BLOCK
+  - DST-PORT,51413,DOWNLOAD-BLOCK
   - DOMAIN-SUFFIX,chatgpt.com,AI
   - DOMAIN-SUFFIX,openai.com,AI
   - DOMAIN-SUFFIX,anthropic.com,AI
@@ -466,44 +540,44 @@ rules:
   - DOMAIN-SUFFIX,github.com,PROXY
   - DOMAIN-SUFFIX,githubusercontent.com,PROXY
   - DOMAIN-SUFFIX,githubassets.com,PROXY
-  - DOMAIN-SUFFIX,youtube.com,YOUTUBE
-  - DOMAIN-SUFFIX,googlevideo.com,YOUTUBE
-  - DOMAIN-SUFFIX,ytimg.com,YOUTUBE
-  - DOMAIN-SUFFIX,netflix.com,NETFLIX
-  - DOMAIN-SUFFIX,nflxvideo.net,NETFLIX
+  - DOMAIN-SUFFIX,youtube.com,STREAMING
+  - DOMAIN-SUFFIX,googlevideo.com,STREAMING
+  - DOMAIN-SUFFIX,ytimg.com,STREAMING
+  - DOMAIN-SUFFIX,netflix.com,STREAMING
+  - DOMAIN-SUFFIX,nflxvideo.net,STREAMING
   - DOMAIN-SUFFIX,t.me,TELEGRAM
   - DOMAIN-SUFFIX,telegram.org,TELEGRAM
-  - DOMAIN-SUFFIX,x.com,MEDIA
-  - DOMAIN-SUFFIX,twitter.com,MEDIA
-  - DOMAIN-SUFFIX,instagram.com,MEDIA
-  - DOMAIN-SUFFIX,tiktok.com,MEDIA
-  - DOMAIN-SUFFIX,spotify.com,MEDIA
-  - DOMAIN-SUFFIX,disneyplus.com,MEDIA
-  - DOMAIN-SUFFIX,primevideo.com,MEDIA
-  - DOMAIN-SUFFIX,max.com,MEDIA
-  - DOMAIN-SUFFIX,hbomax.com,MEDIA
+  - DOMAIN-SUFFIX,x.com,PROXY
+  - DOMAIN-SUFFIX,twitter.com,PROXY
+  - DOMAIN-SUFFIX,instagram.com,PROXY
+  - DOMAIN-SUFFIX,tiktok.com,STREAMING
+  - DOMAIN-SUFFIX,spotify.com,STREAMING
+  - DOMAIN-SUFFIX,disneyplus.com,STREAMING
+  - DOMAIN-SUFFIX,primevideo.com,STREAMING
+  - DOMAIN-SUFFIX,max.com,STREAMING
+  - DOMAIN-SUFFIX,hbomax.com,STREAMING
   - DOMAIN-SUFFIX,steamcommunity.com,GAME
   - DOMAIN-SUFFIX,steampowered.com,GAME
   - DOMAIN-SUFFIX,epicgames.com,GAME
   - RULE-SET,ai,AI
   - RULE-SET,github_domain,PROXY
-  - RULE-SET,youtube_domain,YOUTUBE
-  - RULE-SET,google_domain,PROXY
+  - RULE-SET,youtube_domain,STREAMING
+  - RULE-SET,google_domain,GOOGLE
   - RULE-SET,telegram_domain,TELEGRAM
   - RULE-SET,telegram_ip,TELEGRAM,no-resolve
-  - RULE-SET,netflix_domain,NETFLIX
-  - RULE-SET,netflix_ip,NETFLIX,no-resolve
-  - RULE-SET,bilibili_domain,MEDIA
-  - RULE-SET,spotify_domain,MEDIA
-  - RULE-SET,steam_domain,MEDIA
+  - RULE-SET,netflix_domain,STREAMING
+  - RULE-SET,netflix_ip,STREAMING,no-resolve
+  - RULE-SET,bilibili_domain,DOMESTIC
+  - RULE-SET,spotify_domain,STREAMING
+  - RULE-SET,steam_domain,GAME
   - RULE-SET,paypal_domain,PROXY
   - RULE-SET,onedrive_domain,MICROSOFT
   - RULE-SET,microsoft_domain,MICROSOFT
   - RULE-SET,apple_domain,APPLE
   - RULE-SET,apple_ip,APPLE,no-resolve
   - RULE-SET,geolocation-not-cn,PROXY
-  - RULE-SET,cn_domain,DIRECT
-  - RULE-SET,cn_ip,DIRECT,no-resolve
+  - RULE-SET,cn_domain,DOMESTIC
+  - RULE-SET,cn_ip,DOMESTIC,no-resolve
   - MATCH,FINAL
 "#;
 
@@ -721,7 +795,7 @@ const DEFAULT_TEMPLATES: &[DefaultTemplate] = &[
         content: CLASH_TEMPLATE,
     },
     DefaultTemplate {
-        name: "Built-in Mihomo Rule Base",
+        name: "Built-in Mihomo Policy Orchestrator",
         kind: "mihomo",
         content: MIHOMO_TEMPLATE,
     },

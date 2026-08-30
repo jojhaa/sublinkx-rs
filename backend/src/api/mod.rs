@@ -1,8 +1,10 @@
 pub mod auth;
+pub mod connectivity_tests;
 pub mod dashboard;
 pub mod exports;
 pub mod groups;
 pub mod health;
+pub mod node_ip_probes;
 pub mod nodes;
 pub mod settings;
 pub mod subscriptions;

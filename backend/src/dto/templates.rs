@@ -10,6 +10,8 @@ pub struct TemplateListQuery {
     pub page: Option<u32>,
     pub page_size: Option<u32>,
     pub kind: Option<String>,
+    #[serde(default)]
+    pub compact: bool,
 }
 
 impl TemplateListQuery {

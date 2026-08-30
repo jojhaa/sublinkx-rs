@@ -11,6 +11,8 @@ pub struct NodeListQuery {
     #[serde(default)]
     pub ungrouped: bool,
     pub enabled: Option<bool>,
+    #[serde(default)]
+    pub compact: bool,
 }
 
 impl NodeListQuery {

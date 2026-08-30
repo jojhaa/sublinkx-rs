@@ -34,11 +34,17 @@ pub async fn list_templates(
         .into_iter()
         .map(|(kind, count)| TemplateKindCount { kind, count })
         .collect();
-    let data = template_repo::list_page(&state.db, kind, i64::from(page.page_size), page.offset)
-        .await?
-        .into_iter()
-        .map(TemplateView::from)
-        .collect();
+    let data = template_repo::list_page(
+        &state.db,
+        kind,
+        query.compact,
+        i64::from(page.page_size),
+        page.offset,
+    )
+    .await?
+    .into_iter()
+    .map(TemplateView::from)
+    .collect();
 
     Ok(TemplateListResponse {
         code: "00000",

@@ -61,7 +61,7 @@ pub struct ClientTarget {
 pub const CLIENT_TARGETS: &[ClientTarget] = &[
     ClientTarget {
         key: "xray",
-        label: "Xray URI Bundle",
+        label: "v2rayN / v2rayNG URI Bundle",
         family: RendererFamily::Xray,
         template_kind: "xray",
         status: ClientTargetStatus::Implemented,

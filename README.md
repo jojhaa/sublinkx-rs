@@ -27,6 +27,7 @@
 - 模板系统：支持客户端模板管理、Clash/Mihomo 分流模板，以及多个客户端方向的渲染器。
 - 转换保真检查：对比上游 YAML proxy 字段和二次导出字段，帮助发现字段丢失。
 - 真实链路测速：通过 Mihomo 内核测试真实代理链路延迟，不是 TCP ping。
+- 节点 IP 探测：通过单个 Mihomo 会话逐节点识别公网出口 IP，保存 IPv4/IPv6 和探测状态，国家、ASN 与风险信息交由独立 IP 检测项目处理。
 - 延迟状态持久化：保存历史延迟、最后测速时间和不可用状态。
 - 订阅生命周期：支持启用、停用、到期时间、快捷续期、节点筛选、分组和自动识别客户端链接。
 - 首次登录安全：默认账号 `admin / admin123456`，首次登录后必须修改用户名和密码，密码使用 Argon2 哈希保存。
@@ -306,12 +307,50 @@ backend/mihomo/
 
 可以在后台“系统设置”页面检测并下载当前服务器系统对应的官方 MetaCubeX/mihomo 内核，也可以指定自定义内核路径。
 
+“IP 探测”页面同样依赖 Mihomo。探测目标固定为 [ipify 双栈 JSON 接口](https://www.ipify.org/)，不接受任意 URL；每次探测会让所选节点的出口 IP 访问该第三方服务，但不会向其发送节点协议、密码或订阅内容。
+
+“系统设置”可以启用定时出口 IP 探测，周期范围为 15 分钟到 7 天；定时任务默认关闭。上游订阅导入或同步成功后默认会把该上游当前启用且未标记缺失的节点加入异步探测队列，不阻塞导入响应；该行为也可以单独关闭。国家检测卡片会显示 `ip-intelligence-rs` 的启用状态、服务地址和来源键，但不会返回 Token；管理员可以单独控制出口 IP 成功后的自动国家检测，以及 5-1440 分钟的补查周期。自动国家检测默认开启，补查周期默认 5 分钟。
+
+系统设置还提供链路测试默认目标、测试轮数和延迟回写开关，公开订阅渲染缓存时间与单 IP/全局访问限流，以及 Mihomo 国家负载和故障转移的最少节点门槛。JWT、数据库连接、Cookie、可信代理和 `ip-intelligence-rs` Token 等安全配置仍只能通过服务端环境变量修改；登录封禁、SSRF 固定目标、导入数量和下载体积上限不开放在线修改。每条上游订阅的同步周期继续在“上游订阅”页面单独管理。
+
+自动探测与后台测速、手动测速和手动 IP 探测共用 Mihomo 任务锁。待探测节点在当前进程内去重，并按每批最多 200 个执行；任务冲突或被自动任务停止操作取消时会重新排队。进程重启会丢失尚未执行的内存队列，但下一次上游同步或定时全量扫描会重新补入。
+
+SublinkX-RS 只负责获得并保存节点出口 IP，不内置国家、ASN 或风险数据库。外部 IP 检测项目如需回填国家信息，可调用受认证的 `PUT /api/v1/node-ip-probes/{id}/country`；请求中的 IP 必须与节点最新探测 IP 完全一致，避免写入过期归属。
+
+也可以直接对接独立部署的 `ip-intelligence-rs`。SublinkX 只提交节点目标标识和通过 Mihomo 实际测得的公网出口 IP，不提交代理链接、密码、订阅内容或管理员凭据：
+
+```env
+IP_INTELLIGENCE_ENABLED=true
+IP_INTELLIGENCE_BASE_URL=http://ip-intelligence-api:8090/api/v1
+IP_INTELLIGENCE_API_TOKEN=replace_with_the_same_32_plus_character_api_token
+IP_INTELLIGENCE_SOURCE_KEY=sublinkx-rs-production
+```
+
+如果两个项目已经加入同一个 Docker 网络，请为 `ip-intelligence-rs` 的 API 容器在该网络上设置唯一别名 `ip-intelligence-api`。不要直接使用 `backend`：两个 Compose 项目都包含这个服务名，共享网络中的 DNS 解析会产生冲突。情报服务 Compose 的 API 服务可使用以下网络配置：
+
+```yaml
+services:
+  backend:
+    networks:
+      shared:
+        aliases:
+          - ip-intelligence-api
+
+networks:
+  shared:
+    external: true
+    name: your_shared_network
+```
+
+SublinkX 后端容器也必须加入同一个 `your_shared_network`。容器之间使用内部端口 `8090`，不要求把情报 API 端口发布到公网。`IP_INTELLIGENCE_API_TOKEN` 必须与情报服务的 `API_AUTH_TOKEN` 完全一致。
+
+每个部署必须使用独立的 `IP_INTELLIGENCE_SOURCE_KEY`。情报服务返回新鲜国家代码后，Mihomo 导出会自动生成 `COUNTRY-XX` 一致性哈希负载组；未识别节点仍保留在原有手动和自动策略组中。情报服务不可用不会把出口 IP 探测结果改成失败。
+
 ## 文档
 
 - [更新日志](CHANGELOG.md)
 - [文档索引](docs/README.md)
 - [Docker 部署](docs/docker.md)
-- [重构蓝图](docs/plan.md)
 - [客户端兼容矩阵](docs/client-compatibility.md)
 - [协议 x 客户端矩阵](docs/protocol-client-matrix.md)
 - [客户端目标注册表](docs/client-target-registry.md)

@@ -13,6 +13,12 @@ services:
       BOOTSTRAP_ADMIN_USERNAME: ${BOOTSTRAP_ADMIN_USERNAME:?BOOTSTRAP_ADMIN_USERNAME is required for first production bootstrap}
       BOOTSTRAP_ADMIN_PASSWORD: ${BOOTSTRAP_ADMIN_PASSWORD:?BOOTSTRAP_ADMIN_PASSWORD is required and must not use the default first-login password}
       TRUST_PROXY_HEADERS: ${TRUST_PROXY_HEADERS:-true}
+      # Prefer a unique Docker network alias such as ip-intelligence-api when
+      # connecting another Compose stack. Both stacks may have a backend service.
+      IP_INTELLIGENCE_ENABLED: ${IP_INTELLIGENCE_ENABLED:-false}
+      IP_INTELLIGENCE_BASE_URL: ${IP_INTELLIGENCE_BASE_URL:-}
+      IP_INTELLIGENCE_API_TOKEN: ${IP_INTELLIGENCE_API_TOKEN:-}
+      IP_INTELLIGENCE_SOURCE_KEY: ${IP_INTELLIGENCE_SOURCE_KEY:-sublinkx-rs-production}
     volumes:
       - ${BACKEND_DATA_DIR:-./docker-data/backend}:/app/data
       - ${MIHOMO_CORE_DIR:-./docker-data/mihomo}:/app/mihomo

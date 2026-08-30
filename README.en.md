@@ -29,6 +29,7 @@ Notes:
 | Fidelity checks | Manual validation after export | Field-fidelity checks that compare upstream proxy fields against second-pass exported fields |
 | Subscription lifecycle | Basic distribution | Enable/disable, expiry time, quick renewal, groups, node filtering, and auto-detected client links |
 | Latency testing | Not a core focus | Real-link latency checks through Mihomo, with persisted latency, test time, and failure status |
+| Egress IP probing | Not included | Public IPv4/IPv6 discovery through each real Mihomo route with persisted probe status; country, ASN, and risk enrichment remain in a separate IP intelligence project |
 | Security | Basic account configuration | Forced first-login credential change and Argon2 password hashing |
 | Deployment | Mostly manual deployment | Docker Hub images, a single `docker-compose.yml`, local data bind mounts, and a fixed Docker subnet |
 | Documentation | Upstream documentation | Separate Chinese/English README files, Docker deployment docs, compatibility matrices, and protocol x client design notes |
@@ -47,6 +48,11 @@ Notes:
 - Upstream subscription import and upstream Mihomo template passthrough.
 - Subscription lifecycle controls including enable/disable, expiry, renewal, grouping, node filtering, and auto-detected client links.
 - Real-link latency checks through a Mihomo core.
+- Egress IP probing uses the fixed [ipify dual-stack JSON endpoint](https://www.ipify.org/) and never accepts arbitrary target URLs. The selected node's public IP is visible to that third-party service, while node credentials and subscription content stay local.
+- Scheduled egress IP probing can be enabled with a 15-minute to 7-day interval. Successful upstream imports and syncs enqueue that upstream's currently enabled, non-missing nodes by default; background probes are deduplicated, run in batches of 200, and share the Mihomo task lock with latency tests. Settings show the `ip-intelligence-rs` status, service URL, and source key without exposing its token. Automatic country detection can be toggled independently, with a configurable 5-1440 minute reconciliation interval that defaults to five minutes.
+- System settings also cover connectivity-test defaults, public export cache and per-IP/global rate limits, and the minimum node counts for Mihomo country load-balancing and fallback groups. JWT, database, cookie, trusted-proxy, and intelligence-token configuration remains environment-only; login blocking, fixed SSRF-safe targets, import limits, and download size limits are not runtime-editable. Each upstream keeps its own synchronization interval on the upstream subscriptions page.
+- Optional `ip-intelligence-rs` integration submits only the target identity and the public egress IP observed through Mihomo. When both Compose stacks share a Docker network, assign the intelligence API a unique `ip-intelligence-api` network alias and use `http://ip-intelligence-api:8090/api/v1`; do not use the ambiguous `backend` service name shared by both stacks. Configure the matching 32-plus-character API token and a deployment-unique source key. Fresh country metadata creates `COUNTRY-XX` consistent-hashing groups in Mihomo exports; unresolved nodes remain in the manual and automatic groups.
+- SublinkX-RS only discovers and stores node egress IPs. A separate IP intelligence project may use the authenticated `PUT /api/v1/node-ip-probes/{id}/country` endpoint to enrich a result, and the submitted IP must match the node's latest probe result.
 - First-login security flow with Argon2 password hashing.
 - Docker deployment with local data bind mounts.
 - SQLite by default, with optional MySQL 8.x support.
@@ -254,7 +260,6 @@ More details: [Docker Deployment](docs/docker.en.md).
 - [Changelog](CHANGELOG.md)
 - [Documentation Index](docs/README.md)
 - [Docker Deployment](docs/docker.en.md)
-- [Refactor Plan](docs/plan.md)
 - [Client Compatibility Matrix](docs/client-compatibility.md)
 - [Protocol x Client Matrix](docs/protocol-client-matrix.md)
 - [Client Target Registry](docs/client-target-registry.md)

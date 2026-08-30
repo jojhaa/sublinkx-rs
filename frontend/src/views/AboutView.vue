@@ -33,7 +33,7 @@ type ClientKey =
   | 'mixed'
 
 const clientColumns: Array<{ key: ClientKey; label: string }> = [
-  { key: 'xray', label: 'Xray' },
+  { key: 'xray', label: 'v2rayN / v2rayNG' },
   { key: 'clash', label: 'Clash' },
   { key: 'mihomo', label: 'Mihomo' },
   { key: 'surge', label: 'Surge 4/5' },
@@ -165,7 +165,7 @@ const protocolMatrix: Array<{ protocol: string; support: Record<ClientKey, Suppo
     trojanUri: 'none',
   }),
   matrixRow('TUIC', 'full', {
-    xray: 'none',
+    xray: 'full',
     quanx: 'none',
     ss: 'none',
     sssub: 'none',
@@ -174,7 +174,7 @@ const protocolMatrix: Array<{ protocol: string; support: Record<ClientKey, Suppo
     trojanUri: 'none',
   }),
   matrixRow('WireGuard', 'full', {
-    xray: 'none',
+    xray: 'full',
     quanx: 'none',
     ss: 'none',
     sssub: 'none',
@@ -195,6 +195,7 @@ const protocolMatrix: Array<{ protocol: string; support: Record<ClientKey, Suppo
     mixed: 'future',
   }),
   matrixRow('AnyTLS', 'none', {
+    xray: 'full',
     clash: 'full',
     mihomo: 'full',
     singbox: 'full',

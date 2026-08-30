@@ -21,6 +21,7 @@ export interface TemplateListParams {
   page?: number
   page_size?: number
   kind?: string
+  compact?: boolean
 }
 
 interface TemplateResponse {

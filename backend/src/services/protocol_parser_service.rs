@@ -433,6 +433,10 @@ fn split_host_port(input: &str) -> Result<(&str, u16), AppError> {
     let (server, port_str) = input
         .rsplit_once(':')
         .ok_or_else(|| AppError::BadRequest("missing server port".to_string()))?;
+    let server = server
+        .strip_prefix('[')
+        .and_then(|value| value.strip_suffix(']'))
+        .unwrap_or(server);
     let port = port_str
         .parse::<u16>()
         .map_err(|_| AppError::BadRequest("invalid server port".to_string()))?;

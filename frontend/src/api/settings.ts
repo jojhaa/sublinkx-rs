@@ -8,6 +8,19 @@ export interface AppSettings {
   latency_core_path: string
   latency_test_url: string
   latency_timeout_secs: number
+  ip_probe_auto_enabled: boolean
+  ip_probe_interval_minutes: number
+  ip_probe_after_upstream_import: boolean
+  country_detection_auto_enabled: boolean
+  country_detection_interval_minutes: number
+  connectivity_default_target: 'system_default' | 'cloudflare_204' | 'google_204'
+  connectivity_default_rounds: 1 | 3 | 5
+  connectivity_sync_last_latency: boolean
+  public_export_cache_ttl_seconds: number
+  public_export_ip_limit_per_minute: number
+  public_export_global_limit_per_minute: number
+  mihomo_country_load_min_nodes: number
+  mihomo_country_fallback_min_nodes: number
 }
 
 interface SettingsResponse {

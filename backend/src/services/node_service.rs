@@ -45,6 +45,7 @@ const MAX_SUBSCRIPTION_BODY_BYTES: usize = 5 * 1024 * 1024;
 const MAX_IMPORT_SUBSCRIPTION_NODES: usize = 1000;
 const MAX_LATENCY_BATCH_SIZE: usize = 50;
 const LATENCY_RUN_COOLDOWN: Duration = Duration::from_secs(20);
+const MIHOMO_SUBSCRIPTION_USER_AGENT: &str = "mihomo/1.19.10";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SubscriptionImportMode {
@@ -74,6 +75,7 @@ pub async fn list_nodes(
         query.group_id,
         query.ungrouped,
         query.enabled,
+        query.compact,
         i64::from(page.page_size),
         page.offset,
     )
@@ -375,6 +377,10 @@ async fn import_nodes_from_subscription_with_mode(
         &response,
     )
     .await?;
+    super::node_ip_probe_scheduler_service::spawn_after_upstream_import(
+        state.clone(),
+        url.to_string(),
+    );
 
     Ok(response)
 }
@@ -590,10 +596,7 @@ async fn test_node_latency_batch_inner(
 
     let settings = settings_service::load_settings(state).await?;
     ensure_mihomo_core_ready(&settings).await?;
-    let mut prepared = Vec::with_capacity(payload.ids.len());
-    for (index, id) in payload.ids.into_iter().enumerate() {
-        prepared.push((index, id, node_repo::find_by_id(&state.db, id).await?));
-    }
+    let prepared = prepare_latency_batch(state, payload).await?;
 
     let mut indexed_results = Vec::with_capacity(prepared.len());
     for chunk in prepared.chunks(latency_concurrency(&settings)) {
@@ -735,10 +738,15 @@ async fn prepare_latency_batch(
         )));
     }
 
-    let mut prepared = Vec::with_capacity(payload.ids.len());
-    for (index, id) in payload.ids.into_iter().enumerate() {
-        prepared.push((index, id, node_repo::find_by_id(&state.db, id).await?));
-    }
+    let ids = payload.ids;
+    let nodes = node_repo::find_by_ids(&state.db, &ids).await?;
+    let mut nodes_by_id: HashMap<i64, crate::domain::node::NodeRecord> =
+        nodes.into_iter().map(|node| (node.id, node)).collect();
+    let prepared = ids
+        .into_iter()
+        .enumerate()
+        .map(|(index, id)| (index, id, nodes_by_id.remove(&id)))
+        .collect();
     Ok(prepared)
 }
 
@@ -841,7 +849,7 @@ fn latency_concurrency(settings: &crate::domain::settings::AppSettingsView) -> u
     .unwrap_or(1)
 }
 
-async fn ensure_mihomo_core_ready(
+pub(crate) async fn ensure_mihomo_core_ready(
     settings: &crate::domain::settings::AppSettingsView,
 ) -> Result<PathBuf, AppError> {
     let Some(binary) = mihomo_core_service::resolve_existing_binary(&settings.latency_core_path)
@@ -1215,10 +1223,7 @@ async fn fetch_subscription_body(url: &str) -> Result<String, AppError> {
         .map_err(|_| AppError::Internal)?;
     let response = client
         .get(validated_url.as_str())
-        .header(
-            reqwest::header::USER_AGENT,
-            "Clash.Meta/1.19.0 mihomo/1.19.0",
-        )
+        .header(reqwest::header::USER_AGENT, MIHOMO_SUBSCRIPTION_USER_AGENT)
         .header(
             reqwest::header::ACCEPT,
             "application/yaml,text/yaml,text/plain,*/*",
@@ -1266,33 +1271,65 @@ async fn fetch_subscription_body(url: &str) -> Result<String, AppError> {
 }
 
 fn extract_subscription_links(body: &str) -> Result<ExtractedSubscription, AppError> {
-    let trimmed = body.trim();
-    let candidates = if looks_like_node_lines(trimmed) {
-        trimmed.to_string()
-    } else if let Some(decoded) = decode_base64_text(trimmed)
-        && looks_like_node_lines(&decoded)
-    {
-        decoded
-    } else if let Some(decoded) = decode_base64_text(trimmed)
-        && is_mihomo_profile_yaml(&decoded)
-    {
-        return extract_mihomo_yaml_links(&decoded);
-    } else if is_mihomo_profile_yaml(trimmed) {
-        return extract_mihomo_yaml_links(trimmed);
-    } else {
-        trimmed.to_string()
-    };
+    let mut candidates = Vec::with_capacity(3);
+    let mut candidate = body
+        .trim()
+        .trim_start_matches('\u{feff}')
+        .trim()
+        .to_string();
+    candidates.push(candidate.clone());
+    for _ in 0..2 {
+        let Some(decoded) = decode_base64_text(&candidate) else {
+            break;
+        };
+        let decoded = decoded
+            .trim()
+            .trim_start_matches('\u{feff}')
+            .trim()
+            .to_string();
+        if decoded.is_empty() || decoded == candidate {
+            break;
+        }
+        candidates.push(decoded.clone());
+        candidate = decoded;
+    }
 
+    for candidate in &candidates {
+        let raw_links = extract_raw_links(candidate);
+        if !raw_links.is_empty() {
+            return Ok(ExtractedSubscription {
+                raw_links,
+                failures: Vec::new(),
+            });
+        }
+        if has_mihomo_proxy_sequence(candidate) {
+            return extract_mihomo_yaml_links(candidate);
+        }
+        if let Some(extracted) = extract_json_subscription(candidate)? {
+            return Ok(extracted);
+        }
+    }
+
+    let reason = describe_unrecognized_subscription(
+        candidates.last().map(String::as_str).unwrap_or_default(),
+    );
     Ok(ExtractedSubscription {
-        raw_links: candidates
-            .lines()
-            .flat_map(|line| line.split_whitespace())
-            .map(str::trim)
-            .filter(|line| is_supported_raw_link(line))
-            .map(str::to_string)
-            .collect(),
-        failures: Vec::new(),
+        raw_links: Vec::new(),
+        failures: vec![NodeImportFailure {
+            source: "upstream subscription".to_string(),
+            reason,
+        }],
     })
+}
+
+fn extract_raw_links(value: &str) -> Vec<String> {
+    value
+        .lines()
+        .flat_map(|line| line.split_whitespace())
+        .map(|value| value.trim_matches([',', '"', '\'', '[', ']']))
+        .filter(|value| is_supported_raw_link(value))
+        .map(str::to_string)
+        .collect()
 }
 
 fn check_mihomo_conversion_fidelity(body: &str) -> Vec<NodeFidelityWarning> {
@@ -1969,6 +2006,24 @@ fn is_mihomo_profile_yaml(body: &str) -> bool {
         .unwrap_or(false)
 }
 
+fn has_mihomo_proxy_sequence(body: &str) -> bool {
+    serde_yaml::from_str::<Value>(body)
+        .ok()
+        .and_then(|value| {
+            let mapping = value.as_mapping()?;
+            mihomo_proxy_sequence(mapping).map(|_| true)
+        })
+        .unwrap_or(false)
+}
+
+fn mihomo_proxy_sequence(mapping: &Mapping) -> Option<&Vec<Value>> {
+    ["proxies", "payload"].into_iter().find_map(|key| {
+        mapping
+            .get(Value::String(key.to_string()))
+            .and_then(Value::as_sequence)
+    })
+}
+
 fn sanitize_mihomo_profile_yaml(body: &str) -> Result<String, AppError> {
     let mut root = serde_yaml::from_str::<Value>(body)
         .map_err(|_| AppError::BadRequest("subscription is not valid YAML".to_string()))?;
@@ -2051,6 +2106,7 @@ fn is_subscription_info_name(name: &str) -> bool {
         "过期",
         "官网",
         "网址",
+        "导航页",
         "订阅",
         "重置",
         "流量",
@@ -2066,10 +2122,6 @@ fn is_subscription_info_name(name: &str) -> bool {
     info_markers
         .iter()
         .any(|marker| normalized.contains(&marker.to_lowercase()))
-}
-
-fn looks_like_node_lines(value: &str) -> bool {
-    value.lines().any(|line| is_supported_raw_link(line.trim()))
 }
 
 fn is_supported_raw_link(value: &str) -> bool {
@@ -2111,9 +2163,19 @@ fn extract_mihomo_yaml_links(body: &str) -> Result<ExtractedSubscription, AppErr
         .map_err(|_| AppError::BadRequest("subscription is not valid YAML".to_string()))?;
     let proxies = root
         .as_mapping()
-        .and_then(|mapping| mapping.get(Value::String("proxies".to_string())))
-        .and_then(Value::as_sequence)
-        .ok_or_else(|| AppError::BadRequest("YAML subscription missing proxies".to_string()))?;
+        .and_then(mihomo_proxy_sequence)
+        .ok_or_else(|| {
+            AppError::BadRequest("YAML subscription missing proxies or payload".to_string())
+        })?;
+    if proxies.is_empty() {
+        return Ok(ExtractedSubscription {
+            raw_links: Vec::new(),
+            failures: vec![NodeImportFailure {
+                source: "Mihomo YAML".to_string(),
+                reason: "YAML subscription contains no proxy entries".to_string(),
+            }],
+        });
+    }
     if proxies.len() > MAX_IMPORT_SUBSCRIPTION_NODES {
         return Err(AppError::BadRequest(format!(
             "at most {MAX_IMPORT_SUBSCRIPTION_NODES} nodes can be imported at once"
@@ -2142,6 +2204,171 @@ fn extract_mihomo_yaml_links(body: &str) -> Result<ExtractedSubscription, AppErr
         raw_links: links,
         failures,
     })
+}
+
+fn extract_json_subscription(body: &str) -> Result<Option<ExtractedSubscription>, AppError> {
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(body) else {
+        return Ok(None);
+    };
+
+    let mut raw_links = Vec::new();
+    collect_json_raw_links(&value, &mut raw_links);
+    if !raw_links.is_empty() {
+        raw_links.sort();
+        raw_links.dedup();
+        return Ok(Some(ExtractedSubscription {
+            raw_links,
+            failures: Vec::new(),
+        }));
+    }
+
+    let Some(servers) = value.get("servers").and_then(serde_json::Value::as_array) else {
+        return Ok(Some(ExtractedSubscription {
+            raw_links: Vec::new(),
+            failures: vec![NodeImportFailure {
+                source: "JSON subscription".to_string(),
+                reason: "JSON subscription does not contain supported node links or SIP008 servers"
+                    .to_string(),
+            }],
+        }));
+    };
+    if servers.is_empty() {
+        return Ok(Some(ExtractedSubscription {
+            raw_links: Vec::new(),
+            failures: vec![NodeImportFailure {
+                source: "SIP008 subscription".to_string(),
+                reason: "SIP008 subscription contains no servers".to_string(),
+            }],
+        }));
+    }
+
+    let mut failures = Vec::new();
+    for (index, server) in servers.iter().enumerate() {
+        match sip008_server_to_raw_link(server) {
+            Ok(link) => raw_links.push(link),
+            Err(reason) => failures.push(NodeImportFailure {
+                source: format!("SIP008 server #{}", index + 1),
+                reason,
+            }),
+        }
+    }
+    Ok(Some(ExtractedSubscription {
+        raw_links,
+        failures,
+    }))
+}
+
+fn collect_json_raw_links(value: &serde_json::Value, links: &mut Vec<String>) {
+    match value {
+        serde_json::Value::String(value) if is_supported_raw_link(value.trim()) => {
+            links.push(value.trim().to_string());
+        }
+        serde_json::Value::Array(values) => {
+            for value in values {
+                collect_json_raw_links(value, links);
+            }
+        }
+        serde_json::Value::Object(values) => {
+            for value in values.values() {
+                collect_json_raw_links(value, links);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn sip008_server_to_raw_link(server: &serde_json::Value) -> Result<String, String> {
+    let object = server
+        .as_object()
+        .ok_or_else(|| "SIP008 server entry must be an object".to_string())?;
+    let address = object
+        .get("server")
+        .and_then(serde_json::Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| "SIP008 server is missing server".to_string())?;
+    let port = object
+        .get("server_port")
+        .or_else(|| object.get("port"))
+        .and_then(serde_json::Value::as_u64)
+        .filter(|value| *value > 0 && *value <= u16::MAX as u64)
+        .ok_or_else(|| "SIP008 server is missing a valid server_port".to_string())?;
+    let method = object
+        .get("method")
+        .or_else(|| object.get("cipher"))
+        .and_then(serde_json::Value::as_str)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| "SIP008 server is missing method".to_string())?;
+    let password = object
+        .get("password")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| "SIP008 server is missing password".to_string())?;
+    let name = object
+        .get("remarks")
+        .or_else(|| object.get("name"))
+        .or_else(|| object.get("id"))
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("Shadowsocks");
+    let credentials = general_purpose::URL_SAFE_NO_PAD.encode(format!("{method}:{password}"));
+    let plugin = object
+        .get("plugin")
+        .and_then(serde_json::Value::as_str)
+        .filter(|value| !value.is_empty())
+        .map(|plugin| {
+            let options = object
+                .get("plugin_opts")
+                .or_else(|| object.get("plugin-opts"))
+                .and_then(serde_json::Value::as_str)
+                .filter(|value| !value.is_empty());
+            options
+                .map(|options| format!("{plugin};{options}"))
+                .unwrap_or_else(|| plugin.to_string())
+        });
+    let host = if address.contains(':') && !address.starts_with('[') {
+        format!("[{address}]")
+    } else {
+        address.to_string()
+    };
+    let query = plugin
+        .map(|plugin| format!("?plugin={}", encode_uri_component(&plugin)))
+        .unwrap_or_default();
+    Ok(format!(
+        "ss://{credentials}@{host}:{port}{query}#{}",
+        encode_uri_component(name)
+    ))
+}
+
+fn describe_unrecognized_subscription(body: &str) -> String {
+    let trimmed = body.trim();
+    if trimmed.is_empty() {
+        return "upstream returned an empty subscription".to_string();
+    }
+    let lowercase = trimmed
+        .chars()
+        .take(256)
+        .collect::<String>()
+        .to_ascii_lowercase();
+    if lowercase.starts_with("<!doctype html") || lowercase.starts_with("<html") {
+        return "upstream returned HTML instead of a node subscription".to_string();
+    }
+    if serde_json::from_str::<serde_json::Value>(trimmed).is_ok() {
+        return "upstream returned an unsupported JSON subscription format".to_string();
+    }
+    if let Some(mapping) = serde_yaml::from_str::<Value>(trimmed)
+        .ok()
+        .and_then(|value| value.as_mapping().cloned())
+    {
+        for key in ["proxies", "payload"] {
+            if let Some(value) = mapping.get(Value::String(key.to_string()))
+                && !value.is_sequence()
+            {
+                return format!(
+                    "YAML {key} must be a node list; upstream returned a node-free client profile"
+                );
+            }
+        }
+        return "YAML subscription is missing a proxies or payload node list".to_string();
+    }
+    "subscription format is not recognized after Base64 decoding".to_string()
 }
 
 fn mihomo_proxy_source(proxy: &Mapping) -> String {
@@ -2835,12 +3062,122 @@ async fn ensure_group_exists(state: &AppState, group_id: Option<i64>) -> Result<
 #[cfg(test)]
 mod tests {
     use super::{
-        check_mihomo_conversion_fidelity, extract_subscription_links, mihomo_proxy_to_raw_link,
+        MIHOMO_SUBSCRIPTION_USER_AGENT, check_mihomo_conversion_fidelity,
+        extract_subscription_links, is_subscription_info_name, mihomo_proxy_to_raw_link,
         sanitize_mihomo_profile_yaml,
     };
     use crate::services::url_safety::validate_public_http_url;
+    use base64::{Engine as _, engine::general_purpose};
     use serde_yaml::Value;
     use std::collections::HashSet;
+
+    #[test]
+    fn extracts_clash_provider_payload_yaml() {
+        let yaml = r#"
+payload:
+  - name: Provider SS
+    type: ss
+    server: ss.example.com
+    port: 8388
+    cipher: aes-256-gcm
+    password: secret
+"#;
+
+        let extracted = extract_subscription_links(yaml).expect("provider YAML should extract");
+        assert_eq!(extracted.raw_links.len(), 1);
+        assert!(extracted.failures.is_empty());
+        let parsed =
+            crate::services::protocol_parser_service::parse_raw_link(&extracted.raw_links[0], None)
+                .expect("provider node should parse");
+        assert_eq!(parsed.protocol.as_str(), "shadowsocks");
+        assert_eq!(parsed.name, "Provider SS");
+    }
+
+    #[test]
+    fn extracts_sip008_shadowsocks_json() {
+        let json = r#"{
+          "version": 1,
+          "servers": [{
+            "id": "sip008-node",
+            "remarks": "SIP008 SS",
+            "server": "2001:db8::1",
+            "server_port": 8388,
+            "method": "aes-256-gcm",
+            "password": "secret",
+            "plugin": "v2ray-plugin",
+            "plugin_opts": "mode=websocket;host=edge.example.com"
+          }]
+        }"#;
+
+        let extracted = extract_subscription_links(json).expect("SIP008 JSON should extract");
+        assert_eq!(extracted.raw_links.len(), 1);
+        assert!(extracted.failures.is_empty());
+        let parsed =
+            crate::services::protocol_parser_service::parse_raw_link(&extracted.raw_links[0], None)
+                .expect("SIP008 node should parse");
+        assert_eq!(parsed.name, "SIP008 SS");
+        assert_eq!(parsed.server, "2001:db8::1");
+        assert_eq!(parsed.port, 8388);
+        assert_eq!(
+            parsed
+                .settings
+                .get("plugin")
+                .and_then(|value| value.as_str()),
+            Some("v2ray-plugin;mode=websocket;host=edge.example.com")
+        );
+    }
+
+    #[test]
+    fn extracts_double_base64_encoded_node_list() {
+        let raw =
+            "vless://4c374a1d-e334-4ec1-b010-489bfa360ba9@example.com:443?security=tls#Nested";
+        let once = general_purpose::STANDARD.encode(raw);
+        let twice = general_purpose::STANDARD.encode(once);
+
+        let extracted = extract_subscription_links(&twice).expect("nested Base64 should extract");
+        assert_eq!(extracted.raw_links, vec![raw]);
+    }
+
+    #[test]
+    fn diagnoses_html_subscription_responses_without_echoing_body() {
+        let extracted = extract_subscription_links(
+            "<!doctype html><html><body>token=secret-value</body></html>",
+        )
+        .expect("HTML should produce a diagnostic");
+
+        assert!(extracted.raw_links.is_empty());
+        assert_eq!(extracted.failures.len(), 1);
+        assert!(extracted.failures[0].reason.contains("returned HTML"));
+        assert!(!extracted.failures[0].reason.contains("secret-value"));
+    }
+
+    #[test]
+    fn uses_plain_mihomo_user_agent_for_format_negotiation() {
+        assert_eq!(MIHOMO_SUBSCRIPTION_USER_AGENT, "mihomo/1.19.10");
+        assert!(!MIHOMO_SUBSCRIPTION_USER_AGENT.contains("Clash"));
+        assert!(!MIHOMO_SUBSCRIPTION_USER_AGENT.contains(' '));
+    }
+
+    #[test]
+    fn filters_provider_navigation_page_nodes() {
+        assert!(is_subscription_info_name("导航页：www.可乐云.net"));
+        assert!(is_subscription_info_name(" 导航页: example.com "));
+        assert!(!is_subscription_info_name("香港导航节点"));
+    }
+
+    #[test]
+    fn diagnoses_node_free_mihomo_profiles() {
+        let extracted = extract_subscription_links("proxies: {}\nrules: []")
+            .expect("node-free profile should produce a diagnostic");
+
+        assert!(extracted.raw_links.is_empty());
+        assert_eq!(extracted.failures.len(), 1);
+        assert!(
+            extracted.failures[0]
+                .reason
+                .contains("node-free client profile")
+        );
+    }
 
     #[test]
     fn checks_vless_reality_across_client_renderers_without_missing_fields() {

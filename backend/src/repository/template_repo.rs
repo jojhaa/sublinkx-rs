@@ -38,12 +38,18 @@ pub async fn count_by_kind(pool: &DbPool) -> Result<Vec<(String, i64)>, sqlx::Er
 pub async fn list_page(
     pool: &DbPool,
     kind: Option<&str>,
+    compact: bool,
     limit: i64,
     offset: i64,
 ) -> Result<Vec<TemplateRecord>, sqlx::Error> {
-    let mut query = QueryBuilder::<Any>::new(
-        "SELECT id, name, kind, content, is_builtin + 0 AS is_builtin, created_at, updated_at FROM templates WHERE 1 = 1",
-    );
+    let content = if compact {
+        "CASE WHEN content LIKE '%x-sublinkx-upstream-template: true%' THEN 'x-sublinkx-upstream-template: true' ELSE '' END AS content"
+    } else {
+        "content"
+    };
+    let mut query = QueryBuilder::<Any>::new(format!(
+        "SELECT id, name, kind, {content}, is_builtin + 0 AS is_builtin, created_at, updated_at FROM templates WHERE 1 = 1"
+    ));
     if let Some(kind) = kind.filter(|value| !value.is_empty()) {
         query.push(" AND kind = ");
         query.push_bind(kind);

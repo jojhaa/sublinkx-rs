@@ -7,6 +7,12 @@ yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
 
+# Local development records
+docs/DEVELOPMENT_LOG.md
+docs/DEVELOPMENT_PROGRESS.md
+docs/plan.md
+/开发日志.md
+
 # Environment and local secrets
 .env
 .env.*

@@ -1,6 +1,7 @@
 pub mod client;
 pub mod group;
 pub mod node;
+pub mod node_ip_probe;
 pub mod settings;
 pub mod subscription;
 pub mod template;

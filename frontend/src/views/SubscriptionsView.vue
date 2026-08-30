@@ -83,7 +83,7 @@ const PAGE_SIZE_STORAGE_KEY = 'sublinkx_subscriptions_page_size'
 const TARGET_LABELS: Record<ExportTarget, string> = {
   clash: 'Clash',
   mihomo: 'Mihomo',
-  xray: 'Xray',
+  xray: 'v2rayN / v2rayNG',
   surge: 'Surge',
   'sing-box': 'sing-box',
   surge3: 'Surge 3',
@@ -105,7 +105,7 @@ const TARGET_LABELS: Record<ExportTarget, string> = {
 const TARGET_SUPPORT: Record<ExportTarget, Set<string>> = {
   clash: new Set(['shadowsocks', 'vmess', 'vless', 'trojan', 'hysteria2', 'tuic', 'wireguard', 'anytls']),
   mihomo: new Set(['shadowsocks', 'vmess', 'vless', 'trojan', 'hysteria2', 'tuic', 'wireguard', 'anytls']),
-  xray: new Set(['shadowsocks', 'vmess', 'vless', 'trojan', 'hysteria2']),
+  xray: new Set(['shadowsocks', 'vmess', 'vless', 'trojan', 'hysteria2', 'tuic', 'wireguard', 'anytls']),
   surge: new Set(['shadowsocks', 'vmess', 'vless', 'trojan', 'hysteria2', 'tuic', 'wireguard']),
   'sing-box': new Set(['shadowsocks', 'vmess', 'vless', 'trojan', 'hysteria2', 'tuic', 'wireguard', 'anytls']),
   surge3: new Set(['shadowsocks', 'vmess', 'vless', 'trojan', 'hysteria2', 'tuic', 'wireguard']),
@@ -174,6 +174,7 @@ const groupForm = reactive({
 })
 
 const filteredSubscriptions = computed(() => subscriptions.value)
+const nodesById = computed(() => new Map(nodes.value.map((item) => [item.id, item])))
 
 const filteredFormNodes = computed(() => {
   let list = nodes.value
@@ -238,10 +239,14 @@ const currentTargetLabel = computed(() => TARGET_LABELS[form.default_client])
 const currentModeLabel = computed(() => (
   exportMode.value === 'strict' ? t('exportModeStrict') : t('exportModeBestEffort')
 ))
-const selectedNodes = computed(() => nodes.value.filter((item) => effectiveFormNodeIds.value.includes(item.id)))
+const selectedNodes = computed(() => {
+  const selectedIds = new Set(effectiveFormNodeIds.value)
+  return nodes.value.filter((item) => selectedIds.has(item.id))
+})
 const selectedFormNodes = computed(() => {
-  const byId = new Map(nodes.value.map((item) => [item.id, item]))
-  return effectiveFormNodeIds.value.map((id) => byId.get(id)).filter((item): item is NodeItem => Boolean(item))
+  return effectiveFormNodeIds.value
+    .map((id) => nodesById.value.get(id))
+    .filter((item): item is NodeItem => Boolean(item))
 })
 const missingSelectedNodeCount = computed(() => effectiveFormNodeIds.value.length - selectedFormNodes.value.length)
 const formCompatibility = computed(() => summarizeCompatibility(selectedNodes.value, form.default_client))
@@ -308,6 +313,22 @@ function summarizeCompatibility(nodeItems: NodeItem[], target: ExportTarget): Co
   }
 }
 
+const subscriptionCompatibilityCache = computed(() => {
+  const cache = new Map<number, Map<ExportTarget, CompatibilitySummary>>()
+  const byId = nodesById.value
+  for (const subscription of subscriptions.value) {
+    const subscriptionNodes = subscription.node_ids
+      .map((id) => byId.get(id))
+      .filter((node): node is NodeItem => Boolean(node))
+    const targetSummaries = new Map<ExportTarget, CompatibilitySummary>()
+    for (const target of exportTargets) {
+      targetSummaries.set(target, summarizeCompatibility(subscriptionNodes, target))
+    }
+    cache.set(subscription.id, targetSummaries)
+  }
+  return cache
+})
+
 function formatUnsupportedNodes(nodeItems: NodeItem[]) {
   return nodeItems.map((item) => `${item.name} (${item.protocol})`).join('、')
 }
@@ -331,9 +352,11 @@ function openCompatibilityDetail(item: SubscriptionItem, target: ExportTarget) {
 }
 
 function subscriptionCompatibility(item: SubscriptionItem, target: ExportTarget) {
-  const byId = new Map(nodes.value.map((node) => [node.id, node]))
-  const itemNodes = item.node_ids.map((id) => byId.get(id)).filter((node): node is NodeItem => Boolean(node))
-  return summarizeCompatibility(itemNodes, target)
+  return subscriptionCompatibilityCache.value.get(item.id)?.get(target) ?? {
+    supportedCount: 0,
+    totalCount: item.node_ids.length,
+    unsupportedNodes: [],
+  }
 }
 
 function defaultTarget(item: SubscriptionItem): ExportTarget {
@@ -379,7 +402,7 @@ function publicExportLink(token: string, target: ExportTarget) {
 }
 
 function publicSubscriptionLink(item: SubscriptionItem) {
-  return publicExportLink(item.token, defaultTarget(item))
+  return `${subscriptionBaseUrl()}/s/${item.token}?mode=best_effort`
 }
 
 async function openSubscriptionQr(item: SubscriptionItem) {
@@ -942,43 +965,42 @@ async function load() {
   loading.value = true
   errorMessage.value = ''
 
-  const [nodeResponse, subscriptionResponse, templateResponse, groupResponse, nodeGroupResponse, settingsResponse] = await Promise.allSettled([
-    listNodes({ page_size: 1000 }),
-    fetchSubscriptionPage(),
-    listTemplates({ page_size: 1000 }),
-    listSubscriptionGroups(),
-    listNodeGroups(),
-    getSettings(),
-  ])
+  const subscriptionTask = fetchSubscriptionPage()
+  const auxiliaryTasks = [
+    listNodes({ page_size: 1000, compact: true }).then((response) => {
+      nodes.value = response.data
+    }),
+    listTemplates({ page_size: 1000, compact: true }).then((response) => {
+      templates.value = response.data
+    }),
+    listSubscriptionGroups().then((response) => {
+      groups.value = response.data
+    }),
+    listNodeGroups().then((response) => {
+      nodeGroups.value = response.data
+    }),
+    getSettings().then((response) => {
+      publicBaseUrl.value = response.data.public_base_url
+    }),
+  ]
 
-  if (nodeResponse.status === 'fulfilled') {
-    nodes.value = nodeResponse.value.data
-  }
-  if (subscriptionResponse.status === 'fulfilled') {
-    subscriptions.value = subscriptionResponse.value.data
-    totalSubscriptions.value = subscriptionResponse.value.pagination.total
-    totalPages.value = subscriptionResponse.value.pagination.total_pages
-  }
-  if (templateResponse.status === 'fulfilled') {
-    templates.value = templateResponse.value.data
-  }
-  if (groupResponse.status === 'fulfilled') {
-    groups.value = groupResponse.value.data
-  }
-  if (nodeGroupResponse.status === 'fulfilled') {
-    nodeGroups.value = nodeGroupResponse.value.data
+  try {
+    const response = await subscriptionTask
+    subscriptions.value = response.data
+    totalSubscriptions.value = response.pagination.total
+    totalPages.value = response.pagination.total_pages
     page.value = Math.min(page.value, pageCount.value)
+  } catch (error) {
+    errorMessage.value = extractApiError(error)
+  } finally {
+    loading.value = false
   }
-  if (settingsResponse.status === 'fulfilled') {
-    publicBaseUrl.value = settingsResponse.value.data.public_base_url
-  }
-  const failure = [nodeResponse, subscriptionResponse, templateResponse, groupResponse, nodeGroupResponse, settingsResponse].find(
-    (result) => result.status === 'rejected',
-  )
-  if (failure?.status === 'rejected') {
+
+  const auxiliaryResults = await Promise.allSettled(auxiliaryTasks)
+  const failure = auxiliaryResults.find((result) => result.status === 'rejected')
+  if (!errorMessage.value && failure?.status === 'rejected') {
     errorMessage.value = extractApiError(failure.reason)
   }
-  loading.value = false
 }
 
 function fetchSubscriptionPage() {

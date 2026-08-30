@@ -30,14 +30,14 @@ type ExportTarget = 'mihomo' | 'xray' | 'surge' | 'sing-box'
 
 const TARGET_LABELS: Record<ExportTarget, string> = {
   mihomo: 'Mihomo',
-  xray: 'Xray',
+  xray: 'v2rayN / v2rayNG',
   surge: 'Surge',
   'sing-box': 'sing-box',
 }
 
 const TARGET_SUPPORT: Record<ExportTarget, Set<string>> = {
   mihomo: new Set(['shadowsocks', 'vmess', 'vless', 'trojan', 'hysteria2', 'tuic', 'wireguard', 'anytls']),
-  xray: new Set(['shadowsocks', 'vmess', 'vless', 'trojan', 'hysteria2']),
+  xray: new Set(['shadowsocks', 'vmess', 'vless', 'trojan', 'hysteria2', 'tuic', 'wireguard', 'anytls']),
   surge: new Set(['shadowsocks', 'vmess', 'vless', 'trojan', 'hysteria2', 'tuic', 'wireguard']),
   'sing-box': new Set(['shadowsocks', 'vmess', 'vless', 'trojan', 'hysteria2', 'tuic', 'wireguard', 'anytls']),
 }

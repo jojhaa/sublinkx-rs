@@ -11,6 +11,32 @@ pub struct UpdateSettingsRequest {
     pub latency_core_path: String,
     pub latency_test_url: String,
     pub latency_timeout_secs: i64,
+    #[serde(default)]
+    pub ip_probe_auto_enabled: Option<bool>,
+    #[serde(default)]
+    pub ip_probe_interval_minutes: Option<i64>,
+    #[serde(default)]
+    pub ip_probe_after_upstream_import: Option<bool>,
+    #[serde(default)]
+    pub country_detection_auto_enabled: Option<bool>,
+    #[serde(default)]
+    pub country_detection_interval_minutes: Option<i64>,
+    #[serde(default)]
+    pub connectivity_default_target: Option<String>,
+    #[serde(default)]
+    pub connectivity_default_rounds: Option<i64>,
+    #[serde(default)]
+    pub connectivity_sync_last_latency: Option<bool>,
+    #[serde(default)]
+    pub public_export_cache_ttl_seconds: Option<i64>,
+    #[serde(default)]
+    pub public_export_ip_limit_per_minute: Option<i64>,
+    #[serde(default)]
+    pub public_export_global_limit_per_minute: Option<i64>,
+    #[serde(default)]
+    pub mihomo_country_load_min_nodes: Option<i64>,
+    #[serde(default)]
+    pub mihomo_country_fallback_min_nodes: Option<i64>,
 }
 
 #[derive(Debug, Serialize)]

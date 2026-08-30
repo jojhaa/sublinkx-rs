@@ -236,6 +236,28 @@ async fn init_mysql_schema(pool: &DbPool) -> Result<(), sqlx::Error> {
           CONSTRAINT fk_upstream_subscriptions_template_id FOREIGN KEY (template_id) REFERENCES templates(id) ON DELETE SET NULL
         )
         "#,
+        r#"
+        CREATE TABLE IF NOT EXISTS node_ip_probes (
+          node_id BIGINT PRIMARY KEY,
+          status VARCHAR(64) NOT NULL,
+          ip VARCHAR(64) NULL,
+          ip_version BIGINT NULL,
+          country_code VARCHAR(8) NULL,
+          country_name VARCHAR(128) NULL,
+          country_source VARCHAR(64) NULL,
+          intelligence_status VARCHAR(64) NULL,
+          intelligence_message TEXT NULL,
+          message TEXT NULL,
+          probed_at VARCHAR(64) NOT NULL,
+          country_updated_at VARCHAR(64) NULL,
+          intelligence_updated_at VARCHAR(64) NULL,
+          updated_at VARCHAR(64) NOT NULL,
+          KEY idx_node_ip_probes_country_code (country_code),
+          KEY idx_node_ip_probes_intelligence_status (intelligence_status),
+          KEY idx_node_ip_probes_status (status),
+          CONSTRAINT fk_node_ip_probes_node_id FOREIGN KEY (node_id) REFERENCES nodes(id) ON DELETE CASCADE
+        )
+        "#,
     ];
 
     for statement in statements {
@@ -306,6 +328,43 @@ async fn apply_builtin_template_content_upgrades(pool: &DbPool) -> Result<(), sq
         .await?;
     }
 
+    sqlx::query(
+        r#"
+        UPDATE templates
+        SET content = REPLACE(
+                REPLACE(
+                    REPLACE(
+                        content,
+                        '  ipv6: true
+',
+                        '  ipv6: false
+'
+                    ),
+                    '    - https://1.1.1.1/dns-query
+    - https://8.8.8.8/dns-query
+',
+                    ''
+                ),
+                '  respect-rules: true
+',
+                '  respect-rules: false
+'
+            ),
+            updated_at = ?
+        WHERE name = 'Built-in Mihomo Policy Orchestrator'
+          AND is_builtin = TRUE
+          AND (
+                content LIKE '%  ipv6: true%'
+                OR content LIKE '%  respect-rules: true%'
+                OR content LIKE '%    - https://1.1.1.1/dns-query
+    - https://8.8.8.8/dns-query%'
+            )
+        "#,
+    )
+    .bind(&now)
+    .execute(pool)
+    .await?;
+
     Ok(())
 }
 
@@ -359,6 +418,13 @@ async fn apply_mysql_schema_upgrades(pool: &DbPool) -> Result<(), sqlx::Error> {
             "last_import_disabled",
             "BIGINT NOT NULL DEFAULT 0",
         ),
+        ("node_ip_probes", "intelligence_status", "VARCHAR(64) NULL"),
+        ("node_ip_probes", "intelligence_message", "TEXT NULL"),
+        (
+            "node_ip_probes",
+            "intelligence_updated_at",
+            "VARCHAR(64) NULL",
+        ),
     ] {
         mysql_add_column_if_missing(pool, table, column, definition).await?;
     }
@@ -377,6 +443,7 @@ async fn apply_mysql_schema_upgrades(pool: &DbPool) -> Result<(), sqlx::Error> {
             'Built-in Common Notes',
             'Built-in Clash ACL4SSR Style',
             'Built-in Mihomo Rule Base',
+            'Built-in Mihomo Policy Orchestrator',
             'Built-in Xray URI Bundle',
             'Built-in Surge 4/5 Managed',
             'Built-in sing-box Route Base',
@@ -439,6 +506,11 @@ async fn apply_mysql_schema_upgrades(pool: &DbPool) -> Result<(), sqlx::Error> {
             "subscription_nodes",
             "idx_subscription_nodes_sort",
             "CREATE INDEX idx_subscription_nodes_sort ON subscription_nodes(subscription_id, sort_order)",
+        ),
+        (
+            "node_ip_probes",
+            "idx_node_ip_probes_intelligence_status",
+            "CREATE INDEX idx_node_ip_probes_intelligence_status ON node_ip_probes(intelligence_status)",
         ),
     ] {
         mysql_add_index_if_missing(pool, table, index, create_sql).await?;
@@ -637,7 +709,6 @@ async fn apply_mysql_schema_upgrades(pool: &DbPool) -> Result<(), sqlx::Error> {
     .bind(&now)
     .execute(pool)
     .await?;
-
     Ok(())
 }
 
@@ -756,4 +827,64 @@ fn sqlite_file_path(database_url: &str) -> Option<PathBuf> {
     }
 
     env::current_dir().ok().map(|cwd| cwd.join(candidate))
+}
+
+#[cfg(test)]
+mod tests {
+    use sqlx::{Executor, Row, any::AnyPoolOptions};
+
+    use super::apply_builtin_template_content_upgrades;
+
+    const OLD_DNS: &str = "dns:\n  ipv6: true\n  proxy-server-nameserver:\n    - https://dns.alidns.com/dns-query\n    - https://doh.pub/dns-query\n    - https://1.1.1.1/dns-query\n    - https://8.8.8.8/dns-query\n  respect-rules: true\n";
+
+    #[tokio::test]
+    async fn upgrades_only_the_builtin_mihomo_orchestrator_dns() {
+        sqlx::any::install_default_drivers();
+        let pool = AnyPoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        pool.execute(
+            "CREATE TABLE templates (name TEXT NOT NULL, kind TEXT NOT NULL, content TEXT NOT NULL, is_builtin BOOLEAN NOT NULL, updated_at TEXT NOT NULL)",
+        )
+        .await
+        .unwrap();
+        for (name, is_builtin) in [
+            ("Built-in Mihomo Policy Orchestrator", 1_i64),
+            ("User Mihomo Policy Orchestrator", 0_i64),
+        ] {
+            sqlx::query(
+                "INSERT INTO templates (name, kind, content, is_builtin, updated_at) VALUES (?, 'mihomo', ?, ?, 'before')",
+            )
+            .bind(name)
+            .bind(OLD_DNS)
+            .bind(is_builtin)
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+
+        apply_builtin_template_content_upgrades(&pool)
+            .await
+            .unwrap();
+        apply_builtin_template_content_upgrades(&pool)
+            .await
+            .unwrap();
+
+        let rows = sqlx::query("SELECT name, content FROM templates ORDER BY name")
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+        let builtin: String = rows[0].get("content");
+        let custom: String = rows[1].get("content");
+        assert!(
+            builtin.contains("  ipv6: false\n"),
+            "unexpected built-in content: {builtin:?}"
+        );
+        assert!(builtin.contains("  respect-rules: false\n"));
+        assert!(!builtin.contains("https://1.1.1.1/dns-query\n"));
+        assert!(!builtin.contains("https://8.8.8.8/dns-query\n"));
+        assert_eq!(custom, OLD_DNS);
+    }
 }

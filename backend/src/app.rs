@@ -105,6 +105,39 @@ pub fn build_app(state: AppState) -> Router {
             axum::routing::post(api::nodes::test_latency),
         )
         .route(
+            "/api/v1/connectivity-tests/presets",
+            get(api::connectivity_tests::presets),
+        )
+        .route(
+            "/api/v1/connectivity-tests/stream",
+            axum::routing::post(api::connectivity_tests::stream),
+        )
+        .route(
+            "/api/v1/connectivity-tests/cancel",
+            axum::routing::post(api::connectivity_tests::cancel),
+        )
+        .route("/api/v1/node-ip-probes", get(api::node_ip_probes::list))
+        .route(
+            "/api/v1/node-ip-probes/stream",
+            axum::routing::post(api::node_ip_probes::stream),
+        )
+        .route(
+            "/api/v1/node-ip-probes/cancel",
+            axum::routing::post(api::node_ip_probes::cancel),
+        )
+        .route(
+            "/api/v1/node-ip-probes/intelligence/status",
+            get(api::node_ip_probes::intelligence_status),
+        )
+        .route(
+            "/api/v1/node-ip-probes/intelligence/refresh",
+            axum::routing::post(api::node_ip_probes::refresh_intelligence),
+        )
+        .route(
+            "/api/v1/node-ip-probes/{id}/country",
+            axum::routing::put(api::node_ip_probes::update_country),
+        )
+        .route(
             "/api/v1/nodes/{id}",
             get(api::nodes::get)
                 .put(api::nodes::update)

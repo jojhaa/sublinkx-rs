@@ -14,6 +14,7 @@ pub struct AppConfig {
     pub server: ServerConfig,
     pub database: DatabaseConfig,
     pub security: SecurityConfig,
+    pub ip_intelligence: IpIntelligenceConfig,
 }
 
 #[allow(dead_code)]
@@ -38,6 +39,15 @@ pub struct SecurityConfig {
     pub bootstrap_admin_password: String,
     pub trust_proxy_headers: bool,
     pub auth_cookie_secure: bool,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone)]
+pub struct IpIntelligenceConfig {
+    pub enabled: bool,
+    pub base_url: String,
+    pub api_token: String,
+    pub source_key: String,
 }
 
 #[derive(Debug, Error)]
@@ -73,6 +83,21 @@ impl AppConfig {
         let auth_cookie_secure = env::var("AUTH_COOKIE_SECURE")
             .map(|value| value.eq_ignore_ascii_case("true") || value == "1")
             .unwrap_or_else(|_| is_production_env(&environment));
+        let ip_intelligence_enabled = env_flag("IP_INTELLIGENCE_ENABLED", false);
+        let ip_intelligence_base_url = env::var("IP_INTELLIGENCE_BASE_URL")
+            .unwrap_or_default()
+            .trim_end_matches('/')
+            .to_string();
+        let ip_intelligence_api_token = env::var("IP_INTELLIGENCE_API_TOKEN").unwrap_or_default();
+        let ip_intelligence_source_key =
+            env::var("IP_INTELLIGENCE_SOURCE_KEY").unwrap_or_else(|_| "sublinkx-rs".to_string());
+
+        validate_ip_intelligence_config(
+            ip_intelligence_enabled,
+            &ip_intelligence_base_url,
+            &ip_intelligence_api_token,
+            &ip_intelligence_source_key,
+        )?;
 
         if is_production_env(&environment) {
             validate_production_secret(&jwt_secret)?;
@@ -89,8 +114,68 @@ impl AppConfig {
                 trust_proxy_headers,
                 auth_cookie_secure,
             },
+            ip_intelligence: IpIntelligenceConfig {
+                enabled: ip_intelligence_enabled,
+                base_url: ip_intelligence_base_url,
+                api_token: ip_intelligence_api_token,
+                source_key: ip_intelligence_source_key,
+            },
         })
     }
+}
+
+fn env_flag(name: &str, default: bool) -> bool {
+    env::var(name)
+        .map(|value| value.eq_ignore_ascii_case("true") || value == "1")
+        .unwrap_or(default)
+}
+
+fn validate_ip_intelligence_config(
+    enabled: bool,
+    base_url: &str,
+    api_token: &str,
+    source_key: &str,
+) -> Result<(), ConfigError> {
+    if !enabled {
+        return Ok(());
+    }
+    let url = url::Url::parse(base_url).map_err(|_| {
+        ConfigError::SecurityConfig(
+            "IP_INTELLIGENCE_BASE_URL must be a valid http or https URL".to_string(),
+        )
+    })?;
+    if !matches!(url.scheme(), "http" | "https")
+        || url.host_str().is_none()
+        || url.username() != ""
+        || url.password().is_some()
+        || url.query().is_some()
+        || url.fragment().is_some()
+    {
+        return Err(ConfigError::SecurityConfig(
+            "IP_INTELLIGENCE_BASE_URL must be an http or https origin without credentials, query, or fragment"
+                .to_string(),
+        ));
+    }
+    if !(32..=512).contains(&api_token.len())
+        || api_token.trim() != api_token
+        || api_token.chars().any(char::is_whitespace)
+    {
+        return Err(ConfigError::SecurityConfig(
+            "IP_INTELLIGENCE_API_TOKEN must contain 32 to 512 non-whitespace bytes".to_string(),
+        ));
+    }
+    if source_key.is_empty()
+        || source_key.len() > 128
+        || source_key.trim() != source_key
+        || !source_key
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b':' | b'-'))
+    {
+        return Err(ConfigError::SecurityConfig(
+            "IP_INTELLIGENCE_SOURCE_KEY must contain 1 to 128 safe ASCII characters".to_string(),
+        ));
+    }
+    Ok(())
 }
 
 pub fn is_production_env(environment: &str) -> bool {
@@ -118,7 +203,10 @@ fn validate_jwt_exp_hours(value: i64) -> Result<(), ConfigError> {
 
 #[cfg(test)]
 mod tests {
-    use super::{DEFAULT_JWT_SECRET, validate_jwt_exp_hours, validate_production_secret};
+    use super::{
+        DEFAULT_JWT_SECRET, validate_ip_intelligence_config, validate_jwt_exp_hours,
+        validate_production_secret,
+    };
 
     #[test]
     fn rejects_default_production_jwt_secret() {
@@ -149,5 +237,20 @@ mod tests {
     #[test]
     fn accepts_reasonable_jwt_expiry() {
         assert!(validate_jwt_exp_hours(24).is_ok());
+    }
+
+    #[test]
+    fn validates_enabled_ip_intelligence_configuration() {
+        assert!(
+            validate_ip_intelligence_config(
+                true,
+                "http://127.0.0.1:8090/api/v1",
+                "0123456789abcdef0123456789abcdef",
+                "sublinkx-rs:test",
+            )
+            .is_ok()
+        );
+        assert!(validate_ip_intelligence_config(true, "file:///tmp/api", "x", "bad key").is_err());
+        assert!(validate_ip_intelligence_config(false, "", "", "").is_ok());
     }
 }

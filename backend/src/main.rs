@@ -31,6 +31,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let state = AppState::new(config.clone(), pool);
     services::upstream_subscription_service::backfill_existing_node_source_refs(&state).await?;
     services::latency_scheduler_service::spawn_auto_latency_tester(state.clone());
+    services::ip_intelligence_scheduler_service::spawn(state.clone());
+    services::node_ip_probe_scheduler_service::spawn(state.clone());
     services::upstream_sync_scheduler_service::spawn_upstream_subscription_syncer(state.clone());
     let app = build_app(state);
 

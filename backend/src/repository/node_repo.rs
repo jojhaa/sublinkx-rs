@@ -11,6 +11,12 @@ upstream_missing + 0 AS upstream_missing, fingerprint, settings_json, remark, la
 last_latency_message, last_latency_tested_at, created_at, updated_at
 "#;
 
+const NODE_COMPACT_SELECT_FIELDS: &str = r#"
+id, name, protocol, '' AS raw_link, server, port, enabled + 0 AS enabled, group_id, source_type, source_ref,
+upstream_missing + 0 AS upstream_missing, fingerprint, '{}' AS settings_json, remark, last_latency_ms,
+last_latency_status, last_latency_message, last_latency_tested_at, created_at, updated_at
+"#;
+
 pub struct NewNodeRecord<'a> {
     pub name: &'a str,
     pub protocol: &'a str,
@@ -62,12 +68,17 @@ pub async fn list_page(
     group_id: Option<i64>,
     ungrouped: bool,
     enabled: Option<bool>,
+    compact: bool,
     limit: i64,
     offset: i64,
 ) -> Result<Vec<NodeRecord>, sqlx::Error> {
-    let mut query = QueryBuilder::<Any>::new(format!(
-        "SELECT {NODE_SELECT_FIELDS} FROM nodes WHERE 1 = 1"
-    ));
+    let select_fields = if compact {
+        NODE_COMPACT_SELECT_FIELDS
+    } else {
+        NODE_SELECT_FIELDS
+    };
+    let mut query =
+        QueryBuilder::<Any>::new(format!("SELECT {select_fields} FROM nodes WHERE 1 = 1"));
     push_list_filters(&mut query, group_id, ungrouped, enabled);
     query.push(" ORDER BY id DESC LIMIT ");
     query.push_bind(limit);
@@ -459,6 +470,26 @@ pub async fn list_enabled(pool: &DbPool) -> Result<Vec<NodeRecord>, sqlx::Error>
         .await
 }
 
+pub async fn list_enabled_ids_by_upstream_source_ref(
+    pool: &DbPool,
+    source_ref: &str,
+) -> Result<Vec<i64>, sqlx::Error> {
+    sqlx::query_scalar(
+        r#"
+        SELECT id
+        FROM nodes
+        WHERE source_type = 'upstream_subscription'
+          AND source_ref = ?
+          AND enabled = 1
+          AND upstream_missing = 0
+        ORDER BY id ASC
+        "#,
+    )
+    .bind(source_ref)
+    .fetch_all(pool)
+    .await
+}
+
 pub async fn update_latency(
     pool: &DbPool,
     id: i64,
@@ -528,4 +559,71 @@ pub async fn update_group_for_ids(
 
 pub fn fingerprint_scope(group_id: Option<i64>) -> i64 {
     group_id.unwrap_or(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    use super::*;
+
+    #[tokio::test]
+    async fn post_import_probe_selection_is_scoped_and_enabled() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time should be valid")
+            .as_nanos();
+        let relative_path = format!(
+            "backend/target/test-data/sublinkx-upstream-probe-{}-{nonce}.db",
+            std::process::id()
+        );
+        let absolute_path = std::env::current_dir()
+            .expect("current directory should exist")
+            .join(&relative_path);
+        let pool = crate::db::new_database_pool(&format!("sqlite://{relative_path}"))
+            .await
+            .expect("test database should initialize");
+        let now = "2026-08-30T00:00:00Z";
+        for (name, source_ref, enabled, upstream_missing) in [
+            ("eligible", "https://example.com/a", 1, 0),
+            ("paused", "https://example.com/a", 0, 0),
+            ("missing", "https://example.com/a", 1, 1),
+            ("other", "https://example.com/b", 1, 0),
+        ] {
+            sqlx::query(
+                r#"
+                INSERT INTO nodes (
+                  name, protocol, raw_link, server, port, enabled, group_id, source_type,
+                  source_ref, upstream_missing, fingerprint, fingerprint_scope, settings_json,
+                  remark, created_at, updated_at
+                ) VALUES (?, 'vless', 'vless://test', 'example.com', 443, ?, NULL,
+                  'upstream_subscription', ?, ?, ?, 0, '{}', '', ?, ?)
+                "#,
+            )
+            .bind(name)
+            .bind(enabled)
+            .bind(source_ref)
+            .bind(upstream_missing)
+            .bind(format!("{name}-{nonce}"))
+            .bind(now)
+            .bind(now)
+            .execute(&pool)
+            .await
+            .expect("node should insert");
+        }
+
+        let ids = list_enabled_ids_by_upstream_source_ref(&pool, "https://example.com/a")
+            .await
+            .expect("selection should succeed");
+        let names = find_by_ids(&pool, &ids)
+            .await
+            .expect("selected nodes should load")
+            .into_iter()
+            .map(|node| node.name)
+            .collect::<Vec<_>>();
+        assert_eq!(names, vec!["eligible"]);
+
+        pool.close().await;
+        let _ = std::fs::remove_file(absolute_path);
+    }
 }

@@ -1,15 +1,14 @@
 # 文档索引
 
-这里整理 `sublinkx-rs` 的部署、规划、兼容性和模板相关文档。
+这里整理 `sublinkx-rs` 的部署、兼容性和模板相关文档。
 
 ## 部署
 
 - [Docker 部署](docker.md)：Docker Compose、数据映射、SQLite/MySQL、固定网段和反向代理说明。
 - [Docker 英文部署说明](docker.en.md)：英文版 Docker 部署说明。
 
-## 设计与规划
+## 客户端设计
 
-- [重构蓝图](plan.md)：Rust + Vue 3 重构目标、模块划分和系统设计。
 - [客户端目标注册表](client-target-registry.md)：客户端 target、renderer family 和模板预设规划。
 
 ## 兼容性

@@ -18,26 +18,32 @@ use crate::{
     domain::{
         client::{detect_client_target_from_user_agent, resolve_client_target},
         node::NodeView,
+        settings::AppSettingsView,
         subscription::SubscriptionView,
         template::TemplateRecord,
     },
     errors::AppError,
     repository::{
         group_repo::{self, GroupTable},
-        subscription_repo, template_repo,
+        node_ip_probe_repo, subscription_repo, template_repo,
     },
     state::{AppState, PublicExportCacheEntry},
 };
 
-use super::{auth_service, subscription_service};
+use super::{auth_service, settings_service, subscription_service};
 
 const CLASH_ROUTING_TEMPLATE_DOC: &str = include_str!("../../../docs/clash-routing-template.md");
-const PUBLIC_EXPORT_CACHE_TTL: Duration = Duration::from_secs(30);
 const PUBLIC_EXPORT_CACHE_BODY_LIMIT: usize = 8 * 1024 * 1024;
-const PUBLIC_EXPORT_IP_LIMIT_PER_MINUTE: u32 = 120;
-const PUBLIC_EXPORT_GLOBAL_LIMIT_PER_MINUTE: u32 = 1200;
 const PUBLIC_EXPORT_RATE_WINDOW: Duration = Duration::from_secs(60);
 const MIHOMO_DEFAULT_DELAY_TEST_URL: &str = "https://cp.cloudflare.com/generate_204";
+const MIHOMO_COUNTRY_GROUPS: &[(&str, &str, &str)] = &[
+    ("HK", "香港负载", "香港故障转移"),
+    ("JP", "日本负载", "日本故障转移"),
+    ("SG", "新加坡负载", "新加坡故障转移"),
+    ("US", "美国负载", "美国故障转移"),
+    ("TW", "台湾负载", "台湾故障转移"),
+];
+const MIHOMO_OTHER_COUNTRY_GROUP: &str = "其他地区负载";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ExportMode {
@@ -63,7 +69,8 @@ pub async fn export_subscription(
     headers: &HeaderMap,
     peer_ip: Option<IpAddr>,
 ) -> Result<Response, AppError> {
-    ensure_public_export_not_limited(state, headers, peer_ip).await?;
+    let settings = settings_service::load_settings(state).await?;
+    ensure_public_export_not_limited(state, headers, peer_ip, &settings).await?;
 
     let subscription_record = subscription_repo::find_by_token(&state.db, token)
         .await?
@@ -72,12 +79,13 @@ pub async fn export_subscription(
         return Err(AppError::NotFound("subscription not found".to_string()));
     }
 
+    let detected_target = detect_export_target(user_agent);
     let export_target = target
-        .or_else(|| detect_export_target(user_agent))
+        .or(detected_target)
         .or(subscription_record.default_client.as_deref())
         .unwrap_or("xray")
         .to_string();
-    let export_mode = parse_export_mode(mode)?;
+    let export_mode = resolve_export_mode(target, mode, detected_target)?;
     let canonical_target = canonical_export_target(&export_target)?;
     let template_target = template_target(&export_target, canonical_target).to_string();
     let cache_key = public_export_cache_key(
@@ -88,9 +96,9 @@ pub async fn export_subscription(
         &export_target,
         export_mode,
     );
-    if let Some(cached) = state
-        .get_public_export_cache(&cache_key, PUBLIC_EXPORT_CACHE_TTL)
-        .await
+    let cache_ttl = Duration::from_secs(settings.public_export_cache_ttl_seconds as u64);
+    if !cache_ttl.is_zero()
+        && let Some(cached) = state.get_public_export_cache(&cache_key, cache_ttl).await
     {
         return Ok(response_from_cached_export(cached));
     }
@@ -107,9 +115,14 @@ pub async fn export_subscription(
         export_mode,
         canonical_target,
         &template_target,
+        &settings,
     )
     .await?;
-    cache_public_export_response(state, cache_key, response).await
+    if cache_ttl.is_zero() {
+        Ok(response)
+    } else {
+        cache_public_export_response(state, cache_key, response).await
+    }
 }
 
 pub async fn export_subscription_by_id(
@@ -132,6 +145,7 @@ async fn ensure_public_export_not_limited(
     state: &AppState,
     headers: &HeaderMap,
     peer_ip: Option<IpAddr>,
+    settings: &AppSettingsView,
 ) -> Result<(), AppError> {
     let ip = auth_service::request_rate_limit_ip(
         headers,
@@ -141,7 +155,7 @@ async fn ensure_public_export_not_limited(
     state
         .check_rate_limit(
             &format!("public-export:ip:{ip}"),
-            PUBLIC_EXPORT_IP_LIMIT_PER_MINUTE,
+            settings.public_export_ip_limit_per_minute as u32,
             PUBLIC_EXPORT_RATE_WINDOW,
         )
         .await
@@ -149,7 +163,7 @@ async fn ensure_public_export_not_limited(
     state
         .check_rate_limit(
             "public-export:global",
-            PUBLIC_EXPORT_GLOBAL_LIMIT_PER_MINUTE,
+            settings.public_export_global_limit_per_minute as u32,
             PUBLIC_EXPORT_RATE_WINDOW,
         )
         .await
@@ -223,12 +237,14 @@ async fn export_subscription_view(
     mode: Option<&str>,
     user_agent: Option<&str>,
 ) -> Result<Response, AppError> {
+    let settings = settings_service::load_settings(state).await?;
+    let detected_target = detect_export_target(user_agent);
     let export_target = target
-        .or_else(|| detect_export_target(user_agent))
+        .or(detected_target)
         .or(subscription.default_client.as_deref())
         .unwrap_or("xray")
         .to_string();
-    let export_mode = parse_export_mode(mode)?;
+    let export_mode = resolve_export_mode(target, mode, detected_target)?;
     let canonical_target = canonical_export_target(&export_target)?;
     let template_target = template_target(&export_target, canonical_target).to_string();
     export_subscription_view_with_resolved_target(
@@ -238,6 +254,7 @@ async fn export_subscription_view(
         export_mode,
         canonical_target,
         &template_target,
+        &settings,
     )
     .await
 }
@@ -249,6 +266,7 @@ async fn export_subscription_view_with_resolved_target(
     export_mode: ExportMode,
     canonical_target: &'static str,
     template_target: &str,
+    settings: &AppSettingsView,
 ) -> Result<Response, AppError> {
     subscription
         .nodes
@@ -256,6 +274,11 @@ async fn export_subscription_view_with_resolved_target(
     subscription.node_ids = subscription.nodes.iter().map(|node| node.id).collect();
     sort_subscription_nodes_for_export(state, &mut subscription).await?;
     let template = load_export_template(state, subscription.template_id, template_target).await?;
+    let node_countries = if matches!(canonical_target, "mihomo" | "mellow") {
+        node_ip_probe_repo::countries_by_node_ids(&state.db, &subscription.node_ids).await?
+    } else {
+        HashMap::new()
+    };
 
     match canonical_target {
         "xray" => export_xray_bundle(subscription, export_mode),
@@ -267,6 +290,9 @@ async fn export_subscription_view_with_resolved_target(
             export_mode,
             template.as_ref(),
             template_target,
+            &node_countries,
+            settings.mihomo_country_load_min_nodes as usize,
+            settings.mihomo_country_fallback_min_nodes as usize,
         ),
         "surge" => export_surge(subscription, export_mode, template.as_ref()),
         "sing-box" => export_sing_box(subscription, export_mode, template.as_ref()),
@@ -279,6 +305,9 @@ async fn export_subscription_view_with_resolved_target(
             export_mode,
             template.as_ref(),
             template_target,
+            &node_countries,
+            settings.mihomo_country_load_min_nodes as usize,
+            settings.mihomo_country_fallback_min_nodes as usize,
         ),
         _ => Err(AppError::Internal),
     }
@@ -290,7 +319,7 @@ async fn sort_subscription_nodes_for_export(
 ) -> Result<(), AppError> {
     let groups = group_repo::list(&state.db, GroupTable::Node).await?;
     let group_order_by_id = groups
-        .into_iter()
+        .iter()
         .map(|group| (group.id, group.sort_order))
         .collect::<HashMap<_, _>>();
 
@@ -510,6 +539,9 @@ fn export_mihomo(
     mode: ExportMode,
     template: Option<&TemplateRecord>,
     target_name: &str,
+    node_countries: &HashMap<i64, String>,
+    country_load_min_nodes: usize,
+    country_fallback_min_nodes: usize,
 ) -> Result<Response, AppError> {
     if let Some(template) = template
         && is_upstream_mihomo_template(&template.content)
@@ -539,6 +571,7 @@ fn export_mihomo(
     let mut used_proxy_names = collect_mihomo_proxy_names(&root);
     let mut proxy_items = Vec::with_capacity(subscription.nodes.len());
     let mut proxy_names = Vec::with_capacity(subscription.nodes.len());
+    let mut proxy_names_by_node_id = HashMap::with_capacity(subscription.nodes.len());
     let mut filtered_count = 0usize;
 
     for node in &subscription.nodes {
@@ -560,6 +593,7 @@ fn export_mihomo(
             Value::String("name".to_string()),
             Value::String(proxy_name.clone()),
         );
+        proxy_names_by_node_id.insert(node.id, proxy_name.clone());
         proxy_names.push(proxy_name);
         proxy_items.push(Value::Mapping(rendered));
     }
@@ -583,6 +617,13 @@ fn export_mihomo(
     yaml_push_sequence(&mut root, "proxies", proxy_items);
     expand_mihomo_include_all_proxy_groups(&mut root, &proxy_names);
     ensure_mihomo_default_proxy_groups(&mut root, &proxy_names);
+    ensure_mihomo_country_load_balance_groups(
+        &mut root,
+        node_countries,
+        &proxy_names_by_node_id,
+        country_load_min_nodes,
+        country_fallback_min_nodes,
+    );
     ensure_mihomo_match_rule(&mut root);
 
     let yaml = serde_yaml::to_string(&root).map_err(|_| AppError::Internal)?;
@@ -744,10 +785,9 @@ fn export_sing_box(
     let root = config.as_object_mut().ok_or_else(|| {
         AppError::BadRequest("sing-box template must be a JSON object".to_string())
     })?;
-    root.entry("remarks".to_string())
-        .or_insert_with(|| json!(subscription.name));
-    root.entry("title".to_string())
-        .or_insert_with(|| json!(subscription.name));
+    // sing-box rejects unknown top-level metadata fields during config validation.
+    root.remove("remarks");
+    root.remove("title");
     let outbounds_array = root
         .entry("outbounds".to_string())
         .or_insert_with(|| serde_json::Value::Array(Vec::new()))
@@ -1642,7 +1682,14 @@ pub(crate) fn render_mihomo_proxy(node: &NodeView) -> Result<Mapping, AppError> 
 fn is_xray_supported(node: &NodeView) -> bool {
     matches!(
         node.protocol.as_str(),
-        "shadowsocks" | "vmess" | "vless" | "trojan" | "hysteria2"
+        "shadowsocks"
+            | "vmess"
+            | "vless"
+            | "trojan"
+            | "hysteria2"
+            | "tuic"
+            | "wireguard"
+            | "anytls"
     )
 }
 
@@ -1709,6 +1756,19 @@ fn parse_export_mode(mode: Option<&str>) -> Result<ExportMode, AppError> {
             "unsupported export mode: {}",
             other
         ))),
+    }
+}
+
+fn resolve_export_mode(
+    requested_target: Option<&str>,
+    requested_mode: Option<&str>,
+    detected_target: Option<&str>,
+) -> Result<ExportMode, AppError> {
+    let requested_mode = parse_export_mode(requested_mode)?;
+    if requested_target.is_none() && detected_target.is_some() {
+        Ok(ExportMode::BestEffort)
+    } else {
+        Ok(requested_mode)
     }
 }
 
@@ -1795,7 +1855,13 @@ pub(crate) fn render_sing_box_outbound(node: &NodeView) -> Result<serde_json::Va
             if let Some(ports) = node.settings.get("ports").and_then(|v| v.as_str())
                 && !ports.is_empty()
             {
-                outbound["server_ports"] = json!(ports);
+                let server_ports = normalize_sing_box_server_ports(ports).ok_or_else(|| {
+                    AppError::BadRequest(format!(
+                        "node '{}' has an invalid hysteria2 port range",
+                        node.name
+                    ))
+                })?;
+                outbound["server_ports"] = json!(server_ports);
             }
             if let Some(up) = node.settings.get("up").and_then(json_to_i64) {
                 outbound["up_mbps"] = json!(up);
@@ -1858,6 +1924,36 @@ pub(crate) fn render_sing_box_outbound(node: &NodeView) -> Result<serde_json::Va
     }
 
     Ok(outbound)
+}
+
+fn normalize_sing_box_server_ports(value: &str) -> Option<Vec<String>> {
+    let mut normalized = Vec::new();
+    for item in value
+        .split(',')
+        .map(str::trim)
+        .filter(|item| !item.is_empty())
+    {
+        let item = if let Some((start, end)) = item.split_once('-') {
+            let start = start.trim().parse::<u16>().ok()?;
+            let end = end.trim().parse::<u16>().ok()?;
+            if start > end {
+                return None;
+            }
+            format!("{start}:{end}")
+        } else if let Some((start, end)) = item.split_once(':') {
+            let start = start.trim().parse::<u16>().ok()?;
+            let end = end.trim().parse::<u16>().ok()?;
+            if start > end {
+                return None;
+            }
+            format!("{start}:{end}")
+        } else {
+            item.parse::<u16>().ok()?.to_string()
+        };
+        normalized.push(item);
+    }
+
+    (!normalized.is_empty()).then_some(normalized)
 }
 
 pub(crate) fn render_surge_proxy(node: &NodeView) -> Result<SurgeRenderResult, AppError> {
@@ -2622,17 +2718,241 @@ fn ensure_mihomo_default_proxy_groups(root: &mut Mapping, proxy_names: &[String]
                 Value::Mapping(mihomo_proxy_select_group(proxy_names)),
                 Value::Mapping(mihomo_manual_proxy_group(proxy_names)),
                 Value::Mapping(mihomo_auto_proxy_group(proxy_names)),
+                Value::Mapping(mihomo_fallback_proxy_group(proxy_names)),
+                Value::Mapping(mihomo_load_balance_proxy_group(proxy_names)),
             ]),
         );
         return;
     }
 
+    if !mihomo_proxy_group_exists(root, "MANUAL") {
+        yaml_push_sequence(
+            root,
+            "proxy-groups",
+            vec![Value::Mapping(mihomo_manual_proxy_group(proxy_names))],
+        );
+    }
     if !mihomo_proxy_group_exists(root, "AUTO") {
         yaml_push_sequence(
             root,
             "proxy-groups",
             vec![Value::Mapping(mihomo_auto_proxy_group(proxy_names))],
         );
+    }
+    if !mihomo_proxy_group_exists(root, "FALLBACK") {
+        yaml_push_sequence(
+            root,
+            "proxy-groups",
+            vec![Value::Mapping(mihomo_fallback_proxy_group(proxy_names))],
+        );
+    }
+    if !mihomo_proxy_group_exists(root, "LOAD-BALANCE") {
+        yaml_push_sequence(
+            root,
+            "proxy-groups",
+            vec![Value::Mapping(mihomo_load_balance_proxy_group(proxy_names))],
+        );
+    }
+    append_groups_to_primary_selector(root, &["MANUAL", "AUTO", "FALLBACK", "LOAD-BALANCE"]);
+}
+
+fn ensure_mihomo_country_load_balance_groups(
+    root: &mut Mapping,
+    node_countries: &HashMap<i64, String>,
+    proxy_names_by_node_id: &HashMap<i64, String>,
+    country_load_min_nodes: usize,
+    country_fallback_min_nodes: usize,
+) {
+    let mut proxies_by_country = HashMap::<String, Vec<String>>::new();
+    for (node_id, proxy_name) in proxy_names_by_node_id {
+        let Some(country_code) = node_countries.get(node_id) else {
+            continue;
+        };
+        let country_code = country_code.trim().to_ascii_uppercase();
+        if country_code.len() != 2 || !country_code.bytes().all(|byte| byte.is_ascii_alphabetic()) {
+            continue;
+        }
+        proxies_by_country
+            .entry(country_code)
+            .or_default()
+            .push(proxy_name.clone());
+    }
+    if proxies_by_country.is_empty() {
+        return;
+    }
+
+    let mut load_proxies_by_group = HashMap::<&'static str, Vec<String>>::new();
+    let mut fallback_proxies_by_group = HashMap::<&'static str, Vec<String>>::new();
+    let mut other_region_proxies = Vec::new();
+    for (country_code, mut proxy_names) in proxies_by_country {
+        proxy_names.sort();
+        proxy_names.dedup();
+        let Some((_, load_name, fallback_name)) = MIHOMO_COUNTRY_GROUPS
+            .iter()
+            .find(|(code, _, _)| *code == country_code)
+        else {
+            other_region_proxies.extend(proxy_names);
+            continue;
+        };
+
+        if proxy_names.len() < country_load_min_nodes {
+            other_region_proxies.extend(proxy_names);
+            continue;
+        }
+
+        load_proxies_by_group.insert(*load_name, proxy_names.clone());
+        if proxy_names.len() >= country_fallback_min_nodes {
+            fallback_proxies_by_group.insert(*fallback_name, proxy_names);
+        }
+    }
+    if !other_region_proxies.is_empty() {
+        other_region_proxies.sort();
+        other_region_proxies.dedup();
+        load_proxies_by_group.insert(MIHOMO_OTHER_COUNTRY_GROUP, other_region_proxies);
+    }
+
+    let ordered_group_names = MIHOMO_COUNTRY_GROUPS
+        .iter()
+        .map(|(_, load_name, fallback_name)| (*load_name, *fallback_name))
+        .chain(std::iter::once((MIHOMO_OTHER_COUNTRY_GROUP, "")));
+    let mut generated_group_names =
+        Vec::with_capacity(load_proxies_by_group.len() + fallback_proxies_by_group.len());
+    for (load_name, fallback_name) in ordered_group_names {
+        let Some(proxy_names) = load_proxies_by_group.remove(load_name) else {
+            continue;
+        };
+        if !mihomo_proxy_group_exists(root, load_name) {
+            yaml_push_sequence(
+                root,
+                "proxy-groups",
+                vec![Value::Mapping(mihomo_country_load_balance_group(
+                    load_name,
+                    &proxy_names,
+                ))],
+            );
+        }
+        generated_group_names.push(load_name);
+        let Some(fallback_proxy_names) = fallback_proxies_by_group.remove(fallback_name) else {
+            continue;
+        };
+        if !mihomo_proxy_group_exists(root, fallback_name) {
+            yaml_push_sequence(
+                root,
+                "proxy-groups",
+                vec![Value::Mapping(mihomo_scoped_fallback_group(
+                    fallback_name,
+                    &fallback_proxy_names,
+                ))],
+            );
+        }
+        generated_group_names.push(fallback_name);
+    }
+    append_groups_to_primary_selector(root, &generated_group_names);
+}
+
+fn mihomo_scoped_fallback_group(name: &str, proxy_names: &[String]) -> Mapping {
+    let mut group = mihomo_health_check_proxy_group(name, "fallback", proxy_names, None);
+    group.insert(
+        Value::String("interval".to_string()),
+        Value::Number(120.into()),
+    );
+    group.insert(
+        Value::String("timeout".to_string()),
+        Value::Number(5000.into()),
+    );
+    group.insert(
+        Value::String("max-failed-times".to_string()),
+        Value::Number(2.into()),
+    );
+    group.insert(
+        Value::String("expected-status".to_string()),
+        Value::String("204".to_string()),
+    );
+    group
+}
+
+fn mihomo_country_load_balance_group(name: &str, proxy_names: &[String]) -> Mapping {
+    let mut group = Mapping::new();
+    group.insert(
+        Value::String("name".to_string()),
+        Value::String(name.to_string()),
+    );
+    group.insert(
+        Value::String("type".to_string()),
+        Value::String("load-balance".to_string()),
+    );
+    group.insert(
+        Value::String("strategy".to_string()),
+        Value::String("consistent-hashing".to_string()),
+    );
+    group.insert(
+        Value::String("proxies".to_string()),
+        Value::Sequence(proxy_names.iter().cloned().map(Value::String).collect()),
+    );
+    group.insert(
+        Value::String("url".to_string()),
+        Value::String(MIHOMO_DEFAULT_DELAY_TEST_URL.to_string()),
+    );
+    group.insert(
+        Value::String("interval".to_string()),
+        Value::Number(300.into()),
+    );
+    group.insert(Value::String("lazy".to_string()), Value::Bool(true));
+    group
+}
+
+fn append_groups_to_primary_selector(root: &mut Mapping, group_names: &[&str]) {
+    let Some(Value::Sequence(groups)) = root.get_mut(Value::String("proxy-groups".to_string()))
+    else {
+        return;
+    };
+    let selector_index = groups
+        .iter()
+        .position(|group| {
+            group.as_mapping().is_some_and(|mapping| {
+                mapping
+                    .get(Value::String("name".to_string()))
+                    .and_then(Value::as_str)
+                    == Some("PROXY")
+            })
+        })
+        .or_else(|| {
+            groups.iter().position(|group| {
+                group.as_mapping().is_some_and(|mapping| {
+                    mapping
+                        .get(Value::String("type".to_string()))
+                        .and_then(Value::as_str)
+                        == Some("select")
+                })
+            })
+        });
+    let Some(mapping) = selector_index
+        .and_then(|index| groups.get_mut(index))
+        .and_then(Value::as_mapping_mut)
+    else {
+        return;
+    };
+    let members = mapping
+        .entry(Value::String("proxies".to_string()))
+        .or_insert_with(|| Value::Sequence(Vec::new()));
+    let Some(members) = members.as_sequence_mut() else {
+        return;
+    };
+    let mut seen = members
+        .iter()
+        .filter_map(Value::as_str)
+        .map(str::to_string)
+        .collect::<HashSet<_>>();
+    let direct_index = members
+        .iter()
+        .position(|member| member.as_str() == Some("DIRECT"))
+        .unwrap_or(members.len());
+    let mut insert_at = direct_index;
+    for group_name in group_names {
+        if seen.insert((*group_name).to_string()) {
+            members.insert(insert_at, Value::String((*group_name).to_string()));
+            insert_at += 1;
+        }
     }
 }
 
@@ -2694,6 +3014,8 @@ fn mihomo_proxy_select_group(proxy_names: &[String]) -> Mapping {
     let mut members = vec![
         Value::String("MANUAL".to_string()),
         Value::String("AUTO".to_string()),
+        Value::String("FALLBACK".to_string()),
+        Value::String("LOAD-BALANCE".to_string()),
         Value::String("DIRECT".to_string()),
     ];
     if proxy_names.is_empty() {
@@ -2755,6 +3077,56 @@ fn mihomo_auto_proxy_group(proxy_names: &[String]) -> Mapping {
         Value::String("interval".to_string()),
         Value::Number(300.into()),
     );
+    group
+}
+
+fn mihomo_fallback_proxy_group(proxy_names: &[String]) -> Mapping {
+    mihomo_health_check_proxy_group("FALLBACK", "fallback", proxy_names, None)
+}
+
+fn mihomo_load_balance_proxy_group(proxy_names: &[String]) -> Mapping {
+    mihomo_health_check_proxy_group(
+        "LOAD-BALANCE",
+        "load-balance",
+        proxy_names,
+        Some("consistent-hashing"),
+    )
+}
+
+fn mihomo_health_check_proxy_group(
+    name: &str,
+    group_type: &str,
+    proxy_names: &[String],
+    strategy: Option<&str>,
+) -> Mapping {
+    let mut group = Mapping::new();
+    group.insert(
+        Value::String("name".to_string()),
+        Value::String(name.to_string()),
+    );
+    group.insert(
+        Value::String("type".to_string()),
+        Value::String(group_type.to_string()),
+    );
+    if let Some(strategy) = strategy {
+        group.insert(
+            Value::String("strategy".to_string()),
+            Value::String(strategy.to_string()),
+        );
+    }
+    group.insert(
+        Value::String("proxies".to_string()),
+        Value::Sequence(proxy_names.iter().cloned().map(Value::String).collect()),
+    );
+    group.insert(
+        Value::String("url".to_string()),
+        Value::String(MIHOMO_DEFAULT_DELAY_TEST_URL.to_string()),
+    );
+    group.insert(
+        Value::String("interval".to_string()),
+        Value::Number(300.into()),
+    );
+    group.insert(Value::String("lazy".to_string()), Value::Bool(true));
     group
 }
 
@@ -3208,6 +3580,10 @@ fn text_response(
         HeaderValue::from_static("no-referrer"),
     );
     response.headers_mut().insert(
+        HeaderName::from_static("x-robots-tag"),
+        HeaderValue::from_static("noindex, nofollow, noarchive"),
+    );
+    response.headers_mut().insert(
         HeaderName::from_static("x-sublinkx-export-mode"),
         HeaderValue::from_static(match mode {
             ExportMode::Strict => "strict",
@@ -3224,7 +3600,7 @@ fn text_response(
 fn content_disposition_value(filename: &str) -> String {
     let ascii_fallback = ascii_filename_fallback(filename);
     let encoded = utf8_percent_encode(filename, NON_ALPHANUMERIC).to_string();
-    format!("inline; filename=\"{ascii_fallback}\"; filename*=UTF-8''{encoded}")
+    format!("attachment; filename=\"{ascii_fallback}\"; filename*=UTF-8''{encoded}")
 }
 
 fn ascii_filename_fallback(filename: &str) -> String {
@@ -3251,12 +3627,15 @@ mod tests {
 
     use super::{
         ExportMode, MIHOMO_DEFAULT_DELAY_TEST_URL, dedupe_mihomo_proxy_names,
-        ensure_mihomo_default_proxy_groups, ensure_mihomo_match_rule,
-        expand_mihomo_include_all_proxy_groups, mihomo_proxy_group_exists, safe_inline_value,
-        safe_line_value, text_response, unique_mihomo_proxy_name,
+        ensure_mihomo_country_load_balance_groups, ensure_mihomo_default_proxy_groups,
+        ensure_mihomo_match_rule, expand_mihomo_include_all_proxy_groups, export_mihomo,
+        export_sing_box, is_xray_supported, mihomo_proxy_group_exists,
+        normalize_sing_box_server_ports, resolve_export_mode, safe_inline_value, safe_line_value,
+        text_response, unique_mihomo_proxy_name,
     };
+    use crate::domain::{node::NodeView, subscription::SubscriptionView};
     use serde_yaml::Value;
-    use std::collections::HashSet;
+    use std::collections::{HashMap, HashSet};
 
     #[test]
     fn rejects_inline_export_delimiters() {
@@ -3267,6 +3646,66 @@ mod tests {
     #[test]
     fn rejects_line_breaks_in_section_values() {
         assert!(safe_line_value("private-key\npeer = injected").is_err());
+    }
+
+    #[test]
+    fn normalizes_mihomo_hysteria2_port_ranges_for_sing_box() {
+        assert_eq!(
+            normalize_sing_box_server_ports("20000-30000, 443, 40000:41000"),
+            Some(vec![
+                "20000:30000".to_string(),
+                "443".to_string(),
+                "40000:41000".to_string()
+            ])
+        );
+        assert_eq!(normalize_sing_box_server_ports("30000-20000"), None);
+        assert_eq!(normalize_sing_box_server_ports("not-a-port"), None);
+    }
+
+    #[test]
+    fn adaptive_client_requests_always_use_best_effort_mode() {
+        assert_eq!(
+            resolve_export_mode(None, Some("strict"), Some("xray")).unwrap(),
+            ExportMode::BestEffort
+        );
+        assert_eq!(
+            resolve_export_mode(Some("xray"), Some("strict"), Some("xray")).unwrap(),
+            ExportMode::Strict
+        );
+        assert_eq!(
+            resolve_export_mode(None, Some("strict"), None).unwrap(),
+            ExportMode::Strict
+        );
+        assert!(resolve_export_mode(None, Some("invalid"), Some("xray")).is_err());
+    }
+
+    #[test]
+    fn v2rayn_uri_bundle_accepts_sing_box_backed_share_protocols() {
+        for protocol in ["tuic", "wireguard", "anytls"] {
+            let node = NodeView {
+                id: 1,
+                name: format!("{protocol} node"),
+                protocol: protocol.to_string(),
+                raw_link: format!("{protocol}://example"),
+                server: "192.0.2.1".to_string(),
+                port: 443,
+                enabled: true,
+                group_id: None,
+                source_type: "manual".to_string(),
+                source_ref: None,
+                upstream_missing: false,
+                fingerprint: format!("fingerprint-{protocol}"),
+                settings: serde_json::json!({}),
+                remark: String::new(),
+                last_latency_ms: None,
+                last_latency_status: None,
+                last_latency_message: None,
+                last_latency_tested_at: None,
+                created_at: String::new(),
+                updated_at: String::new(),
+            };
+            assert!(is_xray_supported(&node), "{protocol} should be exported");
+        }
     }
 
     #[test]
@@ -3293,6 +3732,20 @@ mod tests {
                 .get("referrer-policy")
                 .and_then(|value| value.to_str().ok()),
             Some("no-referrer")
+        );
+        assert_eq!(
+            response
+                .headers()
+                .get(header::CONTENT_DISPOSITION)
+                .and_then(|value| value.to_str().ok()),
+            Some("attachment; filename=\"subscription.txt\"; filename*=UTF-8''subscription%2Etxt")
+        );
+        assert_eq!(
+            response
+                .headers()
+                .get("x-robots-tag")
+                .and_then(|value| value.to_str().ok()),
+            Some("noindex, nofollow, noarchive")
         );
     }
 
@@ -3483,6 +3936,32 @@ proxy-groups:
                 .and_then(Value::as_str),
             Some(MIHOMO_DEFAULT_DELAY_TEST_URL)
         );
+        let fallback_group = groups.get(3).and_then(Value::as_mapping).unwrap();
+        assert_eq!(
+            fallback_group
+                .get(Value::String("name".to_string()))
+                .and_then(Value::as_str),
+            Some("FALLBACK")
+        );
+        assert_eq!(
+            fallback_group
+                .get(Value::String("type".to_string()))
+                .and_then(Value::as_str),
+            Some("fallback")
+        );
+        let load_balance_group = groups.get(4).and_then(Value::as_mapping).unwrap();
+        assert_eq!(
+            load_balance_group
+                .get(Value::String("type".to_string()))
+                .and_then(Value::as_str),
+            Some("load-balance")
+        );
+        assert_eq!(
+            load_balance_group
+                .get(Value::String("strategy".to_string()))
+                .and_then(Value::as_str),
+            Some("consistent-hashing")
+        );
         let proxy_members = proxy_group
             .get(Value::String("proxies".to_string()))
             .and_then(Value::as_sequence)
@@ -3490,13 +3969,333 @@ proxy-groups:
             .iter()
             .map(|member| member.as_str().unwrap().to_string())
             .collect::<Vec<_>>();
-        assert_eq!(proxy_members, vec!["MANUAL", "AUTO", "DIRECT"]);
+        assert_eq!(
+            proxy_members,
+            vec!["MANUAL", "AUTO", "FALLBACK", "LOAD-BALANCE", "DIRECT"]
+        );
 
         let rules = root
             .get(Value::String("rules".to_string()))
             .and_then(Value::as_sequence)
             .unwrap();
         assert_eq!(rules.first().and_then(Value::as_str), Some("MATCH,PROXY"));
+    }
+
+    #[tokio::test]
+    async fn does_not_export_database_node_groups_as_proxy_groups() {
+        let nodes = [1_i64, 2_i64]
+            .into_iter()
+            .map(|id| NodeView {
+                id,
+                name: format!("Grouped-{id}"),
+                protocol: "shadowsocks".to_string(),
+                raw_link: String::new(),
+                server: format!("192.0.2.{id}"),
+                port: 443,
+                enabled: true,
+                group_id: Some(10),
+                source_type: "manual".to_string(),
+                source_ref: None,
+                upstream_missing: false,
+                fingerprint: format!("fingerprint-{id}"),
+                settings: serde_json::json!({
+                    "method": "aes-128-gcm",
+                    "password": "test-password"
+                }),
+                remark: String::new(),
+                last_latency_ms: None,
+                last_latency_status: None,
+                last_latency_message: None,
+                last_latency_tested_at: None,
+                created_at: String::new(),
+                updated_at: String::new(),
+            })
+            .collect::<Vec<_>>();
+        let subscription = SubscriptionView {
+            id: 1,
+            name: "Grouped subscription".to_string(),
+            token: "test-token".to_string(),
+            description: String::new(),
+            default_client: Some("mihomo".to_string()),
+            template_id: None,
+            group_id: None,
+            enabled: true,
+            expires_at: None,
+            status: "active".to_string(),
+            node_group_ids: vec![10],
+            node_ids: vec![1, 2],
+            nodes,
+            created_at: String::new(),
+            updated_at: String::new(),
+        };
+
+        let response = export_mihomo(
+            subscription,
+            ExportMode::Strict,
+            None,
+            "mihomo",
+            &HashMap::new(),
+            2,
+            3,
+        )
+        .unwrap();
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let yaml = String::from_utf8(body.to_vec()).unwrap();
+
+        assert!(!yaml.contains("节点分组·"));
+        assert!(yaml.contains("name: FALLBACK"));
+        assert!(yaml.contains("name: LOAD-BALANCE"));
+    }
+
+    #[tokio::test]
+    async fn sing_box_export_uses_only_supported_root_fields() {
+        let node = NodeView {
+            id: 1,
+            name: "SS node".to_string(),
+            protocol: "shadowsocks".to_string(),
+            raw_link: String::new(),
+            server: "192.0.2.1".to_string(),
+            port: 443,
+            enabled: true,
+            group_id: None,
+            source_type: "manual".to_string(),
+            source_ref: None,
+            upstream_missing: false,
+            fingerprint: "fingerprint-1".to_string(),
+            settings: serde_json::json!({
+                "method": "aes-128-gcm",
+                "password": "test-password"
+            }),
+            remark: String::new(),
+            last_latency_ms: None,
+            last_latency_status: None,
+            last_latency_message: None,
+            last_latency_tested_at: None,
+            created_at: String::new(),
+            updated_at: String::new(),
+        };
+        let subscription = SubscriptionView {
+            id: 1,
+            name: "sing-box subscription".to_string(),
+            token: "test-token".to_string(),
+            description: String::new(),
+            default_client: Some("sing-box".to_string()),
+            template_id: None,
+            group_id: None,
+            enabled: true,
+            expires_at: None,
+            status: "active".to_string(),
+            node_group_ids: Vec::new(),
+            node_ids: vec![1],
+            nodes: vec![node],
+            created_at: String::new(),
+            updated_at: String::new(),
+        };
+
+        let response = export_sing_box(subscription, ExportMode::Strict, None).unwrap();
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let config = serde_json::from_slice::<serde_json::Value>(&body).unwrap();
+        let root = config.as_object().unwrap();
+
+        assert!(!root.contains_key("title"));
+        assert!(!root.contains_key("remarks"));
+        assert!(root.contains_key("outbounds"));
+        assert_eq!(
+            config
+                .pointer("/route/final")
+                .and_then(|value| value.as_str()),
+            Some("select")
+        );
+    }
+
+    #[test]
+    fn creates_country_load_balance_groups_from_verified_node_metadata() {
+        let mut root = serde_yaml::from_str::<Value>(
+            r#"
+proxy-groups:
+  - name: PROXY
+    type: select
+    proxies: [MANUAL, AUTO, DIRECT]
+"#,
+        )
+        .unwrap()
+        .as_mapping()
+        .unwrap()
+        .clone();
+        let countries = HashMap::from([
+            (1_i64, "JP".to_string()),
+            (2_i64, "JP".to_string()),
+            (3_i64, "JP".to_string()),
+            (4_i64, "US".to_string()),
+            (5_i64, "US".to_string()),
+            (6_i64, "HK".to_string()),
+            (7_i64, "GB".to_string()),
+            (8_i64, "DE".to_string()),
+        ]);
+        let proxy_names = HashMap::from([
+            (1_i64, "JP-01".to_string()),
+            (2_i64, "JP-02".to_string()),
+            (3_i64, "JP-03".to_string()),
+            (4_i64, "US-01".to_string()),
+            (5_i64, "US-02".to_string()),
+            (6_i64, "HK-01".to_string()),
+            (7_i64, "GB-01".to_string()),
+            (8_i64, "DE-01".to_string()),
+            (9_i64, "UNKNOWN-01".to_string()),
+        ]);
+
+        ensure_mihomo_country_load_balance_groups(&mut root, &countries, &proxy_names, 2, 3);
+
+        let groups = root
+            .get(Value::String("proxy-groups".to_string()))
+            .and_then(Value::as_sequence)
+            .unwrap();
+        assert_eq!(groups.len(), 5);
+        let japan = groups
+            .iter()
+            .find_map(|group| {
+                let mapping = group.as_mapping()?;
+                (mapping
+                    .get(Value::String("name".to_string()))
+                    .and_then(Value::as_str)
+                    == Some("日本负载"))
+                .then_some(mapping)
+            })
+            .unwrap();
+        assert_eq!(
+            japan
+                .get(Value::String("type".to_string()))
+                .and_then(Value::as_str),
+            Some("load-balance")
+        );
+        assert_eq!(
+            japan
+                .get(Value::String("strategy".to_string()))
+                .and_then(Value::as_str),
+            Some("consistent-hashing")
+        );
+        let japan_fallback = groups
+            .iter()
+            .find_map(|group| {
+                let mapping = group.as_mapping()?;
+                (mapping
+                    .get(Value::String("name".to_string()))
+                    .and_then(Value::as_str)
+                    == Some("日本故障转移"))
+                .then_some(mapping)
+            })
+            .unwrap();
+        assert_eq!(
+            japan_fallback
+                .get(Value::String("type".to_string()))
+                .and_then(Value::as_str),
+            Some("fallback")
+        );
+        assert_eq!(
+            japan_fallback
+                .get(Value::String("proxies".to_string()))
+                .and_then(Value::as_sequence)
+                .unwrap()
+                .iter()
+                .filter_map(Value::as_str)
+                .collect::<Vec<_>>(),
+            vec!["JP-01", "JP-02", "JP-03"]
+        );
+        assert_eq!(
+            japan_fallback
+                .get(Value::String("max-failed-times".to_string()))
+                .and_then(Value::as_i64),
+            Some(2)
+        );
+        let other_region_members = groups
+            .iter()
+            .find_map(|group| {
+                let mapping = group.as_mapping()?;
+                (mapping
+                    .get(Value::String("name".to_string()))
+                    .and_then(Value::as_str)
+                    == Some("其他地区负载"))
+                .then(|| {
+                    mapping
+                        .get(Value::String("proxies".to_string()))
+                        .and_then(Value::as_sequence)
+                        .unwrap()
+                        .iter()
+                        .filter_map(Value::as_str)
+                        .collect::<Vec<_>>()
+                })
+            })
+            .unwrap();
+        assert_eq!(other_region_members, vec!["DE-01", "GB-01", "HK-01"]);
+        for absent_group in [
+            "香港负载",
+            "香港故障转移",
+            "美国故障转移",
+            "其他地区故障转移",
+        ] {
+            assert!(!mihomo_proxy_group_exists(&root, absent_group));
+        }
+        let selector_members = groups[0]
+            .as_mapping()
+            .and_then(|mapping| mapping.get(Value::String("proxies".to_string())))
+            .and_then(Value::as_sequence)
+            .unwrap()
+            .iter()
+            .filter_map(Value::as_str)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            selector_members,
+            vec![
+                "MANUAL",
+                "AUTO",
+                "日本负载",
+                "日本故障转移",
+                "美国负载",
+                "其他地区负载",
+                "DIRECT"
+            ]
+        );
+    }
+
+    #[test]
+    fn honors_configured_country_group_thresholds() {
+        let mut root = serde_yaml::from_str::<Value>(
+            r#"
+proxy-groups:
+  - name: PROXY
+    type: select
+    proxies: [MANUAL, AUTO, DIRECT]
+"#,
+        )
+        .unwrap()
+        .as_mapping()
+        .unwrap()
+        .clone();
+        let countries = HashMap::from([
+            (1_i64, "JP".to_string()),
+            (2_i64, "JP".to_string()),
+            (3_i64, "JP".to_string()),
+            (4_i64, "US".to_string()),
+            (5_i64, "US".to_string()),
+        ]);
+        let proxy_names = HashMap::from([
+            (1_i64, "JP-01".to_string()),
+            (2_i64, "JP-02".to_string()),
+            (3_i64, "JP-03".to_string()),
+            (4_i64, "US-01".to_string()),
+            (5_i64, "US-02".to_string()),
+        ]);
+
+        ensure_mihomo_country_load_balance_groups(&mut root, &countries, &proxy_names, 4, 5);
+
+        assert!(!mihomo_proxy_group_exists(&root, "日本负载"));
+        assert!(!mihomo_proxy_group_exists(&root, "日本故障转移"));
+        assert!(!mihomo_proxy_group_exists(&root, "美国负载"));
+        assert!(mihomo_proxy_group_exists(&root, "其他地区负载"));
     }
 
     #[test]
@@ -3509,11 +4308,24 @@ proxy-groups:
     proxies:
       - DIRECT
 rules:
+  - DOMAIN-SUFFIX,example.com,Custom
+  - IP-CIDR,198.51.100.0/24,Custom,no-resolve
+  - DST-PORT,8443,Custom
+  - NETWORK,tcp,Custom
+  - PROCESS-NAME,example-client,Custom
+  - AND,((DOMAIN,example.com),(NETWORK,tcp)),Custom
+  - OR,((DST-PORT,80),(DST-PORT,443)),Custom
+  - NOT,((DOMAIN,blocked.example)),Custom
   - MATCH,Custom
 "#,
         )
         .unwrap();
         let mut root = value.as_mapping().unwrap().clone();
+        let original_rules = root
+            .get(Value::String("rules".to_string()))
+            .and_then(Value::as_sequence)
+            .unwrap()
+            .clone();
 
         ensure_mihomo_default_proxy_groups(&mut root, &["Proxy".to_string()]);
         ensure_mihomo_match_rule(&mut root);
@@ -3522,8 +4334,7 @@ rules:
             .get(Value::String("rules".to_string()))
             .and_then(Value::as_sequence)
             .unwrap();
-        assert_eq!(rules.len(), 1);
-        assert_eq!(rules.first().and_then(Value::as_str), Some("MATCH,Custom"));
+        assert_eq!(rules, &original_rules);
     }
 
     #[test]
@@ -3543,10 +4354,82 @@ rules:
     #[test]
     fn built_in_mihomo_template_prefers_manual_and_has_common_site_rules() {
         let template = crate::services::template_seed_service::MIHOMO_TEMPLATE;
+        let parsed = serde_yaml::from_str::<Value>(template).unwrap();
 
-        assert!(template.contains("      - MANUAL\n      - AUTO\n      - DIRECT"));
+        assert!(parsed.as_mapping().is_some());
+        let root = parsed.as_mapping().unwrap();
+        let hosts = root
+            .get(Value::String("hosts".to_string()))
+            .and_then(Value::as_mapping)
+            .unwrap();
+        let dns = root
+            .get(Value::String("dns".to_string()))
+            .and_then(Value::as_mapping)
+            .unwrap();
+        let nameserver_policy = dns
+            .get(Value::String("nameserver-policy".to_string()))
+            .and_then(Value::as_mapping)
+            .unwrap();
+
+        assert!(hosts.is_empty());
+        assert_eq!(
+            dns.get(Value::String("use-hosts".to_string()))
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            dns.get(Value::String("ipv6".to_string()))
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            dns.get(Value::String("respect-rules".to_string()))
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+        assert!(nameserver_policy.contains_key(Value::String("rule-set:cn_domain".to_string())));
+        assert!(
+            nameserver_policy
+                .contains_key(Value::String("rule-set:geolocation-not-cn".to_string()))
+        );
+        let nameservers = dns
+            .get(Value::String("nameserver".to_string()))
+            .and_then(Value::as_sequence)
+            .unwrap();
+        assert_eq!(
+            nameservers.first().and_then(Value::as_str),
+            Some("https://1.1.1.1/dns-query#PROXY")
+        );
+        assert!(template.contains("  proxy-server-nameserver:"));
+        let proxy_server_nameservers = dns
+            .get(Value::String("proxy-server-nameserver".to_string()))
+            .and_then(Value::as_sequence)
+            .unwrap();
+        assert_eq!(proxy_server_nameservers.len(), 2);
+        assert!(proxy_server_nameservers.iter().all(|server| {
+            matches!(
+                server.as_str(),
+                Some("https://dns.alidns.com/dns-query" | "https://doh.pub/dns-query")
+            )
+        }));
+        assert!(template.contains("    - rule-set:private_domain\n    - \"+.lan\""));
+        assert!(template.contains(
+            "      - MANUAL\n      - AUTO\n      - FALLBACK\n      - LOAD-BALANCE\n      - DIRECT"
+        ));
+        assert!(template.contains("  - name: STREAMING"));
+        assert!(template.contains("  - name: GOOGLE"));
+        assert!(template.contains("  - name: DOMESTIC"));
+        assert!(template.contains("  - name: DOWNLOAD-BLOCK"));
         assert!(template.contains("DOMAIN-SUFFIX,chatgpt.com,AI"));
         assert!(template.contains("DOMAIN-SUFFIX,github.com,PROXY"));
         assert!(template.contains("DOMAIN-SUFFIX,steamcommunity.com,GAME"));
+        assert!(template.contains("RULE-SET,google_domain,GOOGLE"));
+        assert!(template.contains("RULE-SET,cn_domain,DOMESTIC"));
+        assert!(template.contains("PROCESS-NAME-WILDCARD,*torrent*,DOWNLOAD-BLOCK"));
+        assert!(template.contains("RULE-SET,tracker_domain,DOWNLOAD-BLOCK"));
+        assert!(template.contains("DST-PORT,6881-6999,DOWNLOAD-BLOCK"));
+        assert!(!template.contains("  - name: YOUTUBE"));
+        assert!(!template.contains("  - name: NETFLIX"));
+        assert!(!template.contains("  - name: MEDIA"));
     }
 }
