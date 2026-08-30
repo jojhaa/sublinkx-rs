@@ -1,166 +1,139 @@
-# sublinkx-rs
+# SublinkX-RS
 
-[English](README.en.md)
+[English](README.en.md) | [更新日志](CHANGELOG.md) | [部署文档](docs/docker.md) | [最新版本](https://github.com/jojhaa/sublinkx-rs/releases/latest)
 
-`sublinkx-rs` 是一个使用 Rust + Vue 3 构建的多协议订阅管理控制台。
+> 一个负责把订阅管好的后台，不负责把节点变快。速度交给线路，秩序交给它。
 
-本项目基于 [gooaclok819/sublinkX](https://github.com/gooaclok819/sublinkX) 二次修改、重构和扩展。
+SublinkX-RS 是一个由个人开发者维护的自托管节点与订阅管理工具。它把上游同步、节点整理、模板编排、订阅分发、链路测试和出口 IP 探测放进同一个管理台，适合部署在自己的 Linux 服务器上长期运行。
 
-## 项目来源与致谢
+后端使用 Rust、Axum、SQLx 和 Tokio，前端使用 Vue 3。开发者是个二次元，所以这里偶尔会出现一点轻松文案；但数据库迁移、鉴权和备份不会依靠友情、热血或突然觉醒。
 
-本项目基于 [gooaclok819/sublinkX](https://github.com/gooaclok819/sublinkX) 二次开发。感谢原项目提供的订阅分发思路和实现参考。
+SublinkX-RS 不是代理客户端，也不出售或生成节点。你需要使用自己合法持有的节点与上游订阅，毕竟 Rust 再快也不能无中生有。
 
-说明：
+当前稳定版本以 [GitHub Releases](https://github.com/jojhaa/sublinkx-rs/releases/latest) 为准。
 
-- 本仓库不是原项目官方仓库。
-- 当前项目在原项目基础上进行了 Rust + Vue 3 方向的重构。
-- 本项目采用 AGPL-3.0-or-later，不允许闭源二次分发或闭源网络服务版本；原项目为 MIT License，二次分发时请保留原项目版权和许可证声明。
+## 先看它能做什么
 
-## 主要特性
+- 把多个上游订阅和手动节点统一收进后台，不再维护“最终版2”和“这次真最终版”。
+- 上游定时同步，参数变化原地更新，消失的节点先暂停而不是直接删除。
+- 一个订阅按客户端自动返回 Mihomo、sing-box 或 v2rayN/Xray 格式，也能固定目标格式。
+- 用真实 Mihomo 链路测延迟、成功率和抖动，不是端口能连上就播放胜利结算画面。
+- 批量探测公网出口 IPv4/IPv6，并可接入外部国家情报服务生成地区策略组。
+- 管理系统模板、自定义模板和上游原始模板，保留自己写分流与 DNS 的自由。
 
-- Rust 后端：基于 Axum、SQLx、Tokio，适合部署到 Linux 服务器。
-- Vue 3 控制台：管理节点、节点分组、订阅、订阅分组、模板和系统设置。
-- 多端 UI：桌面、平板、移动端均可用，节点和订阅支持详细/简约两种展示模式。
-- 多协议导入：支持手动多行导入、整段 Base64 自动解码、上游订阅链接导入、Mihomo YAML 节点提取。
-- 多客户端导出：支持 Mihomo/Clash Meta、Clash、Xray、Surge、sing-box、Quantumult X、Loon、Surfboard、Mellow、ClashR、SS SIP002/SIP008、Trojan URI 等目标。
-- 上游模板透传：可以保存上游 Mihomo 模板，适合不希望复杂分流规则被二次转换破坏的订阅。
-- 模板系统：支持客户端模板管理、Clash/Mihomo 分流模板，以及多个客户端方向的渲染器。
-- 转换保真检查：对比上游 YAML proxy 字段和二次导出字段，帮助发现字段丢失。
-- 真实链路测速：通过 Mihomo 内核测试真实代理链路延迟，不是 TCP ping。
-- 节点 IP 探测：通过单个 Mihomo 会话逐节点识别公网出口 IP，保存 IPv4/IPv6 和探测状态，国家、ASN 与风险信息交由独立 IP 检测项目处理。
-- 延迟状态持久化：保存历史延迟、最后测速时间和不可用状态。
-- 订阅生命周期：支持启用、停用、到期时间、快捷续期、节点筛选、分组和自动识别客户端链接。
-- 首次登录安全：默认账号 `admin / admin123456`，首次登录后必须修改用户名和密码，密码使用 Argon2 哈希保存。
-- Docker 部署：提供单一 `docker-compose.yml`，默认拉取 Docker Hub 镜像运行，数据映射到本地目录。
-- 数据库：默认 SQLite，支持切换到 MySQL 8.x，可使用容器 MySQL、本机 MySQL 或外部 MySQL。
+## 用 Docker 跑起来
 
-## 与原项目的主要区别
+下面是 Linux 生产服务器的最新版本部署。命令会自动解析 GitHub 最新 Release，再使用对应的源码标签和 Docker 镜像版本，不需要在 README 里手工维护版本号。
 
-| 方向 | 原项目 | sublinkx-rs |
-| --- | --- | --- |
-| 技术栈 | 原项目实现 | 后端重构为 Rust/Axum，前端重构为 Vue 3 |
-| 管理后台 | 以订阅分发为核心 | 增加节点、订阅、模板、分组、系统设置、语言切换和多端 UI |
-| 节点导入 | 基础导入能力 | 增加 Base64 批量导入、上游订阅导入、Mihomo YAML 节点提取 |
-| 上游模板 | 偏转换输出 | 支持保存上游 Mihomo 模板并透传导出 |
-| 客户端导出 | 原有适配思路 | 扩展 Mihomo、Clash、Xray、Surge、sing-box、Quantumult X 等多客户端 |
-| 分流模板 | 基础模板能力 | 增加 Clash/Mihomo 分流模板和多客户端模板管理 |
-| 转换质量 | 依赖人工验证 | 增加字段保真检查和协议 x 客户端映射测试方向 |
-| 延迟测试 | 非核心能力 | 集成 Mihomo 做真实链路测速，并保存结果 |
-| 订阅管理 | 基础分发 | 增加启用/禁用、到期时间、分组、节点筛选和自动识别链接 |
-| 部署 | 手动部署为主 | 增加 Docker Hub 镜像、Compose、本地数据映射、固定 Docker 网段 |
-
-## 本地运行
-
-本地运行需要先安装：
-
-- Rust stable
-- Node.js 20+ 和 npm
-
-Windows：
-
-```powershell
-.\scripts\dev.ps1
-```
-
-也可以使用 CMD 包装脚本：
-
-```cmd
-scripts\dev.cmd
-```
-
-Linux：
+### 1. 获取部署配置
 
 ```bash
-chmod +x scripts/dev.sh
-./scripts/dev.sh
-```
+LATEST_URL="$(curl -fsSL -o /dev/null -w '%{url_effective}' \
+  https://github.com/jojhaa/sublinkx-rs/releases/latest)"
+LATEST_TAG="${LATEST_URL##*/}"
+SUBLINKX_VERSION="${LATEST_TAG#v}"
+test -n "$SUBLINKX_VERSION"
 
-macOS：
-
-```bash
-chmod +x scripts/dev.sh
-./scripts/dev.sh
-```
-
-macOS 支持本项目的本地开发运行。需要提前安装 Rust、Node.js 和 npm。
-
-脚本会同时启动：
-
-```text
-后端：http://127.0.0.1:8080
-前端：http://127.0.0.1:5173
-```
-
-默认使用本地 SQLite：
-
-```text
-backend/data/app.db
-```
-
-默认首次登录：
-
-```text
-admin / admin123456
-```
-
-可通过环境变量覆盖端口和数据库：
-
-```bash
-BACKEND_PORT=18080 FRONTEND_PORT=15173 DATABASE_URL=sqlite://data/dev.db ./scripts/dev.sh
-```
-
-Windows PowerShell：
-
-```powershell
-.\scripts\dev.ps1 -BackendPort 18080 -FrontendPort 15173 -DatabaseUrl "sqlite://data/dev.db"
-```
-
-## Docker 快速部署
-
-默认使用已发布镜像：
-
-```text
-docker.io/jojhaa/sublinkx-rs-backend:latest
-docker.io/jojhaa/sublinkx-rs-frontend:latest
-```
-
-先拉取部署配置：
-
-```bash
-git clone https://github.com/jojhaa/sublinkx-rs.git
+git clone --branch "$LATEST_TAG" --depth 1 https://github.com/jojhaa/sublinkx-rs.git
 cd sublinkx-rs
 cp .env.example .env
+
+sed -i "s|^BACKEND_IMAGE=.*|BACKEND_IMAGE=docker.io/jojhaa/sublinkx-rs-backend:${SUBLINKX_VERSION}|" .env
+sed -i "s|^FRONTEND_IMAGE=.*|FRONTEND_IMAGE=docker.io/jojhaa/sublinkx-rs-frontend:${SUBLINKX_VERSION}|" .env
+printf '准备部署 SublinkX-RS %s\n' "$SUBLINKX_VERSION"
 ```
 
-生产部署前至少修改 `.env` 中的密钥：
+### 2. 修改 `.env`
+
+设置 JWT 密钥和首次管理员凭据：
 
 ```env
-JWT_SECRET=请改成一串足够长的随机密钥
+JWT_SECRET=replace_with_a_random_secret_of_at_least_32_characters
+BOOTSTRAP_ADMIN_USERNAME=replace_with_your_admin_username
+BOOTSTRAP_ADMIN_PASSWORD=replace_with_a_strong_initial_password
 ```
 
-启动：
+生成随机 JWT 密钥：
 
 ```bash
+openssl rand -base64 48
+```
+
+不要使用示例值、默认账号或短密码。互联网发现弱密码的速度，通常比你泡好一杯茶更快。
+
+### 3. 校验并启动
+
+```bash
+docker compose config --quiet
+docker compose pull
 docker compose up -d
+docker compose ps
+curl -fsS http://127.0.0.1:3000/healthz
 ```
 
-访问：
+默认访问 `http://服务器IP:3000`。生产环境建议启用 HTTPS，外层 Nginx、Caddy 或面板反向代理统一转发到 `127.0.0.1:3000`，不要直接转发后端 `8080`。
 
-```text
-http://服务器IP:3000
-```
+更完整的 SQLite、MySQL、网段、反向代理和数据目录配置见 [Docker 部署文档](docs/docker.md)。
 
-默认首次登录：
+## 功能地图
 
-```text
-admin / admin123456
-```
+| 模块 | 主要能力 |
+| --- | --- |
+| 节点管理 | 多行导入、Base64 解码、分组、状态筛选、批量操作和延迟状态 |
+| 上游订阅 | 手动与定时同步、同名参数覆盖、缺失节点暂停、按上游名称分组 |
+| 订阅管理 | 固定节点、跟随分组、到期与续期、二维码、Token 轮换和客户端识别 |
+| 模板管理 | 系统模板、自定义模板、上游 Mihomo 模板和批量管理 |
+| 链路测试 | 1、3、5 轮实时测试，统计最低、平均、最高延迟、抖动和成功率 |
+| 出口探测 | 批量获取公网 IPv4/IPv6，支持定时执行和上游同步后自动排队 |
+| 系统设置 | Mihomo 内核、并发、缓存、限流、探测周期和国家策略门槛 |
 
-首次登录后系统会强制修改用户名和密码。
+## 支持范围
 
-## 数据目录
+### 上游导入
 
-Docker 默认把运行数据映射到本地：
+Mihomo/Clash YAML 当前覆盖以下协议：
+
+| 协议 | 导入 |
+| --- | :---: |
+| Shadowsocks | 支持 |
+| VMess / VLESS | 支持 |
+| Trojan | 支持 |
+| Hysteria2 | 支持 |
+| TUIC | 支持 |
+| WireGuard | 支持 |
+| AnyTLS | 支持 |
+
+同时兼容 Clash Provider `payload`、SIP008 Shadowsocks JSON、UTF-8 BOM 和双层 Base64。未知协议或字段不完整的节点会进入失败明细，不会假装一切正常。
+
+### 订阅输出
+
+| 客户端家族 | 输出方式 |
+| --- | --- |
+| Mihomo / Clash | YAML 配置与模板编排 |
+| sing-box | JSON 配置 |
+| v2rayN / Xray | 多协议 URI Bundle |
+| Surge | Surge 配置 |
+| 其他客户端 | 通过内置或自定义模板输出 |
+
+完整支持情况见 [客户端兼容矩阵](docs/client-compatibility.md) 和 [协议与客户端矩阵](docs/protocol-client-matrix.md)。客户端如果不肯好好报告 User-Agent，可以在订阅链接中固定 `target`，不和它猜谜。
+
+## Mihomo 在这里做什么
+
+Mihomo 不只是被下载后放在目录里当吉祥物，它负责：
+
+- 节点真实链路延迟测试。
+- 多轮链路测试和实时结果输出。
+- 节点公网出口 IP 探测。
+- 手动选择、最低延迟、故障转移和负载策略组。
+- 按已验证国家信息生成地区策略组。
+
+后台测速、手动测速、链路测试和 IP 探测共用任务锁，避免一激动拉起一排 Mihomo 进程把服务器围住。管理员可以在“系统设置”中检测、下载或指定内核。
+
+出口 IP 探测只访问固定的 [ipify](https://www.ipify.org/) 双栈接口，不接受任意测试 URL。目标服务只能看到节点出口 IP，不会收到节点链接、协议密码、订阅正文或管理员凭据。
+
+## 数据与升级
+
+默认使用 SQLite，数据保存在：
 
 ```text
 docker-data/
@@ -170,194 +143,102 @@ docker-data/
     mihomo
 ```
 
-可以在 `.env` 中改成绝对路径：
+也可以切换到 MySQL 8.x，具体配置见 [Docker 部署文档](docs/docker.md)。
 
-```env
-BACKEND_DATA_DIR=/opt/sublinkx-rs/data
-MIHOMO_CORE_DIR=/opt/sublinkx-rs/mihomo
-```
-
-Windows 示例：
-
-```env
-BACKEND_DATA_DIR=D:/sublinkx-data/backend
-MIHOMO_CORE_DIR=D:/sublinkx-data/mihomo
-```
-
-## 数据库配置
-
-默认使用 SQLite：
-
-```env
-DATABASE_URL=sqlite:///app/data/app.db
-```
-
-如果 Linux 服务器上 Docker bind mount 写入较慢，或者节点数量较多，建议使用 MySQL。
-
-使用 Compose 内置 MySQL 容器：
-
-```env
-COMPOSE_PROFILES=mysql
-DATABASE_URL=mysql://sublinkx:sublinkx_password@mysql:3306/sublinkx
-MYSQL_IMAGE=mysql:8.4
-MYSQL_DATABASE=sublinkx
-MYSQL_USER=sublinkx
-MYSQL_PASSWORD=请改成强密码
-MYSQL_ROOT_PASSWORD=请改成强密码
-MYSQL_DATA_DIR=./docker-data/mysql
-```
-
-使用宿主机或外部已有 MySQL：
-
-```env
-DATABASE_URL=mysql://sublinkx:请改成强密码@host.docker.internal:3306/sublinkx
-```
-
-Linux Docker 中 `host.docker.internal` 已通过 Compose 映射到宿主机网关。请确认 MySQL 用户允许 Docker 网段访问，并且数据库已创建。
-
-更完整示例见：[Docker 部署文档](docs/docker.md)。
-
-## 反向代理说明
-
-默认 Compose 只把前端容器暴露到宿主机 `3000` 端口，后端 `8080` 只在 Docker 内部网络访问。
-
-因此宝塔、1Panel、Nginx Proxy Manager、Caddy 或外层 Nginx 反代时，统一转发到：
-
-```text
-http://127.0.0.1:3000
-```
-
-不要直接转发到 `127.0.0.1:8080`，否则默认部署会出现 `502`。
-
-前端容器内部 Nginx 会继续代理：
-
-```text
-/api/     -> backend:8080/api/
-/s/       -> backend:8080/s/
-/healthz  -> backend:8080/healthz
-```
-
-如果外层 Nginx 单独写 `/api/`，仍然应该转发到 `3000`，并禁用缓存：
-
-```nginx
-location ^~ /api/ {
-    proxy_pass http://127.0.0.1:3000;
-
-    proxy_set_header Host $host;
-    proxy_set_header X-Real-IP $remote_addr;
-    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-    proxy_set_header X-Forwarded-Proto $scheme;
-
-    proxy_cache off;
-    proxy_no_cache 1;
-    proxy_cache_bypass 1;
-
-    add_header Cache-Control "no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0" always;
-    add_header Pragma "no-cache" always;
-    add_header Expires "0" always;
-}
-```
-
-## 固定 Docker 网段
-
-默认网段：
-
-```env
-SUBLINKX_DOCKER_SUBNET=172.31.88.0/24
-```
-
-如果和现有 Docker、VPN 或局域网冲突，可以修改 `.env`：
-
-```env
-SUBLINKX_DOCKER_SUBNET=172.30.88.0/24
-```
-
-修改后重建网络：
+升级前请备份 `.env`、数据库和数据挂载目录。正式挑战迁移 Boss 之前，先留一个能读档的存档点。
 
 ```bash
-docker compose down
+docker compose config --quiet
+docker compose pull
 docker compose up -d
-```
-
-## 常用 Docker 命令
-
-```bash
 docker compose ps
-docker compose logs -f
-docker compose restart
-docker compose down
-docker compose pull && docker compose up -d
 ```
 
-## Mihomo 内核
+不要使用 `docker compose down -v` 更新服务。这个 `-v` 很短，删除数据卷后的故事可能很长。
 
-真实链路测速依赖 Mihomo/Clash Meta 内核。
+## 额外项目：国家情报服务
 
-Docker 部署时默认目录：
+SublinkX-RS 本体只负责获取真实出口 IP，不内置 GeoIP、ASN 或风险数据库。
 
-```text
-docker-data/mihomo/
-```
+`ip-intelligence-rs` 是另一个独立项目，不包含在 SublinkX-RS 仓库、Docker 镜像或默认 Compose 中，也不会随着 SublinkX-RS 自动安装。只有需要国家、ASN 或风险情报时，才需要另外获取、部署和维护它。
 
-本地开发时默认目录：
-
-```text
-backend/mihomo/
-```
-
-可以在后台“系统设置”页面检测并下载当前服务器系统对应的官方 MetaCubeX/mihomo 内核，也可以指定自定义内核路径。
-
-“IP 探测”页面同样依赖 Mihomo。探测目标固定为 [ipify 双栈 JSON 接口](https://www.ipify.org/)，不接受任意 URL；每次探测会让所选节点的出口 IP 访问该第三方服务，但不会向其发送节点协议、密码或订阅内容。
-
-“系统设置”可以启用定时出口 IP 探测，周期范围为 15 分钟到 7 天；定时任务默认关闭。上游订阅导入或同步成功后默认会把该上游当前启用且未标记缺失的节点加入异步探测队列，不阻塞导入响应；该行为也可以单独关闭。国家检测卡片会显示 `ip-intelligence-rs` 的启用状态、服务地址和来源键，但不会返回 Token；管理员可以单独控制出口 IP 成功后的自动国家检测，以及 5-1440 分钟的补查周期。自动国家检测默认开启，补查周期默认 5 分钟。
-
-系统设置还提供链路测试默认目标、测试轮数和延迟回写开关，公开订阅渲染缓存时间与单 IP/全局访问限流，以及 Mihomo 国家负载和故障转移的最少节点门槛。JWT、数据库连接、Cookie、可信代理和 `ip-intelligence-rs` Token 等安全配置仍只能通过服务端环境变量修改；登录封禁、SSRF 固定目标、导入数量和下载体积上限不开放在线修改。每条上游订阅的同步周期继续在“上游订阅”页面单独管理。
-
-自动探测与后台测速、手动测速和手动 IP 探测共用 Mihomo 任务锁。待探测节点在当前进程内去重，并按每批最多 200 个执行；任务冲突或被自动任务停止操作取消时会重新排队。进程重启会丢失尚未执行的内存队列，但下一次上游同步或定时全量扫描会重新补入。
-
-SublinkX-RS 只负责获得并保存节点出口 IP，不内置国家、ASN 或风险数据库。外部 IP 检测项目如需回填国家信息，可调用受认证的 `PUT /api/v1/node-ip-probes/{id}/country`；请求中的 IP 必须与节点最新探测 IP 完全一致，避免写入过期归属。
-
-也可以直接对接独立部署的 `ip-intelligence-rs`。SublinkX 只提交节点目标标识和通过 Mihomo 实际测得的公网出口 IP，不提交代理链接、密码、订阅内容或管理员凭据：
+额外项目部署完成后，可以通过以下环境变量与 SublinkX-RS 对接：
 
 ```env
 IP_INTELLIGENCE_ENABLED=true
 IP_INTELLIGENCE_BASE_URL=http://ip-intelligence-api:8090/api/v1
-IP_INTELLIGENCE_API_TOKEN=replace_with_the_same_32_plus_character_api_token
-IP_INTELLIGENCE_SOURCE_KEY=sublinkx-rs-production
+IP_INTELLIGENCE_API_TOKEN=replace_with_the_shared_api_token
+IP_INTELLIGENCE_SOURCE_KEY=replace_with_a_unique_source_key
 ```
 
-如果两个项目已经加入同一个 Docker 网络，请为 `ip-intelligence-rs` 的 API 容器在该网络上设置唯一别名 `ip-intelligence-api`。不要直接使用 `backend`：两个 Compose 项目都包含这个服务名，共享网络中的 DNS 解析会产生冲突。情报服务 Compose 的 API 服务可使用以下网络配置：
+两个独立项目位于同一 Docker 网络时，应给情报 API 设置唯一别名，例如 `ip-intelligence-api`。不要复用 `backend`，不同 Compose 项目的同名服务会让 Docker DNS 开始左右为难。
 
-```yaml
-services:
-  backend:
-    networks:
-      shared:
-        aliases:
-          - ip-intelligence-api
+情报服务不可用不会覆盖已取得的出口 IP，也不会接收到代理节点认证信息。它负责认 IP，不负责翻你的订阅家底。
 
-networks:
-  shared:
-    external: true
-    name: your_shared_network
+## 安全边界
+
+- 登录密码使用 Argon2 哈希，生产环境必须配置独立 JWT 密钥和首次管理员凭据。
+- Web 登录使用 HttpOnly Cookie、CSRF 校验和服务端安全退出。
+- 上游下载限制目标地址、响应体和节点数量，阻止内网地址及 DNS rebinding 类 SSRF。
+- 公开订阅提供缓存、单 IP/全局限流、日志脱敏和禁止搜索引擎索引。
+- JWT、数据库连接、Cookie、可信代理和情报服务 Token 只通过服务端环境变量配置。
+
+公开反馈问题时，请先删除订阅 URL、Token、密码、私钥、节点地址和生产日志中的个人信息。Bug 可以公开，家底不用一起公开。
+
+## 本地开发
+
+需要 Rust stable、Node.js 20+ 和 npm。
+
+Windows 使用 PowerShell 7：
+
+```powershell
+.\scripts\dev.ps1
 ```
 
-SublinkX 后端容器也必须加入同一个 `your_shared_network`。容器之间使用内部端口 `8090`，不要求把情报 API 端口发布到公网。`IP_INTELLIGENCE_API_TOKEN` 必须与情报服务的 `API_AUTH_TOKEN` 完全一致。
+Linux 或 macOS：
 
-每个部署必须使用独立的 `IP_INTELLIGENCE_SOURCE_KEY`。情报服务返回新鲜国家代码后，Mihomo 导出会自动生成 `COUNTRY-XX` 一致性哈希负载组；未识别节点仍保留在原有手动和自动策略组中。情报服务不可用不会把出口 IP 探测结果改成失败。
+```bash
+chmod +x scripts/dev.sh
+./scripts/dev.sh
+```
+
+默认开发地址：
+
+```text
+Backend  http://127.0.0.1:8080
+Frontend http://127.0.0.1:5173
+SQLite   backend/data/app.db
+```
+
+## 遇到问题
+
+提交 [Issue](https://github.com/jojhaa/sublinkx-rs/issues) 时，建议附上：
+
+- SublinkX-RS 版本和部署方式。
+- 操作系统、CPU 架构和数据库类型。
+- 可以稳定复现的步骤。
+- 已脱敏的错误日志或截图。
+- 预期结果与实际结果。
+
+这是个人维护项目，回复速度偶尔会受到现实副本和 Bug Boss 的影响，但能复现的问题都会认真看。
+
+## 关于项目和开发者
+
+开发者喜欢 Rust、Vue，也喜欢二次元。目标不是把控制台做成魔法阵，而是让复杂的订阅管理少一点重复劳动，多一点可控和安心。
+
+项目从 [gooaclok819/sublinkX](https://github.com/gooaclok819/sublinkX) 的订阅分发思路出发，后来逐步重构成 Rust 后端和 Vue 3 前端。当前仓库不是原项目官方仓库，感谢原作者和相关开源项目维护者打下的基础。
 
 ## 文档
 
 - [更新日志](CHANGELOG.md)
-- [文档索引](docs/README.md)
 - [Docker 部署](docs/docker.md)
 - [客户端兼容矩阵](docs/client-compatibility.md)
-- [协议 x 客户端矩阵](docs/protocol-client-matrix.md)
+- [协议与客户端矩阵](docs/protocol-client-matrix.md)
 - [客户端目标注册表](docs/client-target-registry.md)
-- [Clash 分流模板说明](docs/clash-routing-template.md)
+- [Clash/Mihomo 分流模板说明](docs/clash-routing-template.md)
 
-## License
+## 许可证
 
-本项目使用 [AGPL-3.0-or-later](LICENSE)，不允许闭源二次分发、闭源衍生版本或基于本项目的闭源托管服务。
+SublinkX-RS 使用 [AGPL-3.0-or-later](LICENSE)。修改、分发或以网络服务方式提供衍生版本时，需要按许可证要求提供对应源代码。
 
-本项目基于 [gooaclok819/sublinkX](https://github.com/gooaclok819/sublinkX) 二次修改与重构。原项目采用 MIT License。感谢原作者的开源贡献；使用、修改或分发本项目时，请保留本项目和原项目的版权与许可证声明。
+原项目 `gooaclok819/sublinkX` 使用 MIT License。分发或修改本项目时，请继续保留原项目和本项目要求的版权与许可证声明，也不要暗示原项目作者为本项目提供官方认可或背书。
