@@ -1893,10 +1893,11 @@ async fn save_upstream_template_if_mihomo_yaml(
     };
 
     let now = now_rfc3339();
-    let name = unique_upstream_template_name(state, url, group_id).await?;
+    let (name, source_digest) = upstream_template_identity(state, url, group_id).await?;
     let content = mark_upstream_template(&template_body);
-    let template = template_repo::insert(
+    let result = template_repo::upsert_latest_upstream_passthrough(
         &state.db,
+        &source_digest,
         &template_repo::NewTemplateRecord {
             name: &name,
             kind: "mihomo",
@@ -1908,35 +1909,99 @@ async fn save_upstream_template_if_mihomo_yaml(
     )
     .await?;
 
-    Ok(Some(template))
+    if result.removed_templates > 0 {
+        tracing::info!(
+            source_digest,
+            template_id = result.template.id,
+            removed_templates = result.removed_templates,
+            "consolidated upstream passthrough templates"
+        );
+    }
+    state.clear_public_export_cache().await;
+
+    Ok(Some(result.template))
 }
 
-async fn unique_upstream_template_name(
+async fn upstream_template_identity(
     state: &AppState,
     url: &str,
     group_id: Option<i64>,
-) -> Result<String, AppError> {
+) -> Result<(String, String), AppError> {
     let digest = &hex::encode(Sha256::digest(url.as_bytes()))[..8];
     let group_name = upstream_template_group_name(state, group_id).await?;
     let base = truncate_template_name_base(&format!("Upstream Mihomo {group_name} {digest}"));
-    if template_repo::find_by_name(&state.db, &base)
-        .await?
-        .is_none()
-    {
-        return Ok(base);
+    Ok((base, digest.to_string()))
+}
+
+pub async fn reconcile_upstream_passthrough_templates(state: &AppState) -> Result<(), AppError> {
+    let templates = template_repo::list_upstream_passthrough(&state.db).await?;
+    let mut latest_by_digest = HashMap::new();
+
+    for template in templates {
+        let Some((base_name, source_digest)) = upstream_template_name_parts(&template.name) else {
+            continue;
+        };
+        latest_by_digest
+            .entry(source_digest)
+            .and_modify(|(_, _, count)| *count += 1)
+            .or_insert((base_name, template.content, 1_usize));
     }
 
-    for index in 2..100 {
-        let candidate = format!("{base} #{index}");
-        if template_repo::find_by_name(&state.db, &candidate)
-            .await?
-            .is_none()
-        {
-            return Ok(candidate);
+    let now = now_rfc3339();
+    for (source_digest, (name, content, count)) in latest_by_digest {
+        if count < 2 {
+            continue;
+        }
+        let result = template_repo::upsert_latest_upstream_passthrough(
+            &state.db,
+            &source_digest,
+            &template_repo::NewTemplateRecord {
+                name: &name,
+                kind: "mihomo",
+                content: &content,
+                is_builtin: 0,
+                created_at: &now,
+                updated_at: &now,
+            },
+        )
+        .await?;
+        if result.removed_templates > 0 {
+            tracing::info!(
+                source_digest,
+                template_id = result.template.id,
+                removed_templates = result.removed_templates,
+                "reconciled historical upstream passthrough templates"
+            );
         }
     }
 
-    Err(AppError::Internal)
+    Ok(())
+}
+
+fn upstream_template_name_parts(name: &str) -> Option<(String, String)> {
+    let base_name = match name.rsplit_once(" #") {
+        Some((base, revision))
+            if !revision.is_empty()
+                && revision.chars().all(|character| character.is_ascii_digit()) =>
+        {
+            base
+        }
+        _ => name,
+    };
+    if !base_name.starts_with("Upstream Mihomo ") {
+        return None;
+    }
+
+    let source_digest = base_name.split_whitespace().next_back()?;
+    if source_digest.len() != 8
+        || !source_digest
+            .chars()
+            .all(|character| character.is_ascii_hexdigit())
+    {
+        return None;
+    }
+
+    Some((base_name.to_string(), source_digest.to_string()))
 }
 
 async fn upstream_template_group_name(
@@ -3064,7 +3129,7 @@ mod tests {
     use super::{
         MIHOMO_SUBSCRIPTION_USER_AGENT, check_mihomo_conversion_fidelity,
         extract_subscription_links, is_subscription_info_name, mihomo_proxy_to_raw_link,
-        sanitize_mihomo_profile_yaml,
+        sanitize_mihomo_profile_yaml, upstream_template_name_parts,
     };
     use crate::services::url_safety::validate_public_http_url;
     use base64::{Engine as _, engine::general_purpose};
@@ -3156,6 +3221,26 @@ payload:
         assert_eq!(MIHOMO_SUBSCRIPTION_USER_AGENT, "mihomo/1.19.10");
         assert!(!MIHOMO_SUBSCRIPTION_USER_AGENT.contains("Clash"));
         assert!(!MIHOMO_SUBSCRIPTION_USER_AGENT.contains(' '));
+    }
+
+    #[test]
+    fn extracts_stable_identity_from_upstream_template_revisions() {
+        assert_eq!(
+            upstream_template_name_parts("Upstream Mihomo GAT 0f512f8a #12"),
+            Some((
+                "Upstream Mihomo GAT 0f512f8a".to_string(),
+                "0f512f8a".to_string()
+            ))
+        );
+        assert_eq!(
+            upstream_template_name_parts("Upstream Mihomo GAT 0F512F8A"),
+            Some((
+                "Upstream Mihomo GAT 0F512F8A".to_string(),
+                "0F512F8A".to_string()
+            ))
+        );
+        assert!(upstream_template_name_parts("Built-in Mihomo Policy").is_none());
+        assert!(upstream_template_name_parts("Upstream Mihomo missing-digest").is_none());
     }
 
     #[test]

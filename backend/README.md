@@ -10,8 +10,8 @@ Phase 1 bootstrap includes:
 - basic config loading from environment
 - health and version endpoints
 - protocol capability placeholders
-- first SQLite migration draft
-- SQLite startup migration
+- SQLite migrations plus PostgreSQL/MySQL schema initialization
+- Offline SQLite/PostgreSQL/MySQL data migration with source preflight, empty-target enforcement, transaction rollback, and row-count verification
 - bootstrap admin creation
 - JWT login and current-user endpoints
 

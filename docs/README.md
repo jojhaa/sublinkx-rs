@@ -4,7 +4,7 @@
 
 ## 部署
 
-- [Docker 部署](docker.md)：Docker Compose、数据映射、SQLite/MySQL、固定网段和反向代理说明。
+- [Docker 部署](docker.md)：Docker Compose、数据映射、SQLite/PostgreSQL/MySQL、离线数据库迁移、固定网段和反向代理说明。
 - [Docker 英文部署说明](docker.en.md)：英文版 Docker 部署说明。
 
 ## 客户端设计

@@ -45,7 +45,7 @@ Default first login:
 the `BOOTSTRAP_ADMIN_USERNAME` / `BOOTSTRAP_ADMIN_PASSWORD` values configured in `.env`
 ```
 
-The first login must change both username and password. Passwords are stored in SQLite as Argon2 hashes.
+The first login must change both username and password. Passwords are stored in the configured database as Argon2 hashes.
 
 ## Environment File
 
@@ -126,6 +126,55 @@ MIHOMO_CORE_DIR/
 
 You can also download the Mihomo core from the Settings page after login.
 
+## Use PostgreSQL
+
+SQLite is the default. For larger node sets, more concurrent requests, or deployments that should not keep the database file on a bind mount, use PostgreSQL 14+.
+
+### Option 1: Use the built-in Compose PostgreSQL container
+
+Edit `.env`:
+
+```env
+COMPOSE_PROFILES=postgres
+DATABASE_URL=postgresql://sublinkx:<postgres_password>@postgres:5432/sublinkx
+POSTGRES_IMAGE=postgres:16-alpine
+POSTGRES_DB=sublinkx
+POSTGRES_USER=sublinkx
+POSTGRES_PASSWORD=replace-with-a-strong-postgres-password
+POSTGRES_DATA_DIR=./docker-data/postgres
+```
+
+Keep the raw password in `POSTGRES_PASSWORD`. Percent-encode reserved characters such as `@`, `:`, `/`, `#`, and `%` in the password portion of `DATABASE_URL`.
+
+Start or restart:
+
+```bash
+docker compose config --quiet
+docker compose up -d
+```
+
+PostgreSQL data is bind-mounted to:
+
+```text
+docker-data/postgres/
+```
+
+### Option 2: Connect to an existing PostgreSQL
+
+Do not enable `COMPOSE_PROFILES=postgres`. Point the backend container to the existing instance:
+
+```env
+DATABASE_URL=postgresql://sublinkx:<postgres_password>@host.docker.internal:5432/sublinkx
+```
+
+For a remote instance, replace the hostname with its private address or database DNS name. Create the database and a least-privilege application user first.
+
+Developers can run the isolated smoke test from Windows PowerShell 7. It creates and removes a temporary PostgreSQL container without reading existing data directories:
+
+```powershell
+.\scripts\test-postgres-docker.ps1
+```
+
 ## Use MySQL
 
 SQLite is the default database. If Docker bind-mount writes are slow on your Linux server, or if you manage many nodes, switch to MySQL.
@@ -177,7 +226,106 @@ DATABASE_URL=mysql://sublinkx:<mysql_password>@192.168.1.10:3306/sublinkx
 
 This Compose file maps `host.docker.internal` to `host-gateway` for Linux Docker. Docker Desktop already provides the same hostname. Make sure the MySQL user can connect from the Docker subnet and that the target database exists.
 
-Note: SQLite and MySQL are separate databases. Back up `docker-data/backend/app.db` before switching. This version does not automatically migrate SQLite data to MySQL.
+SQLite, PostgreSQL, and MySQL remain separate databases. Changing `DATABASE_URL` never moves data automatically; use the explicit offline process below when switching engines.
+
+## Offline Database Migration
+
+`sublinkx-rs-backend migrate-database` moves current-version data between SQLite, PostgreSQL, and MySQL/MariaDB. It preserves primary keys, administrator password hashes, subscription tokens, node relationships, templates, upstream state, settings, access logs, and IP probe results.
+
+Safety boundaries:
+
+- The source is read-only; the command never initializes, upgrades, or writes to it.
+- The target database must already exist and all SublinkX-RS business tables must be empty.
+- All target writes use one transaction, so a field, uniqueness, or foreign-key failure rolls back the complete import.
+- PostgreSQL sequences are reset after explicit IDs are copied.
+- Upgrade the source schema with the current application version first, then stop the frontend and backend for a consistent snapshot.
+
+### Docker Compose: SQLite to the built-in PostgreSQL service
+
+Run the following in Linux Bash. Stop the application and back up SQLite first; never use `docker compose down -v` for this operation:
+
+```bash
+docker compose stop frontend backend
+mkdir -p backups
+cp --preserve=mode,timestamps docker-data/backend/app.db \
+  "backups/app-$(date +%Y%m%d-%H%M%S).db"
+```
+
+Configure PostgreSQL and the temporary migration variables in `.env`. Percent-encode special password characters inside URLs:
+
+```env
+COMPOSE_PROFILES=postgres
+POSTGRES_DB=sublinkx
+POSTGRES_USER=sublinkx
+POSTGRES_PASSWORD=replace_with_a_strong_password
+POSTGRES_DATA_DIR=./docker-data/postgres
+
+SUBLINKX_MIGRATION_SOURCE_URL=sqlite:///app/data/app.db
+SUBLINKX_MIGRATION_TARGET_URL=postgresql://sublinkx:percent_encoded_password@postgres:5432/sublinkx
+SUBLINKX_MIGRATION_CONFIRM=
+```
+
+Start the empty target and run the read-only preflight:
+
+```bash
+docker compose --profile postgres up -d postgres
+docker compose --profile postgres run --rm --no-deps backend \
+  sublinkx-rs-backend migrate-database check
+```
+
+After verifying the backup and per-table counts, set the confirmation in `.env`:
+
+```env
+SUBLINKX_MIGRATION_CONFIRM=I_HAVE_A_CURRENT_BACKUP
+```
+
+Run the migration:
+
+```bash
+docker compose --profile postgres run --rm --no-deps backend \
+  sublinkx-rs-backend migrate-database run
+```
+
+Point normal operation at PostgreSQL and clear the temporary variables:
+
+```env
+DATABASE_URL=postgresql://sublinkx:percent_encoded_password@postgres:5432/sublinkx
+SUBLINKX_MIGRATION_SOURCE_URL=
+SUBLINKX_MIGRATION_TARGET_URL=
+SUBLINKX_MIGRATION_CONFIRM=
+```
+
+Restart the application and verify health and important record counts:
+
+```bash
+docker compose up -d backend frontend
+docker compose ps
+curl -fsS http://127.0.0.1:3000/healthz
+```
+
+For an external PostgreSQL/MySQL target or a MySQL source, replace only the two URLs. The target user needs schema and write permissions; a read-only source user is recommended.
+
+### Source checkout scripts
+
+Windows PowerShell 7:
+
+```powershell
+$env:SUBLINKX_MIGRATION_SOURCE_URL = 'sqlite://data/app.db'
+$env:SUBLINKX_MIGRATION_TARGET_URL = 'postgresql://sublinkx:encoded_password@127.0.0.1:5432/sublinkx'
+.\scripts\migrate-database.ps1 -Mode check
+.\scripts\migrate-database.ps1 -Mode run -ConfirmBackup
+```
+
+Linux/macOS Bash:
+
+```bash
+export SUBLINKX_MIGRATION_SOURCE_URL='sqlite://data/app.db'
+export SUBLINKX_MIGRATION_TARGET_URL='postgresql://sublinkx:encoded_password@127.0.0.1:5432/sublinkx'
+bash scripts/migrate-database.sh check
+bash scripts/migrate-database.sh run --confirm-backup
+```
+
+The scripts pass connection strings through environment variables rather than command-line URL arguments. Clear the temporary variables from the shell after migration.
 
 ## Fixed Docker Subnet
 
@@ -366,6 +514,14 @@ docker compose down
 cp ./docker-data/backend/app.db ./app.db.bak
 docker compose up -d
 ```
+
+Create an online backup of the built-in PostgreSQL service:
+
+```bash
+docker compose exec -T postgres sh -c 'pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" --format=custom' > ./sublinkx-postgres.dump
+```
+
+Test `pg_restore` in an isolated environment before treating the dump as a recovery point. Copying a live PostgreSQL data directory is not a substitute for a logical backup.
 
 ## Publish New Images
 

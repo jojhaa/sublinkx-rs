@@ -20,7 +20,7 @@ Notes:
 
 | Area | Upstream project | sublinkx-rs additions |
 | --- | --- | --- |
-| Stack | Original implementation | Backend rewritten with Rust/Axum, frontend rewritten with Vue 3, SQLite as default storage |
+| Stack | Original implementation | Backend rewritten with Rust/Axum, frontend rewritten with Vue 3, SQLite as default storage plus optional PostgreSQL and MySQL |
 | Admin console | Core subscription management | Full console for nodes, subscriptions, templates, groups, settings, and language switching, with desktop, tablet, and mobile layouts |
 | Node import | Basic subscription import | Manual multi-line import, full Base64 subscription decoding, upstream URL import, and Mihomo YAML proxy extraction |
 | Upstream templates | Mostly conversion-oriented | Upstream Mihomo template passthrough for subscriptions that should not be converted twice |
@@ -36,7 +36,7 @@ Notes:
 
 ## Highlights
 
-- Rust backend built with Axum, SQLx, and SQLite.
+- Rust backend built with Axum and SQLx, using SQLite by default with optional PostgreSQL or MySQL.
 - Vue 3 admin console for nodes, subscriptions, templates, groups, settings, and exports.
 - Responsive console layouts for desktop, tablet, and mobile.
 - Compact desktop sidebar with language switching near the brand area and a lightweight account/status strip at the bottom.
@@ -55,7 +55,7 @@ Notes:
 - SublinkX-RS only discovers and stores node egress IPs. A separate IP intelligence project may use the authenticated `PUT /api/v1/node-ip-probes/{id}/country` endpoint to enrich a result, and the submitted IP must match the node's latest probe result.
 - First-login security flow with Argon2 password hashing.
 - Docker deployment with local data bind mounts.
-- SQLite by default, with optional MySQL 8.x support.
+- SQLite by default, with optional PostgreSQL 14+ or MySQL 8.x support and an explicit offline migration command for moving complete application data into an empty target database.
 
 ## Local Development
 
@@ -183,7 +183,15 @@ docker-data/
     mihomo
 ```
 
-SQLite is the default database. If SQLite on a Linux bind mount is slow, switch to MySQL:
+SQLite is the default database. For a larger deployment, switch to PostgreSQL or MySQL.
+
+Use the built-in Compose PostgreSQL container:
+
+```env
+COMPOSE_PROFILES=postgres
+DATABASE_URL=postgresql://sublinkx:change-this-password@postgres:5432/sublinkx
+POSTGRES_PASSWORD=change-this-password
+```
 
 Use the built-in Compose MySQL container:
 
@@ -200,7 +208,7 @@ Use an existing host or external MySQL:
 DATABASE_URL=mysql://sublinkx:change-this-password@host.docker.internal:3306/sublinkx
 ```
 
-For full MySQL container, host MySQL, and external MySQL examples, see [Docker Deployment](docs/docker.en.md).
+For full PostgreSQL/MySQL container and external database examples, see [Docker Deployment](docs/docker.en.md).
 
 Then start:
 

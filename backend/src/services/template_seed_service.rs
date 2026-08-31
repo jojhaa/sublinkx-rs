@@ -262,8 +262,8 @@ dns:
     - 223.5.5.5
     - 119.29.29.29
   nameserver:
-    - https://1.1.1.1/dns-query#PROXY
-    - https://8.8.8.8/dns-query#PROXY
+    - https://1.1.1.1/dns-query#代理选择
+    - https://8.8.8.8/dns-query#代理选择
   nameserver-policy:
     "rule-set:private_domain":
       - https://dns.alidns.com/dns-query
@@ -272,8 +272,8 @@ dns:
       - https://dns.alidns.com/dns-query
       - https://doh.pub/dns-query
     "rule-set:geolocation-not-cn":
-      - https://1.1.1.1/dns-query#PROXY
-      - https://8.8.8.8/dns-query#PROXY
+      - https://1.1.1.1/dns-query#代理选择
+      - https://8.8.8.8/dns-query#代理选择
   proxy-server-nameserver:
     - https://dns.alidns.com/dns-query
     - https://doh.pub/dns-query
@@ -283,98 +283,98 @@ dns:
     - https://doh.pub/dns-query
   direct-nameserver-follow-policy: true
 proxy-groups:
-  - name: PROXY
+  - name: 代理选择
     type: select
     proxies:
-      - MANUAL
-      - AUTO
-      - FALLBACK
-      - LOAD-BALANCE
+      - 手动选择
+      - 自动选择
+      - 故障转移
+      - 负载均衡
       - DIRECT
-  - name: MANUAL
+  - name: 手动选择
     type: select
     include-all-proxies: true
-  - name: AUTO
+  - name: 自动选择
     type: url-test
     include-all-proxies: true
     url: https://cp.cloudflare.com/generate_204
     interval: 300
     tolerance: 50
-  - name: FALLBACK
+  - name: 故障转移
     type: fallback
     include-all-proxies: true
     url: https://cp.cloudflare.com/generate_204
     interval: 300
     lazy: true
-  - name: LOAD-BALANCE
+  - name: 负载均衡
     type: load-balance
     strategy: consistent-hashing
     include-all-proxies: true
     url: https://cp.cloudflare.com/generate_204
     interval: 300
     lazy: true
-  - name: AI
+  - name: AI 服务
     type: select
     proxies:
-      - PROXY
-      - AUTO
-      - MANUAL
+      - 代理选择
+      - 自动选择
+      - 手动选择
       - DIRECT
-  - name: STREAMING
+  - name: 流媒体
     type: select
     proxies:
-      - PROXY
-      - AUTO
-      - MANUAL
+      - 代理选择
+      - 自动选择
+      - 手动选择
       - DIRECT
-  - name: GOOGLE
+  - name: 谷歌服务
     type: select
     proxies:
-      - PROXY
-      - AUTO
-      - MANUAL
+      - 代理选择
+      - 自动选择
+      - 手动选择
       - DIRECT
-  - name: TELEGRAM
+  - name: 电报消息
     type: select
     proxies:
-      - PROXY
-      - AUTO
-      - MANUAL
+      - 代理选择
+      - 自动选择
+      - 手动选择
       - DIRECT
-  - name: MICROSOFT
-    type: select
-    proxies:
-      - DIRECT
-      - PROXY
-      - MANUAL
-  - name: APPLE
+  - name: 微软服务
     type: select
     proxies:
       - DIRECT
-      - PROXY
-      - MANUAL
-  - name: DOMESTIC
+      - 代理选择
+      - 手动选择
+  - name: 苹果服务
     type: select
     proxies:
       - DIRECT
-      - PROXY
-  - name: GAME
+      - 代理选择
+      - 手动选择
+  - name: 国内网站
     type: select
     proxies:
-      - PROXY
-      - MANUAL
-      - AUTO
       - DIRECT
-  - name: DOWNLOAD-BLOCK
+      - 代理选择
+  - name: 游戏平台
+    type: select
+    proxies:
+      - 代理选择
+      - 手动选择
+      - 自动选择
+      - DIRECT
+  - name: 下载拦截
     type: select
     proxies:
       - REJECT
       - DIRECT
-  - name: FINAL
+  - name: 漏网之鱼
     type: select
     proxies:
-      - PROXY
-      - AUTO
+      - 代理选择
+      - 自动选择
       - DIRECT
 rule-providers:
   private_domain:
@@ -518,67 +518,67 @@ rule-providers:
 rules:
   - RULE-SET,private_ip,DIRECT,no-resolve
   - RULE-SET,private_domain,DIRECT
-  - PROCESS-NAME-WILDCARD,*torrent*,DOWNLOAD-BLOCK
-  - PROCESS-NAME,qbittorrent,DOWNLOAD-BLOCK
-  - PROCESS-NAME,qbittorrent.exe,DOWNLOAD-BLOCK
-  - PROCESS-NAME,transmission-daemon,DOWNLOAD-BLOCK
-  - PROCESS-NAME,transmission-qt,DOWNLOAD-BLOCK
-  - PROCESS-NAME,deluge,DOWNLOAD-BLOCK
-  - PROCESS-NAME,deluged,DOWNLOAD-BLOCK
-  - PROCESS-NAME,aria2c,DOWNLOAD-BLOCK
-  - PROCESS-NAME,motrix,DOWNLOAD-BLOCK
-  - PROCESS-NAME,Thunder.exe,DOWNLOAD-BLOCK
-  - PROCESS-NAME,DownloadSDKServer.exe,DOWNLOAD-BLOCK
-  - RULE-SET,tracker_domain,DOWNLOAD-BLOCK
-  - RULE-SET,private_tracker_domain,DOWNLOAD-BLOCK
-  - DST-PORT,6881-6999,DOWNLOAD-BLOCK
-  - DST-PORT,51413,DOWNLOAD-BLOCK
-  - DOMAIN-SUFFIX,chatgpt.com,AI
-  - DOMAIN-SUFFIX,openai.com,AI
-  - DOMAIN-SUFFIX,anthropic.com,AI
-  - DOMAIN-SUFFIX,claude.ai,AI
-  - DOMAIN-SUFFIX,github.com,PROXY
-  - DOMAIN-SUFFIX,githubusercontent.com,PROXY
-  - DOMAIN-SUFFIX,githubassets.com,PROXY
-  - DOMAIN-SUFFIX,youtube.com,STREAMING
-  - DOMAIN-SUFFIX,googlevideo.com,STREAMING
-  - DOMAIN-SUFFIX,ytimg.com,STREAMING
-  - DOMAIN-SUFFIX,netflix.com,STREAMING
-  - DOMAIN-SUFFIX,nflxvideo.net,STREAMING
-  - DOMAIN-SUFFIX,t.me,TELEGRAM
-  - DOMAIN-SUFFIX,telegram.org,TELEGRAM
-  - DOMAIN-SUFFIX,x.com,PROXY
-  - DOMAIN-SUFFIX,twitter.com,PROXY
-  - DOMAIN-SUFFIX,instagram.com,PROXY
-  - DOMAIN-SUFFIX,tiktok.com,STREAMING
-  - DOMAIN-SUFFIX,spotify.com,STREAMING
-  - DOMAIN-SUFFIX,disneyplus.com,STREAMING
-  - DOMAIN-SUFFIX,primevideo.com,STREAMING
-  - DOMAIN-SUFFIX,max.com,STREAMING
-  - DOMAIN-SUFFIX,hbomax.com,STREAMING
-  - DOMAIN-SUFFIX,steamcommunity.com,GAME
-  - DOMAIN-SUFFIX,steampowered.com,GAME
-  - DOMAIN-SUFFIX,epicgames.com,GAME
-  - RULE-SET,ai,AI
-  - RULE-SET,github_domain,PROXY
-  - RULE-SET,youtube_domain,STREAMING
-  - RULE-SET,google_domain,GOOGLE
-  - RULE-SET,telegram_domain,TELEGRAM
-  - RULE-SET,telegram_ip,TELEGRAM,no-resolve
-  - RULE-SET,netflix_domain,STREAMING
-  - RULE-SET,netflix_ip,STREAMING,no-resolve
-  - RULE-SET,bilibili_domain,DOMESTIC
-  - RULE-SET,spotify_domain,STREAMING
-  - RULE-SET,steam_domain,GAME
-  - RULE-SET,paypal_domain,PROXY
-  - RULE-SET,onedrive_domain,MICROSOFT
-  - RULE-SET,microsoft_domain,MICROSOFT
-  - RULE-SET,apple_domain,APPLE
-  - RULE-SET,apple_ip,APPLE,no-resolve
-  - RULE-SET,geolocation-not-cn,PROXY
-  - RULE-SET,cn_domain,DOMESTIC
-  - RULE-SET,cn_ip,DOMESTIC,no-resolve
-  - MATCH,FINAL
+  - PROCESS-NAME-WILDCARD,*torrent*,下载拦截
+  - PROCESS-NAME,qbittorrent,下载拦截
+  - PROCESS-NAME,qbittorrent.exe,下载拦截
+  - PROCESS-NAME,transmission-daemon,下载拦截
+  - PROCESS-NAME,transmission-qt,下载拦截
+  - PROCESS-NAME,deluge,下载拦截
+  - PROCESS-NAME,deluged,下载拦截
+  - PROCESS-NAME,aria2c,下载拦截
+  - PROCESS-NAME,motrix,下载拦截
+  - PROCESS-NAME,Thunder.exe,下载拦截
+  - PROCESS-NAME,DownloadSDKServer.exe,下载拦截
+  - RULE-SET,tracker_domain,下载拦截
+  - RULE-SET,private_tracker_domain,下载拦截
+  - DST-PORT,6881-6999,下载拦截
+  - DST-PORT,51413,下载拦截
+  - DOMAIN-SUFFIX,chatgpt.com,AI 服务
+  - DOMAIN-SUFFIX,openai.com,AI 服务
+  - DOMAIN-SUFFIX,anthropic.com,AI 服务
+  - DOMAIN-SUFFIX,claude.ai,AI 服务
+  - DOMAIN-SUFFIX,github.com,代理选择
+  - DOMAIN-SUFFIX,githubusercontent.com,代理选择
+  - DOMAIN-SUFFIX,githubassets.com,代理选择
+  - DOMAIN-SUFFIX,youtube.com,流媒体
+  - DOMAIN-SUFFIX,googlevideo.com,流媒体
+  - DOMAIN-SUFFIX,ytimg.com,流媒体
+  - DOMAIN-SUFFIX,netflix.com,流媒体
+  - DOMAIN-SUFFIX,nflxvideo.net,流媒体
+  - DOMAIN-SUFFIX,t.me,电报消息
+  - DOMAIN-SUFFIX,telegram.org,电报消息
+  - DOMAIN-SUFFIX,x.com,代理选择
+  - DOMAIN-SUFFIX,twitter.com,代理选择
+  - DOMAIN-SUFFIX,instagram.com,代理选择
+  - DOMAIN-SUFFIX,tiktok.com,流媒体
+  - DOMAIN-SUFFIX,spotify.com,流媒体
+  - DOMAIN-SUFFIX,disneyplus.com,流媒体
+  - DOMAIN-SUFFIX,primevideo.com,流媒体
+  - DOMAIN-SUFFIX,max.com,流媒体
+  - DOMAIN-SUFFIX,hbomax.com,流媒体
+  - DOMAIN-SUFFIX,steamcommunity.com,游戏平台
+  - DOMAIN-SUFFIX,steampowered.com,游戏平台
+  - DOMAIN-SUFFIX,epicgames.com,游戏平台
+  - RULE-SET,ai,AI 服务
+  - RULE-SET,github_domain,代理选择
+  - RULE-SET,youtube_domain,流媒体
+  - RULE-SET,google_domain,谷歌服务
+  - RULE-SET,telegram_domain,电报消息
+  - RULE-SET,telegram_ip,电报消息,no-resolve
+  - RULE-SET,netflix_domain,流媒体
+  - RULE-SET,netflix_ip,流媒体,no-resolve
+  - RULE-SET,bilibili_domain,国内网站
+  - RULE-SET,spotify_domain,流媒体
+  - RULE-SET,steam_domain,游戏平台
+  - RULE-SET,paypal_domain,代理选择
+  - RULE-SET,onedrive_domain,微软服务
+  - RULE-SET,microsoft_domain,微软服务
+  - RULE-SET,apple_domain,苹果服务
+  - RULE-SET,apple_ip,苹果服务,no-resolve
+  - RULE-SET,geolocation-not-cn,代理选择
+  - RULE-SET,cn_domain,国内网站
+  - RULE-SET,cn_ip,国内网站,no-resolve
+  - MATCH,漏网之鱼
 "#;
 
 const SING_BOX_TEMPLATE: &str = r#"{

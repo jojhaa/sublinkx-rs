@@ -1,4 +1,7 @@
-use crate::{db::DbPool, domain::node_ip_probe::NodeIpProbeRecord};
+use crate::{
+    db::{DbPool, DbQueryBuilder, database_sql_owned, query, query_scalar},
+    domain::node_ip_probe::NodeIpProbeRecord,
+};
 
 const SELECT_FIELDS: &str = r#"
 node_id, status, ip, ip_version, country_code, country_name, country_source,
@@ -18,12 +21,13 @@ pub async fn find_by_node_id(
     pool: &DbPool,
     node_id: i64,
 ) -> Result<Option<NodeIpProbeRecord>, sqlx::Error> {
-    sqlx::query_as::<_, NodeIpProbeRecord>(&format!(
+    let sql = database_sql_owned(format!(
         "SELECT {SELECT_FIELDS} FROM node_ip_probes WHERE node_id = ?"
-    ))
-    .bind(node_id)
-    .fetch_optional(pool)
-    .await
+    ));
+    sqlx::query_as::<_, NodeIpProbeRecord>(&sql)
+        .bind(node_id)
+        .fetch_optional(pool)
+        .await
 }
 
 pub async fn save_success(
@@ -33,7 +37,7 @@ pub async fn save_success(
     ip_version: i64,
     now: &str,
 ) -> Result<NodeIpProbeRecord, sqlx::Error> {
-    let updated = sqlx::query(
+    let updated = query(
         r#"
         UPDATE node_ip_probes
         SET status = 'ok',
@@ -64,7 +68,7 @@ pub async fn save_success(
     .await?;
 
     if updated.rows_affected() == 0 {
-        sqlx::query(
+        query(
             r#"
             INSERT INTO node_ip_probes (
               node_id, status, ip, ip_version, country_code, country_name, country_source,
@@ -93,7 +97,7 @@ pub async fn save_failure(
     message: &str,
     now: &str,
 ) -> Result<NodeIpProbeRecord, sqlx::Error> {
-    let updated = sqlx::query(
+    let updated = query(
         "UPDATE node_ip_probes SET status = 'error', message = ?, probed_at = ?, updated_at = ? WHERE node_id = ?",
     )
     .bind(message)
@@ -104,7 +108,7 @@ pub async fn save_failure(
     .await?;
 
     if updated.rows_affected() == 0 {
-        sqlx::query(
+        query(
             r#"
             INSERT INTO node_ip_probes (
               node_id, status, ip, ip_version, country_code, country_name, country_source,
@@ -134,7 +138,7 @@ pub async fn update_country(
     source: &str,
     now: &str,
 ) -> Result<Option<NodeIpProbeRecord>, sqlx::Error> {
-    let result = sqlx::query(
+    let result = query(
         r#"
         UPDATE node_ip_probes
         SET country_code = ?, country_name = ?, country_source = ?,
@@ -168,7 +172,7 @@ pub async fn update_intelligence_status(
     message: Option<&str>,
     now: &str,
 ) -> Result<Option<NodeIpProbeRecord>, sqlx::Error> {
-    let result = sqlx::query(
+    let result = query(
         r#"
         UPDATE node_ip_probes
         SET intelligence_status = ?, intelligence_message = ?,
@@ -198,7 +202,7 @@ pub async fn countries_by_node_ids(
     if node_ids.is_empty() {
         return Ok(std::collections::HashMap::new());
     }
-    let mut query = sqlx::QueryBuilder::<sqlx::Any>::new(
+    let mut query = DbQueryBuilder::new(
         "SELECT node_id, country_code FROM node_ip_probes WHERE status = 'ok' AND ip IS NOT NULL AND country_code IS NOT NULL AND intelligence_status = 'enriched' AND node_id IN (",
     );
     {
@@ -222,7 +226,7 @@ pub async fn intelligence_refresh_candidates(
     stale_before: &str,
     limit: i64,
 ) -> Result<Vec<i64>, sqlx::Error> {
-    sqlx::query_scalar(
+    query_scalar(
         r#"
         SELECT probe.node_id
         FROM node_ip_probes AS probe

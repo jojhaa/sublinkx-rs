@@ -73,7 +73,7 @@ curl -fsS http://127.0.0.1:3000/healthz
 
 默认访问 `http://服务器IP:3000`。生产环境建议启用 HTTPS，外层 Nginx、Caddy 或面板反向代理统一转发到 `127.0.0.1:3000`，不要直接转发后端 `8080`。
 
-更完整的 SQLite、MySQL、网段、反向代理和数据目录配置见 [Docker 部署文档](docs/docker.md)。
+更完整的 SQLite、PostgreSQL、MySQL、网段、反向代理和数据目录配置见 [Docker 部署文档](docs/docker.md)。
 
 ## 功能地图
 
@@ -143,7 +143,7 @@ docker-data/
     mihomo
 ```
 
-也可以切换到 MySQL 8.x，具体配置见 [Docker 部署文档](docs/docker.md)。
+也可以切换到 PostgreSQL 14+ 或 MySQL 8.x，具体配置见 [Docker 部署文档](docs/docker.md)。应用启动时不会擅自搬库；需要切换时可使用离线 `migrate-database check/run` 工具，在备份、停服务和空目标库的前提下迁移完整业务数据。
 
 升级前请备份 `.env`、数据库和数据挂载目录。正式挑战迁移 Boss 之前，先留一个能读档的存档点。
 

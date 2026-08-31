@@ -1,8 +1,6 @@
 use std::collections::HashMap;
 
-use sqlx::{Any, QueryBuilder};
-
-use crate::db::{DbKind, DbPool, db_kind};
+use crate::db::{DbKind, DbPool, DbQueryBuilder, db_kind, query};
 
 pub async fn get_many(
     pool: &DbPool,
@@ -11,8 +9,7 @@ pub async fn get_many(
     if keys.is_empty() {
         return Ok(HashMap::new());
     }
-    let mut query =
-        QueryBuilder::<Any>::new("SELECT `key`, value FROM app_settings WHERE `key` IN (");
+    let mut query = DbQueryBuilder::new("SELECT `key`, value FROM app_settings WHERE `key` IN (");
     {
         let mut separated = query.separated(", ");
         for key in keys {
@@ -52,9 +49,18 @@ pub async fn set(
                 updated_at = VALUES(updated_at)
             "#
         }
+        DbKind::Postgres => {
+            r#"
+            INSERT INTO app_settings ("key", value, updated_at)
+            VALUES (?, ?, ?)
+            ON CONFLICT ("key") DO UPDATE SET
+                value = excluded.value,
+                updated_at = excluded.updated_at
+            "#
+        }
     };
 
-    sqlx::query(sql)
+    query(sql)
         .bind(key)
         .bind(value)
         .bind(updated_at)

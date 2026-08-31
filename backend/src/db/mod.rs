@@ -1,14 +1,19 @@
 use std::{
-    env, fs,
+    collections::HashMap,
+    env,
+    fmt::Display,
+    fs,
     path::{Path, PathBuf},
-    sync::OnceLock,
+    sync::{Mutex, OnceLock},
     time::Duration,
 };
 
 use sqlx::{
-    AnyPool, Executor,
-    any::{AnyConnectOptions, AnyPoolOptions, install_default_drivers},
+    Any, AnyPool, Arguments, Encode, Executor, FromRow, Type,
+    any::{AnyArguments, AnyConnectOptions, AnyPoolOptions, AnyRow, install_default_drivers},
 };
+
+mod postgres;
 
 #[allow(dead_code)]
 pub const MIGRATIONS_DIR: &str = "migrations";
@@ -19,9 +24,11 @@ pub type DbPool = AnyPool;
 pub enum DbKind {
     Sqlite,
     MySql,
+    Postgres,
 }
 
 static DB_KIND: OnceLock<DbKind> = OnceLock::new();
+static POSTGRES_SQL_CACHE: OnceLock<Mutex<HashMap<&'static str, &'static str>>> = OnceLock::new();
 
 pub async fn new_database_pool(database_url: &str) -> Result<DbPool, sqlx::Error> {
     install_default_drivers();
@@ -40,6 +47,7 @@ pub async fn new_database_pool(database_url: &str) -> Result<DbPool, sqlx::Error
         .max_connections(match kind {
             DbKind::Sqlite => 5,
             DbKind::MySql => 10,
+            DbKind::Postgres => 10,
         })
         .acquire_timeout(Duration::from_secs(10))
         .connect_with(options)
@@ -54,6 +62,45 @@ pub async fn new_database_pool(database_url: &str) -> Result<DbPool, sqlx::Error
         DbKind::MySql => {
             init_mysql_schema(&pool).await?;
         }
+        DbKind::Postgres => {
+            postgres::init_schema(&pool).await?;
+            apply_builtin_template_content_upgrades(&pool).await?;
+        }
+    }
+
+    Ok(pool)
+}
+
+pub(crate) async fn connect_database_pool_uninitialized(
+    database_url: &str,
+    create_sqlite_file: bool,
+) -> Result<DbPool, sqlx::Error> {
+    install_default_drivers();
+    let kind = detect_db_kind(database_url);
+
+    if kind == DbKind::Sqlite
+        && let Some(path) = sqlite_file_path(database_url)
+    {
+        if create_sqlite_file {
+            ensure_parent_dir(&path);
+            ensure_sqlite_file(&path)?;
+        } else if !path.exists() {
+            return Err(sqlx::Error::Io(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                format!("source SQLite database does not exist: {}", path.display()),
+            )));
+        }
+    }
+
+    let options: AnyConnectOptions = database_url.parse()?;
+    let pool = AnyPoolOptions::new()
+        .max_connections(1)
+        .acquire_timeout(Duration::from_secs(10))
+        .connect_with(options)
+        .await?;
+
+    if kind == DbKind::Sqlite {
+        pool.execute("PRAGMA busy_timeout = 10000").await?;
     }
 
     Ok(pool)
@@ -61,6 +108,268 @@ pub async fn new_database_pool(database_url: &str) -> Result<DbPool, sqlx::Error
 
 pub fn db_kind() -> DbKind {
     *DB_KIND.get().unwrap_or(&DbKind::Sqlite)
+}
+
+/// Returns SQL adapted to the active backend. Application SQL uses `?` bind
+/// markers and MySQL-style quoted identifiers; PostgreSQL needs `$N` markers
+/// and ANSI identifier quotes.
+pub fn database_sql(sql: &'static str) -> &'static str {
+    if db_kind() != DbKind::Postgres {
+        return sql;
+    }
+
+    let cache = POSTGRES_SQL_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut cache = cache.lock().expect("PostgreSQL SQL cache is poisoned");
+    if let Some(adapted) = cache.get(sql) {
+        return adapted;
+    }
+
+    let adapted = Box::leak(adapt_postgres_sql(sql).into_boxed_str());
+    cache.insert(sql, adapted);
+    adapted
+}
+
+pub fn database_sql_owned(sql: impl Into<String>) -> String {
+    let sql = sql.into();
+    if db_kind() == DbKind::Postgres {
+        adapt_postgres_sql(&sql)
+    } else {
+        sql
+    }
+}
+
+pub fn query<'query>(sql: &'static str) -> sqlx::query::Query<'query, Any, AnyArguments<'query>> {
+    sqlx::query::<Any>(database_sql(sql))
+}
+
+pub fn query_as<'query, O>(
+    sql: &'static str,
+) -> sqlx::query::QueryAs<'query, Any, O, AnyArguments<'query>>
+where
+    O: for<'row> FromRow<'row, AnyRow>,
+{
+    sqlx::query_as::<Any, O>(database_sql(sql))
+}
+
+pub fn query_scalar<'query, O>(
+    sql: &'static str,
+) -> sqlx::query::QueryScalar<'query, Any, O, AnyArguments<'query>>
+where
+    (O,): for<'row> FromRow<'row, AnyRow>,
+{
+    sqlx::query_scalar::<Any, O>(database_sql(sql))
+}
+
+/// SQLx's `QueryBuilder<Any>` always emits `?`, even when the runtime driver is
+/// PostgreSQL. This small builder keeps AnyPool while adapting the final SQL.
+pub struct DbQueryBuilder<'args> {
+    sql: String,
+    arguments: Option<AnyArguments<'args>>,
+    prepared: bool,
+}
+
+impl<'args> DbQueryBuilder<'args> {
+    pub fn new(sql: impl Into<String>) -> Self {
+        Self {
+            sql: sql.into(),
+            arguments: Some(AnyArguments::default()),
+            prepared: false,
+        }
+    }
+
+    pub fn push(&mut self, sql: impl Display) -> &mut Self {
+        assert!(!self.prepared, "query cannot be changed after build");
+        use std::fmt::Write as _;
+        write!(self.sql, "{sql}").expect("failed to append SQL");
+        self
+    }
+
+    pub fn push_bind<T>(&mut self, value: T) -> &mut Self
+    where
+        T: 'args + Encode<'args, Any> + Type<Any>,
+    {
+        assert!(!self.prepared, "query cannot be changed after build");
+        self.arguments
+            .as_mut()
+            .expect("query arguments were already consumed")
+            .add(value)
+            .expect("failed to add query argument");
+        self.sql.push('?');
+        self
+    }
+
+    pub fn separated<'builder>(
+        &'builder mut self,
+        separator: &'static str,
+    ) -> DbSeparated<'builder, 'args> {
+        DbSeparated {
+            builder: self,
+            separator,
+            push_separator: false,
+        }
+    }
+
+    pub fn build(&'args mut self) -> sqlx::query::Query<'args, Any, AnyArguments<'args>> {
+        self.prepare();
+        let arguments = self
+            .arguments
+            .take()
+            .expect("query builder must not be reused after build");
+        sqlx::query_with::<Any, _>(&self.sql, arguments)
+    }
+
+    pub fn build_query_as<O>(
+        &'args mut self,
+    ) -> sqlx::query::QueryAs<'args, Any, O, AnyArguments<'args>>
+    where
+        O: for<'row> FromRow<'row, AnyRow>,
+    {
+        self.prepare();
+        let arguments = self
+            .arguments
+            .take()
+            .expect("query builder must not be reused after build");
+        sqlx::query_as_with::<Any, O, _>(&self.sql, arguments)
+    }
+
+    pub fn build_query_scalar<O>(
+        &'args mut self,
+    ) -> sqlx::query::QueryScalar<'args, Any, O, AnyArguments<'args>>
+    where
+        (O,): for<'row> FromRow<'row, AnyRow>,
+    {
+        self.prepare();
+        let arguments = self
+            .arguments
+            .take()
+            .expect("query builder must not be reused after build");
+        sqlx::query_scalar_with::<Any, O, _>(&self.sql, arguments)
+    }
+
+    fn prepare(&mut self) {
+        if self.prepared {
+            return;
+        }
+        if db_kind() == DbKind::Postgres {
+            self.sql = adapt_postgres_sql(&self.sql);
+        }
+        self.prepared = true;
+    }
+}
+
+pub struct DbSeparated<'builder, 'args> {
+    builder: &'builder mut DbQueryBuilder<'args>,
+    separator: &'static str,
+    push_separator: bool,
+}
+
+impl<'builder, 'args> DbSeparated<'builder, 'args> {
+    pub fn push_bind<T>(&mut self, value: T) -> &mut Self
+    where
+        T: 'args + Encode<'args, Any> + Type<Any>,
+    {
+        if self.push_separator {
+            self.builder.push(self.separator);
+        }
+        self.builder.push_bind(value);
+        self.push_separator = true;
+        self
+    }
+}
+
+fn adapt_postgres_sql(sql: &str) -> String {
+    #[derive(Clone, Copy)]
+    enum State {
+        Normal,
+        SingleQuote,
+        DoubleQuote,
+        Backtick,
+        LineComment,
+        BlockComment,
+    }
+
+    let mut output = String::with_capacity(sql.len() + 16);
+    let mut chars = sql.chars().peekable();
+    let mut state = State::Normal;
+    let mut parameter = 0_u32;
+
+    while let Some(ch) = chars.next() {
+        match state {
+            State::Normal => match ch {
+                '\'' => {
+                    output.push(ch);
+                    state = State::SingleQuote;
+                }
+                '"' => {
+                    output.push(ch);
+                    state = State::DoubleQuote;
+                }
+                '`' => {
+                    output.push('"');
+                    state = State::Backtick;
+                }
+                '-' if chars.peek() == Some(&'-') => {
+                    output.push(ch);
+                    output.push(chars.next().expect("peeked SQL comment marker"));
+                    state = State::LineComment;
+                }
+                '/' if chars.peek() == Some(&'*') => {
+                    output.push(ch);
+                    output.push(chars.next().expect("peeked SQL comment marker"));
+                    state = State::BlockComment;
+                }
+                '?' => {
+                    parameter += 1;
+                    output.push('$');
+                    output.push_str(&parameter.to_string());
+                }
+                _ => output.push(ch),
+            },
+            State::SingleQuote => {
+                output.push(ch);
+                if ch == '\'' {
+                    if chars.peek() == Some(&'\'') {
+                        output.push(chars.next().expect("peeked escaped quote"));
+                    } else {
+                        state = State::Normal;
+                    }
+                }
+            }
+            State::DoubleQuote => {
+                output.push(ch);
+                if ch == '"' {
+                    if chars.peek() == Some(&'"') {
+                        output.push(chars.next().expect("peeked escaped quote"));
+                    } else {
+                        state = State::Normal;
+                    }
+                }
+            }
+            State::Backtick => {
+                if ch == '`' {
+                    output.push('"');
+                    state = State::Normal;
+                } else {
+                    output.push(ch);
+                }
+            }
+            State::LineComment => {
+                output.push(ch);
+                if ch == '\n' {
+                    state = State::Normal;
+                }
+            }
+            State::BlockComment => {
+                output.push(ch);
+                if ch == '*' && chars.peek() == Some(&'/') {
+                    output.push(chars.next().expect("peeked SQL comment terminator"));
+                    state = State::Normal;
+                }
+            }
+        }
+    }
+
+    output
 }
 
 async fn configure_sqlite(pool: &DbPool) -> Result<(), sqlx::Error> {
@@ -277,7 +586,7 @@ async fn init_mysql_schema(pool: &DbPool) -> Result<(), sqlx::Error> {
         ("latency.test_url", "https://cp.cloudflare.com/generate_204"),
         ("latency.timeout_secs", "10"),
     ] {
-        sqlx::query(
+        query(
             r#"
             INSERT IGNORE INTO app_settings (`key`, value, updated_at)
             VALUES (?, ?, ?)
@@ -309,7 +618,7 @@ async fn apply_builtin_template_content_upgrades(pool: &DbPool) -> Result<(), sq
             "%MATCH,PROXY%",
         ),
     ] {
-        sqlx::query(
+        query(
             r#"
             UPDATE templates
             SET content = ?, updated_at = ?
@@ -328,7 +637,7 @@ async fn apply_builtin_template_content_upgrades(pool: &DbPool) -> Result<(), sq
         .await?;
     }
 
-    sqlx::query(
+    query(
         r#"
         UPDATE templates
         SET content = REPLACE(
@@ -352,7 +661,7 @@ async fn apply_builtin_template_content_upgrades(pool: &DbPool) -> Result<(), sq
             ),
             updated_at = ?
         WHERE name = 'Built-in Mihomo Policy Orchestrator'
-          AND is_builtin = TRUE
+          AND is_builtin <> 0
           AND (
                 content LIKE '%  ipv6: true%'
                 OR content LIKE '%  respect-rules: true%'
@@ -575,7 +884,7 @@ async fn apply_mysql_schema_upgrades(pool: &DbPool) -> Result<(), sqlx::Error> {
         "#,
     )
     .await?;
-    sqlx::query(
+    query(
         r#"
         UPDATE templates
         SET content = REPLACE(
@@ -597,7 +906,7 @@ async fn apply_mysql_schema_upgrades(pool: &DbPool) -> Result<(), sqlx::Error> {
     .bind(&now)
     .execute(pool)
     .await?;
-    sqlx::query(
+    query(
         r#"
         UPDATE templates
         SET content = REPLACE(
@@ -619,7 +928,7 @@ async fn apply_mysql_schema_upgrades(pool: &DbPool) -> Result<(), sqlx::Error> {
     .bind(&now)
     .execute(pool)
     .await?;
-    sqlx::query(
+    query(
         r#"
         UPDATE templates
         SET content = REPLACE(
@@ -664,7 +973,7 @@ async fn apply_mysql_schema_upgrades(pool: &DbPool) -> Result<(), sqlx::Error> {
     .bind(&now)
     .execute(pool)
     .await?;
-    sqlx::query(
+    query(
         r#"
         UPDATE templates
         SET content = REPLACE(
@@ -781,9 +1090,11 @@ async fn mysql_index_exists(pool: &DbPool, table: &str, index: &str) -> Result<b
     Ok(count > 0)
 }
 
-fn detect_db_kind(database_url: &str) -> DbKind {
+pub(crate) fn detect_db_kind(database_url: &str) -> DbKind {
     if database_url.starts_with("mysql://") || database_url.starts_with("mariadb://") {
         DbKind::MySql
+    } else if database_url.starts_with("postgres://") || database_url.starts_with("postgresql://") {
+        DbKind::Postgres
     } else {
         DbKind::Sqlite
     }
@@ -804,7 +1115,7 @@ fn ensure_sqlite_file(path: &Path) -> Result<(), sqlx::Error> {
     fs::File::create(path).map(|_| ()).map_err(sqlx::Error::Io)
 }
 
-fn sqlite_file_path(database_url: &str) -> Option<PathBuf> {
+pub(crate) fn sqlite_file_path(database_url: &str) -> Option<PathBuf> {
     if !database_url.starts_with("sqlite:") {
         return None;
     }
@@ -833,9 +1144,313 @@ fn sqlite_file_path(database_url: &str) -> Option<PathBuf> {
 mod tests {
     use sqlx::{Executor, Row, any::AnyPoolOptions};
 
-    use super::apply_builtin_template_content_upgrades;
+    use super::{
+        DbKind, adapt_postgres_sql, apply_builtin_template_content_upgrades, detect_db_kind,
+        new_database_pool,
+    };
 
     const OLD_DNS: &str = "dns:\n  ipv6: true\n  proxy-server-nameserver:\n    - https://dns.alidns.com/dns-query\n    - https://doh.pub/dns-query\n    - https://1.1.1.1/dns-query\n    - https://8.8.8.8/dns-query\n  respect-rules: true\n";
+
+    #[test]
+    fn detects_postgres_urls_and_rewrites_only_sql_syntax() {
+        assert_eq!(
+            detect_db_kind("postgresql://user:password@localhost/sublinkx"),
+            DbKind::Postgres
+        );
+        assert_eq!(
+            detect_db_kind("postgres://user:password@localhost/sublinkx"),
+            DbKind::Postgres
+        );
+        assert_eq!(detect_db_kind("mysql://localhost/sublinkx"), DbKind::MySql);
+        assert_eq!(detect_db_kind("sqlite://data/app.db"), DbKind::Sqlite);
+
+        assert_eq!(
+            adapt_postgres_sql(
+                "SELECT `key`, '?' AS literal FROM app_settings WHERE `key` = ? -- ?\nAND value = ? /* ? */"
+            ),
+            "SELECT \"key\", '?' AS literal FROM app_settings WHERE \"key\" = $1 -- ?\nAND value = $2 /* ? */"
+        );
+    }
+
+    #[tokio::test]
+    async fn postgres_repository_smoke_when_configured() {
+        let Ok(database_url) = std::env::var("SUBLINKX_TEST_POSTGRES_URL") else {
+            return;
+        };
+
+        use crate::{
+            config::{
+                AppConfig, DatabaseConfig, IpIntelligenceConfig, SecurityConfig, ServerConfig,
+            },
+            repository::{
+                group_repo::{self, GroupTable, NewGroupRecord},
+                node_ip_probe_repo,
+                node_repo::{self, NewNodeRecord},
+                settings_repo,
+                subscription_repo::{self, NewSubscriptionRecord},
+                template_repo::{self, NewTemplateRecord},
+                upstream_subscription_repo::{self, NewUpstreamSubscriptionRecord},
+                user_repo,
+            },
+            services::template_seed_service,
+        };
+
+        let pool = new_database_pool(&database_url)
+            .await
+            .expect("PostgreSQL schema should initialize");
+        let config = AppConfig {
+            server: ServerConfig {
+                port: 0,
+                environment: "test".to_string(),
+            },
+            database: DatabaseConfig {
+                url: database_url.clone(),
+            },
+            security: SecurityConfig {
+                jwt_secret: "postgres-smoke-secret".repeat(2),
+                jwt_exp_hours: 24,
+                bootstrap_admin_username: "postgres-admin".to_string(),
+                bootstrap_admin_password: "postgres-smoke-password".to_string(),
+                trust_proxy_headers: false,
+                auth_cookie_secure: false,
+            },
+            ip_intelligence: IpIntelligenceConfig {
+                enabled: false,
+                base_url: String::new(),
+                api_token: String::new(),
+                source_key: "postgres-smoke".to_string(),
+            },
+        };
+        user_repo::bootstrap_admin(&pool, &config)
+            .await
+            .expect("admin bootstrap should work on PostgreSQL");
+        assert!(
+            user_repo::find_by_username(&pool, "postgres-admin")
+                .await
+                .expect("admin lookup should work")
+                .is_some()
+        );
+
+        template_seed_service::seed_default_templates(&pool)
+            .await
+            .expect("template seeding should work on PostgreSQL");
+        assert!(
+            template_repo::count_filtered(&pool, None)
+                .await
+                .expect("template count should work")
+                > 0
+        );
+
+        settings_repo::set(&pool, "postgres.smoke", "one", "2026-08-30T00:00:00Z")
+            .await
+            .expect("setting insert should work");
+        settings_repo::set(&pool, "postgres.smoke", "two", "2026-08-30T00:00:01Z")
+            .await
+            .expect("setting upsert should work");
+        assert_eq!(
+            settings_repo::get_many(&pool, &["postgres.smoke"])
+                .await
+                .expect("setting lookup should work")
+                .get("postgres.smoke")
+                .map(String::as_str),
+            Some("two")
+        );
+
+        let now = "2026-08-30T00:00:00Z";
+        let group = group_repo::insert(
+            &pool,
+            GroupTable::Node,
+            &NewGroupRecord {
+                name: "PostgreSQL smoke group",
+                sort_order: 1,
+                created_at: now,
+                updated_at: now,
+            },
+        )
+        .await
+        .expect("group insert should work");
+        let node = node_repo::insert(
+            &pool,
+            &NewNodeRecord {
+                name: "PostgreSQL smoke node",
+                protocol: "vless",
+                raw_link: "vless://postgres-smoke@example.com:443",
+                server: "example.com",
+                port: 443,
+                enabled: 1,
+                group_id: Some(group.id),
+                fingerprint_scope: group.id,
+                source_type: "manual",
+                source_ref: None,
+                upstream_missing: 0,
+                fingerprint: "postgres-smoke-node",
+                settings_json: "{}",
+                remark: "",
+                created_at: now,
+                updated_at: now,
+            },
+        )
+        .await
+        .expect("node insert should work");
+        assert_eq!(
+            node_repo::list_page(&pool, Some(group.id), false, Some(true), true, 10, 0)
+                .await
+                .expect("node pagination should work")
+                .len(),
+            1
+        );
+
+        let subscription = subscription_repo::insert_with_nodes(
+            &pool,
+            &NewSubscriptionRecord {
+                name: "PostgreSQL smoke subscription",
+                token: "postgres-smoke-token",
+                description: "",
+                default_client: Some("mihomo"),
+                template_id: None,
+                group_id: None,
+                enabled: 1,
+                expires_at: None,
+                created_at: now,
+                updated_at: now,
+            },
+            &[node.id],
+            &[group.id],
+        )
+        .await
+        .expect("subscription transaction should work");
+        assert_eq!(
+            subscription_repo::list_subscription_nodes(&pool, subscription.id)
+                .await
+                .expect("subscription nodes should load")
+                .len(),
+            1
+        );
+
+        let upstream = upstream_subscription_repo::insert(
+            &pool,
+            &NewUpstreamSubscriptionRecord {
+                name: "PostgreSQL smoke upstream",
+                url: "https://example.com/postgres-smoke",
+                group_id: Some(group.id),
+                enabled: 1,
+                sync_enabled: 1,
+                sync_interval_minutes: 60,
+                remark: "",
+                created_at: now,
+                updated_at: now,
+            },
+        )
+        .await
+        .expect("upstream insert should work");
+        assert_eq!(
+            upstream_subscription_repo::list_page(&pool, 10, 0)
+                .await
+                .expect("upstream pagination should work")
+                .len(),
+            1
+        );
+
+        let upstream_template_name = "Upstream Mihomo PostgreSQL a1b2c3d4";
+        let old_template = template_repo::insert(
+            &pool,
+            &NewTemplateRecord {
+                name: upstream_template_name,
+                kind: "mihomo",
+                content: "x-sublinkx-upstream-template: true\nproxies: [old]\n",
+                is_builtin: 0,
+                created_at: now,
+                updated_at: now,
+            },
+        )
+        .await
+        .expect("old upstream template should insert");
+        let latest_template_name = format!("{upstream_template_name} #2");
+        let latest_template = template_repo::insert(
+            &pool,
+            &NewTemplateRecord {
+                name: &latest_template_name,
+                kind: "mihomo",
+                content: "x-sublinkx-upstream-template: true\nproxies: [newer]\n",
+                is_builtin: 0,
+                created_at: now,
+                updated_at: now,
+            },
+        )
+        .await
+        .expect("latest upstream template should insert");
+        crate::db::query("UPDATE subscriptions SET template_id = ? WHERE id = ?")
+            .bind(old_template.id)
+            .bind(subscription.id)
+            .execute(&pool)
+            .await
+            .expect("subscription template should bind");
+        crate::db::query(
+            "UPDATE upstream_subscriptions SET template_id = ?, template_name = ? WHERE id = ?",
+        )
+        .bind(old_template.id)
+        .bind(upstream_template_name)
+        .bind(upstream.id)
+        .execute(&pool)
+        .await
+        .expect("upstream template should bind");
+
+        let consolidated = template_repo::upsert_latest_upstream_passthrough(
+            &pool,
+            "a1b2c3d4",
+            &NewTemplateRecord {
+                name: upstream_template_name,
+                kind: "mihomo",
+                content: "x-sublinkx-upstream-template: true\nproxies: [latest]\n",
+                is_builtin: 0,
+                created_at: now,
+                updated_at: "2026-08-30T00:00:01Z",
+            },
+        )
+        .await
+        .expect("upstream templates should consolidate on PostgreSQL");
+        assert_eq!(consolidated.template.id, latest_template.id);
+        assert_eq!(consolidated.removed_templates, 1);
+        assert!(
+            template_repo::find_by_id(&pool, old_template.id)
+                .await
+                .expect("old template lookup should work")
+                .is_none()
+        );
+        assert_eq!(
+            subscription_repo::find_by_id(&pool, subscription.id)
+                .await
+                .expect("subscription lookup should work")
+                .expect("subscription should exist")
+                .template_id,
+            Some(latest_template.id)
+        );
+        assert_eq!(
+            upstream_subscription_repo::find_by_id(&pool, upstream.id)
+                .await
+                .expect("upstream lookup should work")
+                .expect("upstream should exist")
+                .template_id,
+            Some(latest_template.id)
+        );
+
+        let probe = node_ip_probe_repo::save_success(&pool, node.id, "203.0.113.10", 4, now)
+            .await
+            .expect("IP probe upsert should work");
+        assert_eq!(probe.ip.as_deref(), Some("203.0.113.10"));
+
+        pool.close().await;
+        let reopened = new_database_pool(&database_url)
+            .await
+            .expect("PostgreSQL schema initialization should be idempotent");
+        assert_eq!(
+            subscription_repo::count_filtered(&reopened, None, false)
+                .await
+                .expect("data should survive reconnect"),
+            1
+        );
+        reopened.close().await;
+    }
 
     #[tokio::test]
     async fn upgrades_only_the_builtin_mihomo_orchestrator_dns() {

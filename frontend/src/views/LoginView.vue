@@ -84,7 +84,7 @@ async function submit() {
       <aside class="auth-card auth-status-panel">
         <div class="auth-status-header">
           <span class="eyebrow">SUBLINKX RS</span>
-          <span class="status-badge status-badge-neutral">SQLite</span>
+          <span class="status-badge status-badge-neutral">MULTI DB</span>
         </div>
         <div class="auth-orbit">
           <span></span>

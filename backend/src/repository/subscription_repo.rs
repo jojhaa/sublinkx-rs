@@ -1,6 +1,4 @@
-use sqlx::{Any, QueryBuilder};
-
-use crate::db::DbPool;
+use crate::db::{DbPool, DbQueryBuilder, query, query_as, query_scalar};
 
 use crate::domain::subscription::{
     SubscriptionNodeGroupRecord, SubscriptionNodeRecord, SubscriptionRecord,
@@ -36,7 +34,7 @@ pub async fn count_filtered(
     group_id: Option<i64>,
     ungrouped: bool,
 ) -> Result<i64, sqlx::Error> {
-    let mut query = QueryBuilder::<Any>::new("SELECT COUNT(*) FROM subscriptions WHERE 1 = 1");
+    let mut query = DbQueryBuilder::new("SELECT COUNT(*) FROM subscriptions WHERE 1 = 1");
     push_group_filter(&mut query, group_id, ungrouped);
     query.build_query_scalar().fetch_one(pool).await
 }
@@ -48,7 +46,7 @@ pub async fn list_page(
     limit: i64,
     offset: i64,
 ) -> Result<Vec<SubscriptionRecord>, sqlx::Error> {
-    let mut query = QueryBuilder::<Any>::new(
+    let mut query = DbQueryBuilder::new(
         "SELECT id, name, token, description, default_client, template_id, group_id, enabled + 0 AS enabled, expires_at, created_at, updated_at FROM subscriptions WHERE 1 = 1",
     );
     push_group_filter(&mut query, group_id, ungrouped);
@@ -59,7 +57,7 @@ pub async fn list_page(
     query.build_query_as().fetch_all(pool).await
 }
 
-fn push_group_filter(query: &mut QueryBuilder<'_, Any>, group_id: Option<i64>, ungrouped: bool) {
+fn push_group_filter(query: &mut DbQueryBuilder<'_>, group_id: Option<i64>, ungrouped: bool) {
     if ungrouped {
         query.push(" AND group_id IS NULL");
     } else if let Some(group_id) = group_id {
@@ -69,7 +67,7 @@ fn push_group_filter(query: &mut QueryBuilder<'_, Any>, group_id: Option<i64>, u
 }
 
 pub async fn find_by_id(pool: &DbPool, id: i64) -> Result<Option<SubscriptionRecord>, sqlx::Error> {
-    sqlx::query_as::<_, SubscriptionRecord>(
+    query_as::<SubscriptionRecord>(
         r#"
         SELECT id, name, token, description, default_client, template_id, group_id, enabled + 0 AS enabled, expires_at, created_at, updated_at
         FROM subscriptions
@@ -85,7 +83,7 @@ pub async fn find_by_name(
     pool: &DbPool,
     name: &str,
 ) -> Result<Option<SubscriptionRecord>, sqlx::Error> {
-    sqlx::query_as::<_, SubscriptionRecord>(
+    query_as::<SubscriptionRecord>(
         r#"
         SELECT id, name, token, description, default_client, template_id, group_id, enabled + 0 AS enabled, expires_at, created_at, updated_at
         FROM subscriptions
@@ -101,7 +99,7 @@ pub async fn find_by_token(
     pool: &DbPool,
     token: &str,
 ) -> Result<Option<SubscriptionRecord>, sqlx::Error> {
-    sqlx::query_as::<_, SubscriptionRecord>(
+    query_as::<SubscriptionRecord>(
         r#"
         SELECT id, name, token, description, default_client, template_id, group_id, enabled + 0 AS enabled, expires_at, created_at, updated_at
         FROM subscriptions
@@ -121,7 +119,7 @@ pub async fn insert_with_nodes(
 ) -> Result<SubscriptionRecord, sqlx::Error> {
     let mut tx = pool.begin().await?;
 
-    sqlx::query(
+    query(
         r#"
         INSERT INTO subscriptions (
             name, token, description, default_client, template_id, group_id, enabled, expires_at, created_at, updated_at
@@ -141,7 +139,7 @@ pub async fn insert_with_nodes(
     .execute(&mut *tx)
     .await?;
 
-    let record = sqlx::query_as::<_, SubscriptionRecord>(
+    let record = query_as::<SubscriptionRecord>(
         r#"
         SELECT id, name, token, description, default_client, template_id, group_id, enabled + 0 AS enabled, expires_at, created_at, updated_at
         FROM subscriptions
@@ -165,7 +163,7 @@ pub async fn update(
     id: i64,
     item: &UpdateSubscriptionRecord<'_>,
 ) -> Result<SubscriptionRecord, sqlx::Error> {
-    sqlx::query(
+    query(
         r#"
         UPDATE subscriptions
         SET name = ?,
@@ -205,7 +203,7 @@ pub async fn update_with_nodes(
 ) -> Result<SubscriptionRecord, sqlx::Error> {
     let mut tx = pool.begin().await?;
 
-    sqlx::query(
+    query(
         r#"
         UPDATE subscriptions
         SET name = ?,
@@ -236,7 +234,7 @@ pub async fn update_with_nodes(
     replace_subscription_nodes_in_tx(&mut tx, id, node_ids).await?;
     replace_subscription_node_groups_in_tx(&mut tx, id, node_group_ids).await?;
 
-    let record = sqlx::query_as::<_, SubscriptionRecord>(
+    let record = query_as::<SubscriptionRecord>(
         r#"
         SELECT id, name, token, description, default_client, template_id, group_id, enabled + 0 AS enabled, expires_at, created_at, updated_at
         FROM subscriptions
@@ -253,7 +251,7 @@ pub async fn update_with_nodes(
 }
 
 pub async fn delete(pool: &DbPool, id: i64) -> Result<(), sqlx::Error> {
-    sqlx::query("DELETE FROM subscriptions WHERE id = ?")
+    query("DELETE FROM subscriptions WHERE id = ?")
         .bind(id)
         .execute(pool)
         .await?;
@@ -264,7 +262,7 @@ pub async fn list_subscription_nodes(
     pool: &DbPool,
     subscription_id: i64,
 ) -> Result<Vec<SubscriptionNodeRecord>, sqlx::Error> {
-    sqlx::query_as::<_, SubscriptionNodeRecord>(
+    query_as::<SubscriptionNodeRecord>(
         r#"
         SELECT subscription_id, node_id, sort_order
         FROM subscription_nodes
@@ -281,7 +279,7 @@ pub async fn list_subscription_node_groups(
     pool: &DbPool,
     subscription_id: i64,
 ) -> Result<Vec<SubscriptionNodeGroupRecord>, sqlx::Error> {
-    sqlx::query_as::<_, SubscriptionNodeGroupRecord>(
+    query_as::<SubscriptionNodeGroupRecord>(
         r#"
         SELECT subscription_id, node_group_id, sort_order
         FROM subscription_node_groups
@@ -301,7 +299,7 @@ pub async fn list_subscription_nodes_batch(
     if subscription_ids.is_empty() {
         return Ok(Vec::new());
     }
-    let mut query = QueryBuilder::<Any>::new(
+    let mut query = DbQueryBuilder::new(
         "SELECT subscription_id, node_id, sort_order FROM subscription_nodes WHERE subscription_id IN (",
     );
     push_ids(&mut query, subscription_ids);
@@ -316,7 +314,7 @@ pub async fn list_subscription_node_groups_batch(
     if subscription_ids.is_empty() {
         return Ok(Vec::new());
     }
-    let mut query = QueryBuilder::<Any>::new(
+    let mut query = DbQueryBuilder::new(
         "SELECT subscription_id, node_group_id, sort_order FROM subscription_node_groups WHERE subscription_id IN (",
     );
     push_ids(&mut query, subscription_ids);
@@ -324,7 +322,7 @@ pub async fn list_subscription_node_groups_batch(
     query.build_query_as().fetch_all(pool).await
 }
 
-fn push_ids(query: &mut QueryBuilder<'_, Any>, ids: &[i64]) {
+fn push_ids(query: &mut DbQueryBuilder<'_>, ids: &[i64]) {
     let mut separated = query.separated(", ");
     for id in ids {
         separated.push_bind(*id);
@@ -336,13 +334,13 @@ async fn replace_subscription_nodes_in_tx(
     subscription_id: i64,
     node_ids: &[i64],
 ) -> Result<(), sqlx::Error> {
-    sqlx::query("DELETE FROM subscription_nodes WHERE subscription_id = ?")
+    query("DELETE FROM subscription_nodes WHERE subscription_id = ?")
         .bind(subscription_id)
         .execute(&mut **tx)
         .await?;
 
     for (sort_order, node_id) in node_ids.iter().enumerate() {
-        sqlx::query(
+        query(
             r#"
             INSERT INTO subscription_nodes (subscription_id, node_id, sort_order)
             VALUES (?, ?, ?)
@@ -363,13 +361,13 @@ async fn replace_subscription_node_groups_in_tx(
     subscription_id: i64,
     node_group_ids: &[i64],
 ) -> Result<(), sqlx::Error> {
-    sqlx::query("DELETE FROM subscription_node_groups WHERE subscription_id = ?")
+    query("DELETE FROM subscription_node_groups WHERE subscription_id = ?")
         .bind(subscription_id)
         .execute(&mut **tx)
         .await?;
 
     for (sort_order, node_group_id) in node_group_ids.iter().enumerate() {
-        sqlx::query(
+        query(
             r#"
             INSERT INTO subscription_node_groups (subscription_id, node_group_id, sort_order)
             VALUES (?, ?, ?)
@@ -386,7 +384,7 @@ async fn replace_subscription_node_groups_in_tx(
 }
 
 pub async fn count_by_template_id(pool: &DbPool, template_id: i64) -> Result<i64, sqlx::Error> {
-    sqlx::query_scalar::<_, i64>(
+    query_scalar::<i64>(
         r#"
         SELECT COUNT(1)
         FROM subscriptions

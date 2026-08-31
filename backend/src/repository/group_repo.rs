@@ -1,4 +1,4 @@
-use crate::db::DbPool;
+use crate::db::{DbPool, database_sql_owned};
 
 use crate::domain::group::GroupRecord;
 
@@ -51,13 +51,14 @@ pub async fn find_by_id(
     table: GroupTable,
     id: i64,
 ) -> Result<Option<GroupRecord>, sqlx::Error> {
-    sqlx::query_as::<_, GroupRecord>(&format!(
+    let sql = database_sql_owned(format!(
         "SELECT id, name, sort_order, created_at, updated_at FROM {} WHERE id = ?",
         table.table_name()
-    ))
-    .bind(id)
-    .fetch_optional(pool)
-    .await
+    ));
+    sqlx::query_as::<_, GroupRecord>(&sql)
+        .bind(id)
+        .fetch_optional(pool)
+        .await
 }
 
 pub async fn find_by_name(
@@ -65,13 +66,14 @@ pub async fn find_by_name(
     table: GroupTable,
     name: &str,
 ) -> Result<Option<GroupRecord>, sqlx::Error> {
-    sqlx::query_as::<_, GroupRecord>(&format!(
+    let sql = database_sql_owned(format!(
         "SELECT id, name, sort_order, created_at, updated_at FROM {} WHERE name = ?",
         table.table_name()
-    ))
-    .bind(name)
-    .fetch_optional(pool)
-    .await
+    ));
+    sqlx::query_as::<_, GroupRecord>(&sql)
+        .bind(name)
+        .fetch_optional(pool)
+        .await
 }
 
 pub async fn insert(
@@ -79,16 +81,17 @@ pub async fn insert(
     table: GroupTable,
     item: &NewGroupRecord<'_>,
 ) -> Result<GroupRecord, sqlx::Error> {
-    sqlx::query(&format!(
+    let sql = database_sql_owned(format!(
         "INSERT INTO {} (name, sort_order, created_at, updated_at) VALUES (?, ?, ?, ?)",
         table.table_name()
-    ))
-    .bind(item.name)
-    .bind(item.sort_order)
-    .bind(item.created_at)
-    .bind(item.updated_at)
-    .execute(pool)
-    .await?;
+    ));
+    sqlx::query(&sql)
+        .bind(item.name)
+        .bind(item.sort_order)
+        .bind(item.created_at)
+        .bind(item.updated_at)
+        .execute(pool)
+        .await?;
 
     find_by_name(pool, table, item.name)
         .await?
@@ -101,16 +104,17 @@ pub async fn update(
     id: i64,
     item: &UpdateGroupRecord<'_>,
 ) -> Result<GroupRecord, sqlx::Error> {
-    sqlx::query(&format!(
+    let sql = database_sql_owned(format!(
         "UPDATE {} SET name = ?, sort_order = ?, updated_at = ? WHERE id = ?",
         table.table_name()
-    ))
-    .bind(item.name)
-    .bind(item.sort_order)
-    .bind(item.updated_at)
-    .bind(id)
-    .execute(pool)
-    .await?;
+    ));
+    sqlx::query(&sql)
+        .bind(item.name)
+        .bind(item.sort_order)
+        .bind(item.updated_at)
+        .bind(id)
+        .execute(pool)
+        .await?;
 
     find_by_id(pool, table, id)
         .await?
@@ -118,19 +122,18 @@ pub async fn update(
 }
 
 pub async fn delete(pool: &DbPool, table: GroupTable, id: i64) -> Result<(), sqlx::Error> {
-    sqlx::query(&format!("DELETE FROM {} WHERE id = ?", table.table_name()))
-        .bind(id)
-        .execute(pool)
-        .await?;
+    let sql = database_sql_owned(format!("DELETE FROM {} WHERE id = ?", table.table_name()));
+    sqlx::query(&sql).bind(id).execute(pool).await?;
     Ok(())
 }
 
 pub async fn count_usage(pool: &DbPool, table: GroupTable, id: i64) -> Result<i64, sqlx::Error> {
-    sqlx::query_scalar::<_, i64>(&format!(
+    let sql = database_sql_owned(format!(
         "SELECT COUNT(1) FROM {} WHERE group_id = ?",
         table.owner_table_name()
-    ))
-    .bind(id)
-    .fetch_one(pool)
-    .await
+    ));
+    sqlx::query_scalar::<_, i64>(&sql)
+        .bind(id)
+        .fetch_one(pool)
+        .await
 }

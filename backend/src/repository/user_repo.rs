@@ -1,4 +1,4 @@
-use crate::db::DbPool;
+use crate::db::{DbPool, query, query_as, query_scalar};
 use argon2::{Argon2, PasswordHasher, password_hash::SaltString};
 use tracing::warn;
 
@@ -12,7 +12,7 @@ use crate::{
 
 pub async fn bootstrap_admin(pool: &DbPool, config: &AppConfig) -> Result<(), sqlx::Error> {
     let security = &config.security;
-    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM users")
+    let count: i64 = query_scalar("SELECT COUNT(*) FROM users")
         .fetch_one(pool)
         .await?;
 
@@ -37,7 +37,7 @@ pub async fn bootstrap_admin(pool: &DbPool, config: &AppConfig) -> Result<(), sq
         .map_err(|_| sqlx::Error::Protocol("failed to hash bootstrap admin password".into()))?;
     let now = crate::utils::time::now_rfc3339();
 
-    sqlx::query(
+    query(
         r#"
         INSERT INTO users (username, password_hash, nickname, role, status, must_change_credentials, token_version, created_at, updated_at)
         VALUES (?, ?, ?, 'admin', 'active', 1, 0, ?, ?)
@@ -78,7 +78,7 @@ fn reject_default_production_bootstrap(config: &AppConfig) -> Result<(), sqlx::E
 }
 
 pub async fn find_by_username(pool: &DbPool, username: &str) -> Result<Option<User>, sqlx::Error> {
-    sqlx::query_as::<_, User>(
+    query_as::<User>(
         r#"
         SELECT id, username, password_hash, nickname, role, status, must_change_credentials, token_version, created_at, updated_at
         FROM users
@@ -91,7 +91,7 @@ pub async fn find_by_username(pool: &DbPool, username: &str) -> Result<Option<Us
 }
 
 pub async fn find_by_id(pool: &DbPool, id: i64) -> Result<Option<User>, sqlx::Error> {
-    sqlx::query_as::<_, User>(
+    query_as::<User>(
         r#"
         SELECT id, username, password_hash, nickname, role, status, must_change_credentials, token_version, created_at, updated_at
         FROM users
@@ -108,7 +108,7 @@ pub async fn username_exists_for_other_user(
     username: &str,
     user_id: i64,
 ) -> Result<bool, sqlx::Error> {
-    let count: i64 = sqlx::query_scalar(
+    let count: i64 = query_scalar(
         r#"
         SELECT COUNT(*)
         FROM users
@@ -131,7 +131,7 @@ pub async fn update_credentials(
 ) -> Result<(), sqlx::Error> {
     let now = crate::utils::time::now_rfc3339();
 
-    sqlx::query(
+    query(
         r#"
         UPDATE users
         SET username = ?,
@@ -161,7 +161,7 @@ async fn reset_bootstrap_admin_password(
 ) -> Result<(), sqlx::Error> {
     let now = crate::utils::time::now_rfc3339();
 
-    sqlx::query(
+    query(
         r#"
         UPDATE users
         SET password_hash = ?,

@@ -40,6 +40,11 @@ export async function listTemplates(params: TemplateListParams = {}) {
   return data
 }
 
+export async function getTemplate(id: number) {
+  const { data } = await apiClient.get<TemplateResponse>(`/api/v1/templates/${id}`)
+  return data
+}
+
 export async function createTemplate(payload: TemplatePayload) {
   const { data } = await apiClient.post<TemplateResponse>('/api/v1/templates', payload)
   return data

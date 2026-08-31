@@ -36,6 +36,28 @@ const CLASH_ROUTING_TEMPLATE_DOC: &str = include_str!("../../../docs/clash-routi
 const PUBLIC_EXPORT_CACHE_BODY_LIMIT: usize = 8 * 1024 * 1024;
 const PUBLIC_EXPORT_RATE_WINDOW: Duration = Duration::from_secs(60);
 const MIHOMO_DEFAULT_DELAY_TEST_URL: &str = "https://cp.cloudflare.com/generate_204";
+const MIHOMO_GROUP_PROXY: &str = "代理选择";
+const MIHOMO_GROUP_MANUAL: &str = "手动选择";
+const MIHOMO_GROUP_AUTO: &str = "自动选择";
+const MIHOMO_GROUP_FALLBACK: &str = "故障转移";
+const MIHOMO_GROUP_LOAD_BALANCE: &str = "负载均衡";
+const MIHOMO_LEGACY_GROUP_NAMES: &[(&str, &str)] = &[
+    ("PROXY", MIHOMO_GROUP_PROXY),
+    ("MANUAL", MIHOMO_GROUP_MANUAL),
+    ("AUTO", MIHOMO_GROUP_AUTO),
+    ("FALLBACK", MIHOMO_GROUP_FALLBACK),
+    ("LOAD-BALANCE", MIHOMO_GROUP_LOAD_BALANCE),
+    ("AI", "AI 服务"),
+    ("STREAMING", "流媒体"),
+    ("GOOGLE", "谷歌服务"),
+    ("TELEGRAM", "电报消息"),
+    ("MICROSOFT", "微软服务"),
+    ("APPLE", "苹果服务"),
+    ("DOMESTIC", "国内网站"),
+    ("GAME", "游戏平台"),
+    ("DOWNLOAD-BLOCK", "下载拦截"),
+    ("FINAL", "漏网之鱼"),
+];
 const MIHOMO_COUNTRY_GROUPS: &[(&str, &str, &str)] = &[
     ("HK", "香港负载", "香港故障转移"),
     ("JP", "日本负载", "日本故障转移"),
@@ -625,6 +647,7 @@ fn export_mihomo(
         country_fallback_min_nodes,
     );
     ensure_mihomo_match_rule(&mut root);
+    localize_mihomo_legacy_group_names(&mut root);
 
     let yaml = serde_yaml::to_string(&root).map_err(|_| AppError::Internal)?;
     text_response(
@@ -2725,35 +2748,51 @@ fn ensure_mihomo_default_proxy_groups(root: &mut Mapping, proxy_names: &[String]
         return;
     }
 
-    if !mihomo_proxy_group_exists(root, "MANUAL") {
+    if !mihomo_proxy_group_exists(root, MIHOMO_GROUP_MANUAL)
+        && !mihomo_proxy_group_exists(root, "MANUAL")
+    {
         yaml_push_sequence(
             root,
             "proxy-groups",
             vec![Value::Mapping(mihomo_manual_proxy_group(proxy_names))],
         );
     }
-    if !mihomo_proxy_group_exists(root, "AUTO") {
+    if !mihomo_proxy_group_exists(root, MIHOMO_GROUP_AUTO)
+        && !mihomo_proxy_group_exists(root, "AUTO")
+    {
         yaml_push_sequence(
             root,
             "proxy-groups",
             vec![Value::Mapping(mihomo_auto_proxy_group(proxy_names))],
         );
     }
-    if !mihomo_proxy_group_exists(root, "FALLBACK") {
+    if !mihomo_proxy_group_exists(root, MIHOMO_GROUP_FALLBACK)
+        && !mihomo_proxy_group_exists(root, "FALLBACK")
+    {
         yaml_push_sequence(
             root,
             "proxy-groups",
             vec![Value::Mapping(mihomo_fallback_proxy_group(proxy_names))],
         );
     }
-    if !mihomo_proxy_group_exists(root, "LOAD-BALANCE") {
+    if !mihomo_proxy_group_exists(root, MIHOMO_GROUP_LOAD_BALANCE)
+        && !mihomo_proxy_group_exists(root, "LOAD-BALANCE")
+    {
         yaml_push_sequence(
             root,
             "proxy-groups",
             vec![Value::Mapping(mihomo_load_balance_proxy_group(proxy_names))],
         );
     }
-    append_groups_to_primary_selector(root, &["MANUAL", "AUTO", "FALLBACK", "LOAD-BALANCE"]);
+    append_groups_to_primary_selector(
+        root,
+        &[
+            MIHOMO_GROUP_MANUAL,
+            MIHOMO_GROUP_AUTO,
+            MIHOMO_GROUP_FALLBACK,
+            MIHOMO_GROUP_LOAD_BALANCE,
+        ],
+    );
 }
 
 fn ensure_mihomo_country_load_balance_groups(
@@ -2913,7 +2952,7 @@ fn append_groups_to_primary_selector(root: &mut Mapping, group_names: &[&str]) {
                 mapping
                     .get(Value::String("name".to_string()))
                     .and_then(Value::as_str)
-                    == Some("PROXY")
+                    == Some(MIHOMO_GROUP_PROXY)
             })
         })
         .or_else(|| {
@@ -2994,10 +3033,10 @@ fn ensure_mihomo_match_rule(root: &mut Mapping) {
         return;
     }
 
-    let target_group = if mihomo_proxy_group_exists(root, "PROXY") {
-        "PROXY".to_string()
-    } else if mihomo_proxy_group_exists(root, "AUTO") {
-        "AUTO".to_string()
+    let target_group = if mihomo_proxy_group_exists(root, MIHOMO_GROUP_PROXY) {
+        MIHOMO_GROUP_PROXY.to_string()
+    } else if mihomo_proxy_group_exists(root, MIHOMO_GROUP_AUTO) {
+        MIHOMO_GROUP_AUTO.to_string()
     } else if let Some(group_name) = mihomo_first_proxy_group_name(root) {
         group_name
     } else {
@@ -3010,22 +3049,135 @@ fn ensure_mihomo_match_rule(root: &mut Mapping) {
     );
 }
 
+fn localize_mihomo_legacy_group_names(root: &mut Mapping) {
+    let existing_group_names = root
+        .get(Value::String("proxy-groups".to_string()))
+        .and_then(Value::as_sequence)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_mapping)
+        .filter_map(|group| group.get(Value::String("name".to_string())))
+        .filter_map(Value::as_str)
+        .map(str::to_string)
+        .collect::<HashSet<_>>();
+    let aliases = MIHOMO_LEGACY_GROUP_NAMES
+        .iter()
+        .copied()
+        .filter(|(legacy, localized)| {
+            existing_group_names.contains(*legacy) && !existing_group_names.contains(*localized)
+        })
+        .collect::<Vec<_>>();
+    if aliases.is_empty() {
+        return;
+    }
+
+    if let Some(groups) = root
+        .get_mut(Value::String("proxy-groups".to_string()))
+        .and_then(Value::as_sequence_mut)
+    {
+        for group in groups {
+            let Some(group) = group.as_mapping_mut() else {
+                continue;
+            };
+            if let Some(name) = group
+                .get_mut(Value::String("name".to_string()))
+                .and_then(|value| value.as_str())
+                .and_then(|name| localized_mihomo_group_name(name, &aliases))
+            {
+                group.insert(
+                    Value::String("name".to_string()),
+                    Value::String(name.to_string()),
+                );
+            }
+            if let Some(members) = group
+                .get_mut(Value::String("proxies".to_string()))
+                .and_then(Value::as_sequence_mut)
+            {
+                for member in members {
+                    let Some(localized) = member
+                        .as_str()
+                        .and_then(|name| localized_mihomo_group_name(name, &aliases))
+                        .map(str::to_string)
+                    else {
+                        continue;
+                    };
+                    *member = Value::String(localized);
+                }
+            }
+        }
+    }
+
+    if let Some(rules) = root
+        .get_mut(Value::String("rules".to_string()))
+        .and_then(Value::as_sequence_mut)
+    {
+        for rule in rules {
+            let Some(rule_text) = rule.as_str() else {
+                continue;
+            };
+            for (legacy, localized) in &aliases {
+                let suffix = format!(",{legacy}");
+                let no_resolve_suffix = format!(",{legacy},no-resolve");
+                if let Some(prefix) = rule_text.strip_suffix(&no_resolve_suffix) {
+                    *rule = Value::String(format!("{prefix},{localized},no-resolve"));
+                    break;
+                }
+                if let Some(prefix) = rule_text.strip_suffix(&suffix) {
+                    *rule = Value::String(format!("{prefix},{localized}"));
+                    break;
+                }
+            }
+        }
+    }
+
+    if let Some(dns) = root.get_mut(Value::String("dns".to_string())) {
+        localize_mihomo_dns_group_references(dns, &aliases);
+    }
+}
+
+fn localized_mihomo_group_name<'a>(name: &str, aliases: &[(&'a str, &'a str)]) -> Option<&'a str> {
+    aliases
+        .iter()
+        .find_map(|(legacy, localized)| (*legacy == name).then_some(*localized))
+}
+
+fn localize_mihomo_dns_group_references(value: &mut Value, aliases: &[(&str, &str)]) {
+    match value {
+        Value::String(text) => {
+            for (legacy, localized) in aliases {
+                *text = text.replace(&format!("#{legacy}"), &format!("#{localized}"));
+            }
+        }
+        Value::Sequence(items) => {
+            for item in items {
+                localize_mihomo_dns_group_references(item, aliases);
+            }
+        }
+        Value::Mapping(mapping) => {
+            for item in mapping.values_mut() {
+                localize_mihomo_dns_group_references(item, aliases);
+            }
+        }
+        _ => {}
+    }
+}
+
 fn mihomo_proxy_select_group(proxy_names: &[String]) -> Mapping {
     let mut members = vec![
-        Value::String("MANUAL".to_string()),
-        Value::String("AUTO".to_string()),
-        Value::String("FALLBACK".to_string()),
-        Value::String("LOAD-BALANCE".to_string()),
+        Value::String(MIHOMO_GROUP_MANUAL.to_string()),
+        Value::String(MIHOMO_GROUP_AUTO.to_string()),
+        Value::String(MIHOMO_GROUP_FALLBACK.to_string()),
+        Value::String(MIHOMO_GROUP_LOAD_BALANCE.to_string()),
         Value::String("DIRECT".to_string()),
     ];
     if proxy_names.is_empty() {
-        members.retain(|member| member.as_str() != Some("MANUAL"));
+        members.retain(|member| member.as_str() != Some(MIHOMO_GROUP_MANUAL));
     }
 
     let mut group = Mapping::new();
     group.insert(
         Value::String("name".to_string()),
-        Value::String("PROXY".to_string()),
+        Value::String(MIHOMO_GROUP_PROXY.to_string()),
     );
     group.insert(
         Value::String("type".to_string()),
@@ -3042,7 +3194,7 @@ fn mihomo_manual_proxy_group(proxy_names: &[String]) -> Mapping {
     let mut group = Mapping::new();
     group.insert(
         Value::String("name".to_string()),
-        Value::String("MANUAL".to_string()),
+        Value::String(MIHOMO_GROUP_MANUAL.to_string()),
     );
     group.insert(
         Value::String("type".to_string()),
@@ -3059,7 +3211,7 @@ fn mihomo_auto_proxy_group(proxy_names: &[String]) -> Mapping {
     let mut group = Mapping::new();
     group.insert(
         Value::String("name".to_string()),
-        Value::String("AUTO".to_string()),
+        Value::String(MIHOMO_GROUP_AUTO.to_string()),
     );
     group.insert(
         Value::String("type".to_string()),
@@ -3081,12 +3233,12 @@ fn mihomo_auto_proxy_group(proxy_names: &[String]) -> Mapping {
 }
 
 fn mihomo_fallback_proxy_group(proxy_names: &[String]) -> Mapping {
-    mihomo_health_check_proxy_group("FALLBACK", "fallback", proxy_names, None)
+    mihomo_health_check_proxy_group(MIHOMO_GROUP_FALLBACK, "fallback", proxy_names, None)
 }
 
 fn mihomo_load_balance_proxy_group(proxy_names: &[String]) -> Mapping {
     mihomo_health_check_proxy_group(
-        "LOAD-BALANCE",
+        MIHOMO_GROUP_LOAD_BALANCE,
         "load-balance",
         proxy_names,
         Some("consistent-hashing"),
@@ -3629,9 +3781,9 @@ mod tests {
         ExportMode, MIHOMO_DEFAULT_DELAY_TEST_URL, dedupe_mihomo_proxy_names,
         ensure_mihomo_country_load_balance_groups, ensure_mihomo_default_proxy_groups,
         ensure_mihomo_match_rule, expand_mihomo_include_all_proxy_groups, export_mihomo,
-        export_sing_box, is_xray_supported, mihomo_proxy_group_exists,
-        normalize_sing_box_server_ports, resolve_export_mode, safe_inline_value, safe_line_value,
-        text_response, unique_mihomo_proxy_name,
+        export_sing_box, is_xray_supported, localize_mihomo_legacy_group_names,
+        mihomo_proxy_group_exists, normalize_sing_box_server_ports, resolve_export_mode,
+        safe_inline_value, safe_line_value, text_response, unique_mihomo_proxy_name,
     };
     use crate::domain::{node::NodeView, subscription::SubscriptionView};
     use serde_yaml::Value;
@@ -3894,7 +4046,7 @@ proxy-groups:
             proxy_group
                 .get(Value::String("name".to_string()))
                 .and_then(Value::as_str),
-            Some("PROXY")
+            Some("代理选择")
         );
         assert_eq!(
             proxy_group
@@ -3908,7 +4060,7 @@ proxy-groups:
             manual_group
                 .get(Value::String("name".to_string()))
                 .and_then(Value::as_str),
-            Some("MANUAL")
+            Some("手动选择")
         );
         assert_eq!(
             manual_group
@@ -3922,7 +4074,7 @@ proxy-groups:
             auto_group
                 .get(Value::String("name".to_string()))
                 .and_then(Value::as_str),
-            Some("AUTO")
+            Some("自动选择")
         );
         assert_eq!(
             auto_group
@@ -3941,7 +4093,7 @@ proxy-groups:
             fallback_group
                 .get(Value::String("name".to_string()))
                 .and_then(Value::as_str),
-            Some("FALLBACK")
+            Some("故障转移")
         );
         assert_eq!(
             fallback_group
@@ -3971,14 +4123,54 @@ proxy-groups:
             .collect::<Vec<_>>();
         assert_eq!(
             proxy_members,
-            vec!["MANUAL", "AUTO", "FALLBACK", "LOAD-BALANCE", "DIRECT"]
+            vec!["手动选择", "自动选择", "故障转移", "负载均衡", "DIRECT"]
         );
 
         let rules = root
             .get(Value::String("rules".to_string()))
             .and_then(Value::as_sequence)
             .unwrap();
-        assert_eq!(rules.first().and_then(Value::as_str), Some("MATCH,PROXY"));
+        assert_eq!(
+            rules.first().and_then(Value::as_str),
+            Some("MATCH,代理选择")
+        );
+    }
+
+    #[test]
+    fn localizes_legacy_mihomo_group_names_and_references() {
+        let value = serde_yaml::from_str::<Value>(
+            r#"
+dns:
+  nameserver:
+    - https://1.1.1.1/dns-query#PROXY
+proxy-groups:
+  - name: PROXY
+    type: select
+    proxies: [MANUAL, AUTO, DIRECT]
+  - name: MANUAL
+    type: select
+    proxies: [Node]
+  - name: AUTO
+    type: url-test
+    proxies: [Node]
+rules:
+  - DOMAIN-SUFFIX,example.com,PROXY
+  - IP-CIDR,198.51.100.0/24,AUTO,no-resolve
+"#,
+        )
+        .unwrap();
+        let mut root = value.as_mapping().unwrap().clone();
+
+        localize_mihomo_legacy_group_names(&mut root);
+        let yaml = serde_yaml::to_string(&root).unwrap();
+
+        assert!(yaml.contains("name: 代理选择"));
+        assert!(yaml.contains("name: 手动选择"));
+        assert!(yaml.contains("name: 自动选择"));
+        assert!(yaml.contains("DOMAIN-SUFFIX,example.com,代理选择"));
+        assert!(yaml.contains("IP-CIDR,198.51.100.0/24,自动选择,no-resolve"));
+        assert!(yaml.contains("dns-query#代理选择"));
+        assert!(!yaml.contains("name: PROXY"));
     }
 
     #[tokio::test]
@@ -4045,8 +4237,8 @@ proxy-groups:
         let yaml = String::from_utf8(body.to_vec()).unwrap();
 
         assert!(!yaml.contains("节点分组·"));
-        assert!(yaml.contains("name: FALLBACK"));
-        assert!(yaml.contains("name: LOAD-BALANCE"));
+        assert!(yaml.contains("name: 故障转移"));
+        assert!(yaml.contains("name: 负载均衡"));
     }
 
     #[tokio::test]
@@ -4398,7 +4590,7 @@ rules:
             .unwrap();
         assert_eq!(
             nameservers.first().and_then(Value::as_str),
-            Some("https://1.1.1.1/dns-query#PROXY")
+            Some("https://1.1.1.1/dns-query#代理选择")
         );
         assert!(template.contains("  proxy-server-nameserver:"));
         let proxy_server_nameservers = dns
@@ -4414,20 +4606,20 @@ rules:
         }));
         assert!(template.contains("    - rule-set:private_domain\n    - \"+.lan\""));
         assert!(template.contains(
-            "      - MANUAL\n      - AUTO\n      - FALLBACK\n      - LOAD-BALANCE\n      - DIRECT"
+            "      - 手动选择\n      - 自动选择\n      - 故障转移\n      - 负载均衡\n      - DIRECT"
         ));
-        assert!(template.contains("  - name: STREAMING"));
-        assert!(template.contains("  - name: GOOGLE"));
-        assert!(template.contains("  - name: DOMESTIC"));
-        assert!(template.contains("  - name: DOWNLOAD-BLOCK"));
-        assert!(template.contains("DOMAIN-SUFFIX,chatgpt.com,AI"));
-        assert!(template.contains("DOMAIN-SUFFIX,github.com,PROXY"));
-        assert!(template.contains("DOMAIN-SUFFIX,steamcommunity.com,GAME"));
-        assert!(template.contains("RULE-SET,google_domain,GOOGLE"));
-        assert!(template.contains("RULE-SET,cn_domain,DOMESTIC"));
-        assert!(template.contains("PROCESS-NAME-WILDCARD,*torrent*,DOWNLOAD-BLOCK"));
-        assert!(template.contains("RULE-SET,tracker_domain,DOWNLOAD-BLOCK"));
-        assert!(template.contains("DST-PORT,6881-6999,DOWNLOAD-BLOCK"));
+        assert!(template.contains("  - name: 流媒体"));
+        assert!(template.contains("  - name: 谷歌服务"));
+        assert!(template.contains("  - name: 国内网站"));
+        assert!(template.contains("  - name: 下载拦截"));
+        assert!(template.contains("DOMAIN-SUFFIX,chatgpt.com,AI 服务"));
+        assert!(template.contains("DOMAIN-SUFFIX,github.com,代理选择"));
+        assert!(template.contains("DOMAIN-SUFFIX,steamcommunity.com,游戏平台"));
+        assert!(template.contains("RULE-SET,google_domain,谷歌服务"));
+        assert!(template.contains("RULE-SET,cn_domain,国内网站"));
+        assert!(template.contains("PROCESS-NAME-WILDCARD,*torrent*,下载拦截"));
+        assert!(template.contains("RULE-SET,tracker_domain,下载拦截"));
+        assert!(template.contains("DST-PORT,6881-6999,下载拦截"));
         assert!(!template.contains("  - name: YOUTUBE"));
         assert!(!template.contains("  - name: NETFLIX"));
         assert!(!template.contains("  - name: MEDIA"));

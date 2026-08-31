@@ -1,4 +1,7 @@
-use crate::{db::DbPool, domain::upstream_subscription::UpstreamSubscriptionRecord};
+use crate::{
+    db::{DbPool, database_sql_owned, query},
+    domain::upstream_subscription::UpstreamSubscriptionRecord,
+};
 
 const SELECT_FIELDS: &str = r#"
 id, name, url, group_id, enabled + 0 AS enabled, remark, last_imported_at,
@@ -60,9 +63,9 @@ pub async fn list_page(
     limit: i64,
     offset: i64,
 ) -> Result<Vec<UpstreamSubscriptionRecord>, sqlx::Error> {
-    let query = format!(
+    let query = database_sql_owned(format!(
         "SELECT {SELECT_FIELDS} FROM upstream_subscriptions ORDER BY id DESC LIMIT ? OFFSET ?"
-    );
+    ));
     sqlx::query_as(&query)
         .bind(limit)
         .bind(offset)
@@ -74,13 +77,13 @@ pub async fn find_by_id(
     pool: &DbPool,
     id: i64,
 ) -> Result<Option<UpstreamSubscriptionRecord>, sqlx::Error> {
-    let query = format!(
+    let query = database_sql_owned(format!(
         r#"
         SELECT {SELECT_FIELDS}
         FROM upstream_subscriptions
         WHERE id = ?
         "#
-    );
+    ));
     sqlx::query_as::<_, UpstreamSubscriptionRecord>(&query)
         .bind(id)
         .fetch_optional(pool)
@@ -91,13 +94,13 @@ pub async fn find_by_url(
     pool: &DbPool,
     url: &str,
 ) -> Result<Option<UpstreamSubscriptionRecord>, sqlx::Error> {
-    let query = format!(
+    let query = database_sql_owned(format!(
         r#"
         SELECT {SELECT_FIELDS}
         FROM upstream_subscriptions
         WHERE url = ?
         "#
-    );
+    ));
     sqlx::query_as::<_, UpstreamSubscriptionRecord>(&query)
         .bind(url)
         .fetch_optional(pool)
@@ -108,7 +111,7 @@ pub async fn insert(
     pool: &DbPool,
     item: &NewUpstreamSubscriptionRecord<'_>,
 ) -> Result<UpstreamSubscriptionRecord, sqlx::Error> {
-    sqlx::query(
+    query(
         r#"
         INSERT INTO upstream_subscriptions (
             name, url, group_id, enabled, sync_enabled, sync_interval_minutes, remark, created_at, updated_at
@@ -137,7 +140,7 @@ pub async fn update(
     id: i64,
     item: &UpdateUpstreamSubscriptionRecord<'_>,
 ) -> Result<UpstreamSubscriptionRecord, sqlx::Error> {
-    sqlx::query(
+    query(
         r#"
         UPDATE upstream_subscriptions
         SET name = ?,
@@ -167,7 +170,7 @@ pub async fn update(
 }
 
 pub async fn delete(pool: &DbPool, id: i64) -> Result<(), sqlx::Error> {
-    sqlx::query("DELETE FROM upstream_subscriptions WHERE id = ?")
+    query("DELETE FROM upstream_subscriptions WHERE id = ?")
         .bind(id)
         .execute(pool)
         .await?;
@@ -179,7 +182,7 @@ pub async fn update_import_result(
     id: i64,
     result: &ImportResultRecord<'_>,
 ) -> Result<UpstreamSubscriptionRecord, sqlx::Error> {
-    sqlx::query(
+    query(
         r#"
         UPDATE upstream_subscriptions
         SET last_imported_at = ?,
@@ -223,7 +226,7 @@ pub async fn upsert_import_result_by_url(
     result: &ImportResultRecord<'_>,
 ) -> Result<UpstreamSubscriptionRecord, sqlx::Error> {
     if let Some(existing) = find_by_url(pool, url).await? {
-        sqlx::query(
+        query(
             r#"
             UPDATE upstream_subscriptions
             SET group_id = ?,
@@ -264,7 +267,7 @@ pub async fn upsert_import_result_by_url(
             .ok_or(sqlx::Error::RowNotFound);
     }
 
-    sqlx::query(
+    query(
         r#"
         INSERT INTO upstream_subscriptions (
             name, url, group_id, enabled, remark, last_imported_at, last_import_status,

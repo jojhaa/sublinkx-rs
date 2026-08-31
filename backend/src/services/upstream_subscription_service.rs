@@ -13,7 +13,7 @@ use crate::{
     errors::AppError,
     repository::{
         group_repo::{self, GroupTable, NewGroupRecord},
-        node_repo,
+        node_repo, settings_repo,
         upstream_subscription_repo::{
             self, ImportResultRecord, NewUpstreamSubscriptionRecord,
             UpdateUpstreamSubscriptionRecord,
@@ -28,6 +28,7 @@ use super::node_service;
 pub const MIN_SYNC_INTERVAL_MINUTES: i64 = 5;
 pub const MAX_SYNC_INTERVAL_MINUTES: i64 = 10080;
 pub const DEFAULT_SYNC_INTERVAL_MINUTES: i64 = 360;
+const SOURCE_REF_BACKFILL_COMPLETED: &str = "system.upstream_source_ref_backfill_completed";
 
 pub async fn list(
     state: &AppState,
@@ -343,39 +344,56 @@ fn bool_to_db(value: bool) -> i64 {
 }
 
 pub async fn backfill_existing_node_source_refs(state: &AppState) -> Result<(), AppError> {
-    let now = now_rfc3339();
-    for source in upstream_subscription_repo::list_existing_node_source_refs(&state.db).await? {
-        if upstream_subscription_repo::find_by_url(&state.db, &source.url)
-            .await?
-            .is_some()
-        {
-            continue;
-        }
-        let name = default_name_from_url(&source.url);
-        let message = format!("discovered from {} imported nodes", source.node_count);
-        upstream_subscription_repo::upsert_import_result_by_url(
-            &state.db,
-            &name,
-            &source.url,
-            source.group_id,
-            "",
-            &ImportResultRecord {
-                status: "ok",
-                message: &message,
-                imported: source.node_count,
-                updated: 0,
-                disabled: 0,
-                skipped: 0,
-                failed: 0,
-                template_id: None,
-                template_name: None,
-                imported_at: &now,
-            },
-        )
-        .await?;
+    let completed = settings_repo::get_many(&state.db, &[SOURCE_REF_BACKFILL_COMPLETED])
+        .await?
+        .get(SOURCE_REF_BACKFILL_COMPLETED)
+        .is_some_and(|value| value == "true");
+    if completed {
+        return Ok(());
     }
 
+    let now = now_rfc3339();
+    let existing_upstreams = upstream_subscription_repo::count(&state.db).await?;
+    if should_discover_legacy_sources(false, existing_upstreams) {
+        for source in upstream_subscription_repo::list_existing_node_source_refs(&state.db).await? {
+            if upstream_subscription_repo::find_by_url(&state.db, &source.url)
+                .await?
+                .is_some()
+            {
+                continue;
+            }
+            let name = default_name_from_url(&source.url);
+            let message = format!("discovered from {} imported nodes", source.node_count);
+            upstream_subscription_repo::upsert_import_result_by_url(
+                &state.db,
+                &name,
+                &source.url,
+                source.group_id,
+                "",
+                &ImportResultRecord {
+                    status: "ok",
+                    message: &message,
+                    imported: source.node_count,
+                    updated: 0,
+                    disabled: 0,
+                    skipped: 0,
+                    failed: 0,
+                    template_id: None,
+                    template_name: None,
+                    imported_at: &now,
+                },
+            )
+            .await?;
+        }
+    }
+
+    settings_repo::set(&state.db, SOURCE_REF_BACKFILL_COMPLETED, "true", &now).await?;
+
     Ok(())
+}
+
+fn should_discover_legacy_sources(completed: bool, existing_upstreams: i64) -> bool {
+    !completed && existing_upstreams == 0
 }
 
 pub fn default_name_from_url(url: &str) -> String {
@@ -391,4 +409,17 @@ pub fn default_name_from_url(url: &str) -> String {
             Some(format!("{} {}", host, path))
         })
         .unwrap_or_else(|| "Upstream Subscription".to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::should_discover_legacy_sources;
+
+    #[test]
+    fn legacy_source_discovery_runs_only_once_for_unmanaged_databases() {
+        assert!(should_discover_legacy_sources(false, 0));
+        assert!(!should_discover_legacy_sources(false, 1));
+        assert!(!should_discover_legacy_sources(true, 0));
+        assert!(!should_discover_legacy_sources(true, 4));
+    }
 }

@@ -45,7 +45,7 @@ http://localhost:3000
 使用你在 `.env` 中配置的 `BOOTSTRAP_ADMIN_USERNAME` / `BOOTSTRAP_ADMIN_PASSWORD`
 ```
 
-首次登录后必须修改用户名和密码。密码会使用 Argon2 哈希后保存到 SQLite。
+首次登录后必须修改用户名和密码。密码会使用 Argon2 哈希后保存到当前配置的数据库。
 
 ## 配置文件
 
@@ -126,6 +126,55 @@ MIHOMO_CORE_DIR/
 
 也可以登录后台后，在“系统设置”页面下载 Mihomo 内核。
 
+## 使用 PostgreSQL
+
+默认使用 SQLite。节点数量较多、并发访问增加，或者不想让数据库文件继续住在 bind mount 上时，可以切换到 PostgreSQL 14+。
+
+### 方式一：使用 Compose 内置 PostgreSQL 容器
+
+编辑 `.env`：
+
+```env
+COMPOSE_PROFILES=postgres
+DATABASE_URL=postgresql://sublinkx:请改成强密码@postgres:5432/sublinkx
+POSTGRES_IMAGE=postgres:16-alpine
+POSTGRES_DB=sublinkx
+POSTGRES_USER=sublinkx
+POSTGRES_PASSWORD=请改成强密码
+POSTGRES_DATA_DIR=./docker-data/postgres
+```
+
+`POSTGRES_PASSWORD` 填原始密码；如果密码包含 `@`、`:`、`/`、`#` 或 `%`，`DATABASE_URL` 中对应部分必须进行 URL 百分号编码。
+
+启动或重启：
+
+```bash
+docker compose config --quiet
+docker compose up -d
+```
+
+PostgreSQL 数据会映射到：
+
+```text
+docker-data/postgres/
+```
+
+### 方式二：连接已有 PostgreSQL
+
+不要启用 `COMPOSE_PROFILES=postgres`，只把后端容器指向已有实例：
+
+```env
+DATABASE_URL=postgresql://sublinkx:请改成强密码@host.docker.internal:5432/sublinkx
+```
+
+远程实例则把主机名替换成内网地址或数据库域名。请提前创建数据库和用户，并只授予该数据库所需权限。
+
+开发者可在 Windows PowerShell 7 中运行隔离冒烟测试；脚本会创建并自动删除临时 PostgreSQL 容器，不会读取现有数据目录：
+
+```powershell
+.\scripts\test-postgres-docker.ps1
+```
+
 ## 使用 MySQL
 
 默认使用 SQLite。如果你的 Linux 服务器 Docker bind mount 写入很慢，或者节点数量比较多，建议切换 MySQL。
@@ -177,7 +226,106 @@ DATABASE_URL=mysql://sublinkx:请改成强密码@192.168.1.10:3306/sublinkx
 
 当前 Compose 已为 Linux Docker 添加 `host.docker.internal:host-gateway` 映射；Docker Desktop 上该域名默认可用。请确保 MySQL 用户允许来自 Docker 网段访问，并且目标数据库已创建。
 
-注意：SQLite 和 MySQL 是两套独立数据库。切换前请先备份 `docker-data/backend/app.db`，当前版本不会自动迁移 SQLite 数据到 MySQL。
+注意：SQLite、PostgreSQL 和 MySQL 是三套独立数据库。修改 `DATABASE_URL` 不会自动搬运数据；需要切换数据库时，请使用下面的离线迁移流程。
+
+## 数据库离线迁移
+
+`sublinkx-rs-backend migrate-database` 支持在当前版本的 SQLite、PostgreSQL 和 MySQL/MariaDB 之间迁移。迁移会保留主键、管理员密码哈希、订阅 Token、节点与分组关系、模板、上游同步状态、系统设置、访问日志和 IP 探测结果。
+
+安全边界：
+
+- 源库只读，工具不会在源库建表、升级或写入。
+- 目标库必须已经创建，但所有 SublinkX-RS 业务表必须为空；发现已有数据会直接拒绝。
+- 目标写入使用一个事务，任何字段、唯一约束或外键失败都会整批回滚。
+- PostgreSQL 迁移完成后会同步修正自增序列，避免后续新增记录撞主键。
+- 源库必须先由当前版本正常启动并完成结构升级；迁移期间停止前后端，避免得到跨时刻快照。
+
+### Docker Compose：SQLite 迁移到内置 PostgreSQL
+
+以下命令在 Linux Bash 执行。先停止应用并备份 SQLite；不要使用 `docker compose down -v`：
+
+```bash
+docker compose stop frontend backend
+mkdir -p backups
+cp --preserve=mode,timestamps docker-data/backend/app.db \
+  "backups/app-$(date +%Y%m%d-%H%M%S).db"
+```
+
+在 `.env` 中配置 PostgreSQL 和临时迁移变量。密码在 URL 中需要百分号编码：
+
+```env
+COMPOSE_PROFILES=postgres
+POSTGRES_DB=sublinkx
+POSTGRES_USER=sublinkx
+POSTGRES_PASSWORD=请改成强密码
+POSTGRES_DATA_DIR=./docker-data/postgres
+
+SUBLINKX_MIGRATION_SOURCE_URL=sqlite:///app/data/app.db
+SUBLINKX_MIGRATION_TARGET_URL=postgresql://sublinkx:经过URL编码的密码@postgres:5432/sublinkx
+SUBLINKX_MIGRATION_CONFIRM=
+```
+
+启动空的 PostgreSQL 目标库并执行只读预检：
+
+```bash
+docker compose --profile postgres up -d postgres
+docker compose --profile postgres run --rm --no-deps backend \
+  sublinkx-rs-backend migrate-database check
+```
+
+确认备份可用、预检逐表数量正确后，在 `.env` 设置确认口令：
+
+```env
+SUBLINKX_MIGRATION_CONFIRM=I_HAVE_A_CURRENT_BACKUP
+```
+
+执行迁移：
+
+```bash
+docker compose --profile postgres run --rm --no-deps backend \
+  sublinkx-rs-backend migrate-database run
+```
+
+成功后把正式连接切到 PostgreSQL，并清空三个临时迁移变量：
+
+```env
+DATABASE_URL=postgresql://sublinkx:经过URL编码的密码@postgres:5432/sublinkx
+SUBLINKX_MIGRATION_SOURCE_URL=
+SUBLINKX_MIGRATION_TARGET_URL=
+SUBLINKX_MIGRATION_CONFIRM=
+```
+
+最后恢复服务并检查健康状态和关键数据数量：
+
+```bash
+docker compose up -d backend frontend
+docker compose ps
+curl -fsS http://127.0.0.1:3000/healthz
+```
+
+迁移到外部 PostgreSQL、MySQL，或从 MySQL 迁出时，只需替换源与目标 URL。目标账号需要建表、索引和写入权限；源账号建议使用只读权限。
+
+### 源码环境迁移脚本
+
+Windows PowerShell 7：
+
+```powershell
+$env:SUBLINKX_MIGRATION_SOURCE_URL = 'sqlite://data/app.db'
+$env:SUBLINKX_MIGRATION_TARGET_URL = 'postgresql://sublinkx:encoded_password@127.0.0.1:5432/sublinkx'
+.\scripts\migrate-database.ps1 -Mode check
+.\scripts\migrate-database.ps1 -Mode run -ConfirmBackup
+```
+
+Linux/macOS Bash：
+
+```bash
+export SUBLINKX_MIGRATION_SOURCE_URL='sqlite://data/app.db'
+export SUBLINKX_MIGRATION_TARGET_URL='postgresql://sublinkx:encoded_password@127.0.0.1:5432/sublinkx'
+bash scripts/migrate-database.sh check
+bash scripts/migrate-database.sh run --confirm-backup
+```
+
+脚本从环境变量读取连接串，后端命令不会把数据库密码作为命令行参数打印。迁移完成后应清除当前终端中的临时变量。
 
 ## 固定 Docker 网段
 
@@ -379,6 +527,14 @@ docker compose down
 cp ./docker-data/backend/app.db ./app.db.bak
 docker compose up -d
 ```
+
+在线备份 Compose 内置 PostgreSQL：
+
+```bash
+docker compose exec -T postgres sh -c 'pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" --format=custom' > ./sublinkx-postgres.dump
+```
+
+请先在隔离环境验证 `pg_restore`，再把备份当作真正的读档点。只复制正在运行的 PostgreSQL 数据目录不能替代逻辑备份。
 
 ## 发布新镜像
 

@@ -1,8 +1,6 @@
 use std::collections::HashSet;
 
-use sqlx::{Any, QueryBuilder};
-
-use crate::db::DbPool;
+use crate::db::{DbPool, DbQueryBuilder, database_sql_owned, query, query_as, query_scalar};
 use crate::domain::node::NodeRecord;
 
 const NODE_SELECT_FIELDS: &str = r#"
@@ -58,7 +56,7 @@ pub async fn count_filtered(
     ungrouped: bool,
     enabled: Option<bool>,
 ) -> Result<i64, sqlx::Error> {
-    let mut query = QueryBuilder::<Any>::new("SELECT COUNT(*) FROM nodes WHERE 1 = 1");
+    let mut query = DbQueryBuilder::new("SELECT COUNT(*) FROM nodes WHERE 1 = 1");
     push_list_filters(&mut query, group_id, ungrouped, enabled);
     query.build_query_scalar().fetch_one(pool).await
 }
@@ -77,8 +75,7 @@ pub async fn list_page(
     } else {
         NODE_SELECT_FIELDS
     };
-    let mut query =
-        QueryBuilder::<Any>::new(format!("SELECT {select_fields} FROM nodes WHERE 1 = 1"));
+    let mut query = DbQueryBuilder::new(format!("SELECT {select_fields} FROM nodes WHERE 1 = 1"));
     push_list_filters(&mut query, group_id, ungrouped, enabled);
     query.push(" ORDER BY id DESC LIMIT ");
     query.push_bind(limit);
@@ -88,7 +85,7 @@ pub async fn list_page(
 }
 
 fn push_list_filters(
-    query: &mut QueryBuilder<'_, Any>,
+    query: &mut DbQueryBuilder<'_>,
     group_id: Option<i64>,
     ungrouped: bool,
     enabled: Option<bool>,
@@ -109,7 +106,7 @@ pub async fn find_by_ids(pool: &DbPool, ids: &[i64]) -> Result<Vec<NodeRecord>, 
     if ids.is_empty() {
         return Ok(Vec::new());
     }
-    let mut query = QueryBuilder::<Any>::new(format!(
+    let mut query = DbQueryBuilder::new(format!(
         "SELECT {NODE_SELECT_FIELDS} FROM nodes WHERE id IN ("
     ));
     {
@@ -130,7 +127,7 @@ pub async fn list_by_group_ids(
         return Ok(Vec::new());
     }
 
-    let mut query = QueryBuilder::<Any>::new(format!(
+    let mut query = DbQueryBuilder::new(format!(
         "SELECT {NODE_SELECT_FIELDS} FROM nodes WHERE group_id IN ("
     ));
     {
@@ -145,7 +142,7 @@ pub async fn list_by_group_ids(
 }
 
 pub async fn find_by_id(pool: &DbPool, id: i64) -> Result<Option<NodeRecord>, sqlx::Error> {
-    sqlx::query_as::<_, NodeRecord>(
+    query_as::<NodeRecord>(
         r#"
         SELECT
                id, name, protocol, raw_link, server, port, enabled + 0 AS enabled, group_id, source_type, source_ref,
@@ -165,9 +162,9 @@ pub async fn find_by_fingerprint_in_group(
     fingerprint: &str,
     group_id: Option<i64>,
 ) -> Result<Option<NodeRecord>, sqlx::Error> {
-    let query = format!(
+    let query = database_sql_owned(format!(
         "SELECT {NODE_SELECT_FIELDS} FROM nodes WHERE fingerprint = ? AND fingerprint_scope = ?"
-    );
+    ));
 
     sqlx::query_as::<_, NodeRecord>(&query)
         .bind(fingerprint)
@@ -181,7 +178,7 @@ pub async fn find_upstream_by_fingerprint(
     url: &str,
     fingerprint: &str,
 ) -> Result<Option<NodeRecord>, sqlx::Error> {
-    let query = format!(
+    let query = database_sql_owned(format!(
         r#"
         SELECT {NODE_SELECT_FIELDS}
         FROM nodes
@@ -189,7 +186,7 @@ pub async fn find_upstream_by_fingerprint(
           AND source_ref = ?
           AND fingerprint = ?
         "#
-    );
+    ));
 
     sqlx::query_as::<_, NodeRecord>(&query)
         .bind(url)
@@ -203,7 +200,7 @@ pub async fn find_unique_upstream_by_name(
     url: &str,
     name: &str,
 ) -> Result<Option<NodeRecord>, sqlx::Error> {
-    let query = format!(
+    let query = database_sql_owned(format!(
         r#"
         SELECT {NODE_SELECT_FIELDS}
         FROM nodes
@@ -213,7 +210,7 @@ pub async fn find_unique_upstream_by_name(
         ORDER BY id ASC
         LIMIT 2
         "#
-    );
+    ));
 
     let records = sqlx::query_as::<_, NodeRecord>(&query)
         .bind(url)
@@ -237,8 +234,7 @@ pub async fn existing_fingerprints_in_group(
         return Ok(HashSet::new());
     }
 
-    let mut query =
-        QueryBuilder::<Any>::new("SELECT fingerprint FROM nodes WHERE fingerprint_scope = ");
+    let mut query = DbQueryBuilder::new("SELECT fingerprint FROM nodes WHERE fingerprint_scope = ");
     query.push_bind(fingerprint_scope(group_id));
     query.push(" AND fingerprint IN (");
     {
@@ -254,7 +250,7 @@ pub async fn existing_fingerprints_in_group(
 }
 
 pub async fn insert(pool: &DbPool, node: &NewNodeRecord<'_>) -> Result<NodeRecord, sqlx::Error> {
-    sqlx::query(
+    query(
         r#"
         INSERT INTO nodes (
             name, protocol, raw_link, server, port, enabled, group_id, source_type, source_ref,
@@ -291,7 +287,7 @@ pub async fn update(
     id: i64,
     node: &UpdateNodeRecord<'_>,
 ) -> Result<NodeRecord, sqlx::Error> {
-    sqlx::query(
+    query(
         r#"
         UPDATE nodes
         SET name = ?,
@@ -331,7 +327,7 @@ pub async fn update(
 }
 
 pub async fn delete(pool: &DbPool, id: i64) -> Result<(), sqlx::Error> {
-    sqlx::query("DELETE FROM nodes WHERE id = ?")
+    query("DELETE FROM nodes WHERE id = ?")
         .bind(id)
         .execute(pool)
         .await?;
@@ -339,7 +335,7 @@ pub async fn delete(pool: &DbPool, id: i64) -> Result<(), sqlx::Error> {
 }
 
 pub async fn count_subscriptions_using_node(pool: &DbPool, id: i64) -> Result<i64, sqlx::Error> {
-    sqlx::query_scalar::<_, i64>(
+    query_scalar::<i64>(
         r#"
         SELECT COUNT(*)
         FROM (
@@ -364,7 +360,7 @@ pub async fn count_subscriptions_using_upstream_source_ref(
     pool: &DbPool,
     url: &str,
 ) -> Result<i64, sqlx::Error> {
-    sqlx::query_scalar::<_, i64>(
+    query_scalar::<i64>(
         r#"
         SELECT COUNT(*)
         FROM (
@@ -397,7 +393,7 @@ pub async fn detach_upstream_source_ref(
     url: &str,
     updated_at: &str,
 ) -> Result<u64, sqlx::Error> {
-    let result = sqlx::query(
+    let result = query(
         r#"
         UPDATE nodes
         SET source_type = 'manual',
@@ -415,7 +411,7 @@ pub async fn detach_upstream_source_ref(
 }
 
 pub async fn delete_upstream_source_ref(pool: &DbPool, url: &str) -> Result<u64, sqlx::Error> {
-    let result = sqlx::query(
+    let result = query(
         r#"
         DELETE FROM nodes
         WHERE source_type = 'upstream_subscription'
@@ -434,9 +430,8 @@ pub async fn disable_stale_upstream_nodes(
     fingerprints: &[String],
     updated_at: &str,
 ) -> Result<u64, sqlx::Error> {
-    let mut query = QueryBuilder::<Any>::new(
-        "UPDATE nodes SET enabled = 0, upstream_missing = 1, updated_at = ",
-    );
+    let mut query =
+        DbQueryBuilder::new("UPDATE nodes SET enabled = 0, upstream_missing = 1, updated_at = ");
     query.push_bind(updated_at);
     query.push(" WHERE source_type = 'upstream_subscription' AND source_ref = ");
     query.push_bind(url);
@@ -474,7 +469,7 @@ pub async fn list_enabled_ids_by_upstream_source_ref(
     pool: &DbPool,
     source_ref: &str,
 ) -> Result<Vec<i64>, sqlx::Error> {
-    sqlx::query_scalar(
+    query_scalar(
         r#"
         SELECT id
         FROM nodes
@@ -498,7 +493,7 @@ pub async fn update_latency(
     message: Option<&str>,
     tested_at: &str,
 ) -> Result<(), sqlx::Error> {
-    sqlx::query(
+    query(
         r#"
         UPDATE nodes
         SET last_latency_ms = ?,
@@ -528,7 +523,7 @@ pub async fn update_group_for_ids(
         return Ok(Vec::new());
     }
 
-    let mut update = QueryBuilder::<Any>::new("UPDATE nodes SET group_id = ");
+    let mut update = DbQueryBuilder::new("UPDATE nodes SET group_id = ");
     update.push_bind(group_id);
     update.push(", updated_at = ");
     update.push_bind(updated_at);
@@ -544,7 +539,7 @@ pub async fn update_group_for_ids(
     update.push(")");
     update.build().execute(pool).await?;
 
-    let mut select = QueryBuilder::<Any>::new("SELECT ");
+    let mut select = DbQueryBuilder::new("SELECT ");
     select.push(NODE_SELECT_FIELDS);
     select.push(" FROM nodes WHERE id IN (");
     {

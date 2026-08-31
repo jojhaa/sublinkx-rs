@@ -1,3 +1,9 @@
+x-default-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 services:
   backend:
     image: ${BACKEND_IMAGE:-docker.io/jojhaa/sublinkx-rs-backend:latest}
@@ -7,6 +13,9 @@ services:
       APP_PORT: 8080
       SUBLINKX_RUNTIME_MODE: docker
       DATABASE_URL: ${DATABASE_URL:-sqlite:///app/data/app.db}
+      SUBLINKX_MIGRATION_SOURCE_URL: ${SUBLINKX_MIGRATION_SOURCE_URL:-}
+      SUBLINKX_MIGRATION_TARGET_URL: ${SUBLINKX_MIGRATION_TARGET_URL:-}
+      SUBLINKX_MIGRATION_CONFIRM: ${SUBLINKX_MIGRATION_CONFIRM:-}
       JWT_SECRET: ${JWT_SECRET:?JWT_SECRET is required and must be a non-default value of at least 32 characters}
       JWT_EXP_HOURS: ${JWT_EXP_HOURS:-24}
       AUTH_COOKIE_SECURE: ${AUTH_COOKIE_SECURE:-true}
@@ -27,13 +36,16 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
     networks:
-      - sublinkx_net
+      sublinkx_net:
+        aliases:
+          - sublinkx-backend
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8080/healthz >/dev/null || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 12
       start_period: 20s
+    logging: *default-logging
 
   mysql:
     image: ${MYSQL_IMAGE:-mysql:8.4}
@@ -52,6 +64,28 @@ services:
       - ${MYSQL_DATA_DIR:-./docker-data/mysql}:/var/lib/mysql
     networks:
       - sublinkx_net
+    logging: *default-logging
+
+  postgres:
+    image: ${POSTGRES_IMAGE:-postgres:16-alpine}
+    restart: unless-stopped
+    profiles:
+      - postgres
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-sublinkx}
+      POSTGRES_USER: ${POSTGRES_USER:-sublinkx}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-}
+    volumes:
+      - ${POSTGRES_DATA_DIR:-./docker-data/postgres}:/var/lib/postgresql/data
+    networks:
+      - sublinkx_net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\" || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+    logging: *default-logging
 
   frontend:
     image: ${FRONTEND_IMAGE:-docker.io/jojhaa/sublinkx-rs-frontend:latest}
@@ -63,6 +97,7 @@ services:
       - "${FRONTEND_PORT:-3000}:80"
     networks:
       - sublinkx_net
+    logging: *default-logging
 
 networks:
   sublinkx_net:

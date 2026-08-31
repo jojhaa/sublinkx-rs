@@ -1,6 +1,7 @@
 mod api;
 mod app;
 mod config;
+mod database_migration;
 mod db;
 mod domain;
 mod dto;
@@ -24,12 +25,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     utils::telemetry::init_tracing();
     let _ = dotenvy::dotenv();
 
+    let mut arguments = std::env::args().skip(1);
+    if matches!(arguments.next().as_deref(), Some("migrate-database")) {
+        database_migration::run_cli(arguments).await?;
+        return Ok(());
+    }
+
     let config = AppConfig::from_env()?;
     let pool = new_database_pool(&config.database.url).await?;
     repository::user_repo::bootstrap_admin(&pool, &config).await?;
     services::template_seed_service::seed_default_templates(&pool).await?;
     let state = AppState::new(config.clone(), pool);
     services::upstream_subscription_service::backfill_existing_node_source_refs(&state).await?;
+    if let Err(error) =
+        services::node_service::reconcile_upstream_passthrough_templates(&state).await
+    {
+        tracing::warn!("failed to reconcile upstream passthrough templates: {error}");
+    }
     services::latency_scheduler_service::spawn_auto_latency_tester(state.clone());
     services::ip_intelligence_scheduler_service::spawn(state.clone());
     services::node_ip_probe_scheduler_service::spawn(state.clone());

@@ -1,11 +1,12 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref, watch } from 'vue'
+import { computed, onMounted, reactive, ref, shallowRef, watch } from 'vue'
 import { extractApiError } from '../api/client'
 import { useI18n, type MessageKey } from '../i18n'
 import { readStoredPageSize, storePageSize } from '../utils/pagination'
 import {
   createTemplate,
   deleteTemplate,
+  getTemplate,
   listTemplates,
   updateTemplate,
   type TemplateItem,
@@ -67,9 +68,10 @@ const TEMPLATE_KIND_OPTIONS: TemplateKindOption[] = [
 const PAGE_SIZE_OPTIONS = [12, 24, 48]
 const PAGE_SIZE_STORAGE_KEY = 'sublinkx_templates_page_size'
 
-const templates = ref<TemplateItem[]>([])
+const templates = shallowRef<TemplateItem[]>([])
 const loading = ref(false)
 const saving = ref(false)
+const loadingTemplateId = ref<number | null>(null)
 const showEditor = ref(false)
 const editingId = ref<number | null>(null)
 const selectedIds = ref<number[]>([])
@@ -148,14 +150,27 @@ function closeEditor() {
   resetForm()
 }
 
-function startEdit(item: TemplateItem) {
-  editingId.value = item.id
-  form.name = item.name
-  form.kind = normalizeKind(item.kind)
-  form.content = item.content
-  showEditor.value = true
+async function startEdit(item: TemplateItem) {
+  if (loadingTemplateId.value !== null) {
+    return
+  }
+
+  loadingTemplateId.value = item.id
   errorMessage.value = ''
   successMessage.value = ''
+
+  try {
+    const response = await getTemplate(item.id)
+    editingId.value = response.data.id
+    form.name = response.data.name
+    form.kind = normalizeKind(response.data.kind)
+    form.content = response.data.content
+    showEditor.value = true
+  } catch (error) {
+    errorMessage.value = extractApiError(error)
+  } finally {
+    loadingTemplateId.value = null
+  }
 }
 
 function kindLabel(kind: string) {
@@ -213,6 +228,7 @@ async function load() {
     const response = await listTemplates({
       page: page.value,
       page_size: pageSize.value,
+      compact: true,
       ...(kindFilter.value === 'all' ? {} : { kind: kindFilter.value }),
     })
     templates.value = response.data
@@ -456,8 +472,13 @@ onMounted(load)
               <code class="template-preview-line">{{ item.content }}</code>
 
               <div class="template-card-actions">
-                <button class="button button-ghost button-compact" type="button" @click="startEdit(item)">
-                  {{ t('edit') }}
+                <button
+                  class="button button-ghost button-compact"
+                  type="button"
+                  :disabled="loadingTemplateId !== null"
+                  @click="startEdit(item)"
+                >
+                  {{ loadingTemplateId === item.id ? t('refreshing') : t('edit') }}
                 </button>
                 <button class="button button-danger button-compact" type="button" :disabled="item.is_builtin" @click="removeTemplate(item.id)">
                   {{ t('delete') }}
