@@ -10,6 +10,7 @@ RUN mkdir -p /usr/local/cargo \
 ENV CARGO_HTTP_MULTIPLEXING=false
 
 COPY backend/Cargo.toml backend/Cargo.lock ./
+COPY backend/assets ./assets
 COPY backend/migrations ./migrations
 COPY backend/src ./src
 COPY docs ../docs
@@ -25,6 +26,8 @@ RUN apt-get update \
 WORKDIR /app
 
 COPY --from=builder /workspace/backend/target/release/sublinkx-rs-backend /usr/local/bin/sublinkx-rs-backend
+COPY LICENSE THIRD_PARTY_NOTICES.md /usr/share/doc/sublinkx-rs/
+COPY licenses/rules /usr/share/doc/sublinkx-rs/licenses/rules
 
 RUN mkdir -p /app/data /app/mihomo
 

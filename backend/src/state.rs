@@ -13,6 +13,9 @@ use tokio::sync::{Mutex, Semaphore};
 use crate::config::AppConfig;
 use crate::db::DbPool;
 
+const PUBLIC_EXPORT_CACHE_MAX_ENTRIES: usize = 64;
+const PUBLIC_EXPORT_CACHE_MAX_BYTES: usize = 64 * 1024 * 1024;
+
 #[derive(Clone)]
 pub struct AppState {
     pub config: AppConfig,
@@ -185,9 +188,17 @@ impl AppState {
     }
 
     pub async fn set_public_export_cache(&self, key: String, mut entry: PublicExportCacheEntry) {
+        if entry.body.len() > PUBLIC_EXPORT_CACHE_MAX_BYTES {
+            return;
+        }
         entry.cached_at = Instant::now();
         let mut cache = self.public_export_cache.lock().await;
         cache.insert(key, entry);
+        trim_public_export_cache(
+            &mut cache,
+            PUBLIC_EXPORT_CACHE_MAX_ENTRIES,
+            PUBLIC_EXPORT_CACHE_MAX_BYTES,
+        );
     }
 
     pub async fn clear_public_export_cache(&self) {
@@ -221,5 +232,73 @@ impl AppState {
 
         bucket.count += 1;
         Ok(())
+    }
+}
+
+fn trim_public_export_cache(
+    cache: &mut HashMap<String, PublicExportCacheEntry>,
+    max_entries: usize,
+    max_bytes: usize,
+) {
+    while cache.len() > max_entries
+        || cache.values().map(|entry| entry.body.len()).sum::<usize>() > max_bytes
+    {
+        let Some(oldest_key) = cache
+            .iter()
+            .min_by_key(|(_, entry)| entry.cached_at)
+            .map(|(key, _)| key.clone())
+        else {
+            break;
+        };
+        cache.remove(&oldest_key);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{PublicExportCacheEntry, trim_public_export_cache};
+    use axum::{
+        body::Bytes,
+        http::{HeaderMap, StatusCode},
+    };
+    use std::{
+        collections::HashMap,
+        time::{Duration, Instant},
+    };
+
+    fn cache_entry(size: usize, cached_at: Instant) -> PublicExportCacheEntry {
+        PublicExportCacheEntry {
+            status: StatusCode::OK,
+            headers: HeaderMap::new(),
+            body: Bytes::from(vec![0; size]),
+            cached_at,
+        }
+    }
+
+    #[test]
+    fn bounds_public_export_cache_by_entries_and_bytes() {
+        let now = Instant::now();
+        let mut cache = HashMap::new();
+        cache.insert(
+            "oldest".to_string(),
+            cache_entry(6, now - Duration::from_secs(3)),
+        );
+        cache.insert(
+            "middle".to_string(),
+            cache_entry(6, now - Duration::from_secs(2)),
+        );
+        cache.insert(
+            "newest".to_string(),
+            cache_entry(6, now - Duration::from_secs(1)),
+        );
+
+        trim_public_export_cache(&mut cache, 2, 12);
+
+        assert_eq!(cache.len(), 2);
+        assert!(!cache.contains_key("oldest"));
+        assert_eq!(
+            cache.values().map(|entry| entry.body.len()).sum::<usize>(),
+            12
+        );
     }
 }

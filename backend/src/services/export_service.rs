@@ -10,11 +10,13 @@ use serde_yaml::{Mapping, Value};
 use std::{
     collections::{HashMap, HashSet},
     net::IpAddr,
+    sync::OnceLock,
     time::{Duration, Instant},
 };
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
 use crate::{
+    db::DbPool,
     domain::{
         client::{detect_client_target_from_user_agent, resolve_client_target},
         node::NodeView,
@@ -32,7 +34,6 @@ use crate::{
 
 use super::{auth_service, settings_service, subscription_service};
 
-const CLASH_ROUTING_TEMPLATE_DOC: &str = include_str!("../../../docs/clash-routing-template.md");
 const PUBLIC_EXPORT_CACHE_BODY_LIMIT: usize = 8 * 1024 * 1024;
 const PUBLIC_EXPORT_RATE_WINDOW: Duration = Duration::from_secs(60);
 const MIHOMO_DEFAULT_DELAY_TEST_URL: &str = "https://cp.cloudflare.com/generate_204";
@@ -41,6 +42,83 @@ const MIHOMO_GROUP_MANUAL: &str = "手动选择";
 const MIHOMO_GROUP_AUTO: &str = "自动选择";
 const MIHOMO_GROUP_FALLBACK: &str = "故障转移";
 const MIHOMO_GROUP_LOAD_BALANCE: &str = "负载均衡";
+const BUILTIN_CLASH_TEMPLATE_NAME: &str = "Built-in Clash ACL4SSR Style";
+const BUILTIN_MIHOMO_TEMPLATE_NAME: &str = "Built-in Mihomo Policy Orchestrator";
+const MIHOMO_INLINE_RULE_PROVIDERS_YAML: &str =
+    include_str!("../../assets/mihomo-rules-inline.yaml");
+static MIHOMO_INLINE_RULE_PROVIDERS_BLOCK: OnceLock<String> = OnceLock::new();
+const BUILTIN_CLASH_COMPACT_GROUP_ALIASES: &[(&str, &str)] = &[
+    ("手动切换", MIHOMO_GROUP_MANUAL),
+    ("Ai平台", "节点选择"),
+    ("油管视频", "节点选择"),
+    ("奈飞视频", "节点选择"),
+    ("电报消息", "节点选择"),
+    ("微软服务", "节点选择"),
+    ("苹果服务", "节点选择"),
+    ("全球直连", "DIRECT"),
+    ("广告拦截", "REJECT"),
+    ("漏网之鱼", "节点选择"),
+];
+const BUILTIN_CLASH_REMOVED_GROUPS: &[&str] = &[
+    "Ai平台",
+    "油管视频",
+    "奈飞视频",
+    "电报消息",
+    "微软服务",
+    "苹果服务",
+    "全球直连",
+    "广告拦截",
+    "漏网之鱼",
+];
+const BUILTIN_MIHOMO_COMPACT_GROUP_ALIASES: &[(&str, &str)] = &[
+    ("PROXY", MIHOMO_GROUP_PROXY),
+    ("MANUAL", MIHOMO_GROUP_MANUAL),
+    ("AUTO", MIHOMO_GROUP_AUTO),
+    ("FALLBACK", MIHOMO_GROUP_FALLBACK),
+    ("LOAD-BALANCE", MIHOMO_GROUP_LOAD_BALANCE),
+    ("AI", MIHOMO_GROUP_PROXY),
+    ("STREAMING", MIHOMO_GROUP_PROXY),
+    ("GOOGLE", MIHOMO_GROUP_PROXY),
+    ("TELEGRAM", MIHOMO_GROUP_PROXY),
+    ("MICROSOFT", MIHOMO_GROUP_PROXY),
+    ("APPLE", MIHOMO_GROUP_PROXY),
+    ("DOMESTIC", "DIRECT"),
+    ("GAME", MIHOMO_GROUP_PROXY),
+    ("DOWNLOAD-BLOCK", "REJECT"),
+    ("FINAL", MIHOMO_GROUP_PROXY),
+    ("AI 服务", MIHOMO_GROUP_PROXY),
+    ("流媒体", MIHOMO_GROUP_PROXY),
+    ("谷歌服务", MIHOMO_GROUP_PROXY),
+    ("电报消息", MIHOMO_GROUP_PROXY),
+    ("微软服务", MIHOMO_GROUP_PROXY),
+    ("苹果服务", MIHOMO_GROUP_PROXY),
+    ("国内网站", "DIRECT"),
+    ("游戏平台", MIHOMO_GROUP_PROXY),
+    ("下载拦截", "REJECT"),
+    ("漏网之鱼", MIHOMO_GROUP_PROXY),
+];
+const BUILTIN_MIHOMO_REMOVED_GROUPS: &[&str] = &[
+    "AI",
+    "STREAMING",
+    "GOOGLE",
+    "TELEGRAM",
+    "MICROSOFT",
+    "APPLE",
+    "DOMESTIC",
+    "GAME",
+    "DOWNLOAD-BLOCK",
+    "FINAL",
+    "AI 服务",
+    "流媒体",
+    "谷歌服务",
+    "电报消息",
+    "微软服务",
+    "苹果服务",
+    "国内网站",
+    "游戏平台",
+    "下载拦截",
+    "漏网之鱼",
+];
 const MIHOMO_LEGACY_GROUP_NAMES: &[(&str, &str)] = &[
     ("PROXY", MIHOMO_GROUP_PROXY),
     ("MANUAL", MIHOMO_GROUP_MANUAL),
@@ -295,7 +373,8 @@ async fn export_subscription_view_with_resolved_target(
         .retain(|node| node.enabled && !node.upstream_missing);
     subscription.node_ids = subscription.nodes.iter().map(|node| node.id).collect();
     sort_subscription_nodes_for_export(state, &mut subscription).await?;
-    let template = load_export_template(state, subscription.template_id, template_target).await?;
+    let template =
+        load_export_template(&state.db, subscription.template_id, template_target).await?;
     let node_countries = if matches!(canonical_target, "mihomo" | "mellow") {
         node_ip_probe_repo::countries_by_node_ids(&state.db, &subscription.node_ids).await?
     } else {
@@ -305,8 +384,8 @@ async fn export_subscription_view_with_resolved_target(
     match canonical_target {
         "xray" => export_xray_bundle(subscription, export_mode),
         "uri-bundle" => export_uri_bundle(subscription, export_mode, &export_target),
-        "sssub" => export_sssub(subscription, export_mode),
-        "ssd" => export_ssd(subscription, export_mode),
+        "sssub" => export_sssub(subscription, export_mode, template.as_ref()),
+        "ssd" => export_ssd(subscription, export_mode, template.as_ref()),
         "mihomo" => export_mihomo(
             subscription,
             export_mode,
@@ -318,10 +397,16 @@ async fn export_subscription_view_with_resolved_target(
         ),
         "surge" => export_surge(subscription, export_mode, template.as_ref()),
         "sing-box" => export_sing_box(subscription, export_mode, template.as_ref()),
-        "quanx" => export_quantumult_x(subscription, export_mode),
-        "quan" => export_legacy_client_profile(subscription, export_mode, "Quantumult"),
-        "loon" => export_legacy_client_profile(subscription, export_mode, "Loon"),
-        "surfboard" => export_legacy_client_profile(subscription, export_mode, "Surfboard"),
+        "quanx" => export_quantumult_x(subscription, export_mode, template.as_ref()),
+        "quan" => {
+            export_legacy_client_profile(subscription, export_mode, "Quantumult", template.as_ref())
+        }
+        "loon" => {
+            export_legacy_client_profile(subscription, export_mode, "Loon", template.as_ref())
+        }
+        "surfboard" => {
+            export_legacy_client_profile(subscription, export_mode, "Surfboard", template.as_ref())
+        }
         "mellow" => export_mihomo(
             subscription,
             export_mode,
@@ -460,7 +545,11 @@ fn export_uri_bundle(
     )
 }
 
-fn export_sssub(subscription: SubscriptionView, mode: ExportMode) -> Result<Response, AppError> {
+fn export_sssub(
+    subscription: SubscriptionView,
+    mode: ExportMode,
+    template: Option<&TemplateRecord>,
+) -> Result<Response, AppError> {
     let mut servers = Vec::new();
     let mut filtered_count = 0usize;
 
@@ -489,12 +578,15 @@ fn export_sssub(subscription: SubscriptionView, mode: ExportMode) -> Result<Resp
         ));
     }
 
-    let body = serde_json::to_string_pretty(&json!({
-        "version": 1,
-        "remarks": subscription.name,
-        "servers": servers
-    }))
-    .map_err(|_| AppError::Internal)?;
+    let mut config = parse_json_template(template, "sssub")?;
+    let root = config
+        .as_object_mut()
+        .ok_or_else(|| AppError::BadRequest("sssub template must be a JSON object".to_string()))?;
+    root.entry("version".to_string())
+        .or_insert_with(|| json!(1));
+    root.insert("remarks".to_string(), json!(subscription.name));
+    root.insert("servers".to_string(), serde_json::Value::Array(servers));
+    let body = serde_json::to_string_pretty(&config).map_err(|_| AppError::Internal)?;
 
     text_response(
         body,
@@ -505,7 +597,11 @@ fn export_sssub(subscription: SubscriptionView, mode: ExportMode) -> Result<Resp
     )
 }
 
-fn export_ssd(subscription: SubscriptionView, mode: ExportMode) -> Result<Response, AppError> {
+fn export_ssd(
+    subscription: SubscriptionView,
+    mode: ExportMode,
+    template: Option<&TemplateRecord>,
+) -> Result<Response, AppError> {
     let mut servers = Vec::new();
     let mut filtered_count = 0usize;
 
@@ -534,18 +630,24 @@ fn export_ssd(subscription: SubscriptionView, mode: ExportMode) -> Result<Respon
         ));
     }
 
-    let body = serde_json::to_string_pretty(&json!({
-        "airport": subscription.name,
-        "port": 0,
-        "encryption": "",
-        "password": "",
-        "traffic_used": 0,
-        "traffic_total": 0,
-        "expiry": 0,
-        "url": "",
-        "servers": servers
-    }))
-    .map_err(|_| AppError::Internal)?;
+    let mut config = parse_json_template(template, "ssd")?;
+    let root = config
+        .as_object_mut()
+        .ok_or_else(|| AppError::BadRequest("ssd template must be a JSON object".to_string()))?;
+    root.insert("airport".to_string(), json!(subscription.name));
+    root.entry("port".to_string()).or_insert_with(|| json!(0));
+    root.entry("encryption".to_string())
+        .or_insert_with(|| json!(""));
+    root.entry("password".to_string())
+        .or_insert_with(|| json!(""));
+    root.entry("traffic_used".to_string())
+        .or_insert_with(|| json!(0));
+    root.entry("traffic_total".to_string())
+        .or_insert_with(|| json!(0));
+    root.entry("expiry".to_string()).or_insert_with(|| json!(0));
+    root.entry("url".to_string()).or_insert_with(|| json!(""));
+    root.insert("servers".to_string(), serde_json::Value::Array(servers));
+    let body = serde_json::to_string_pretty(&config).map_err(|_| AppError::Internal)?;
 
     text_response(
         body,
@@ -589,6 +691,7 @@ fn export_mihomo(
 
     let mut root = parse_yaml_template(template, target_name)?;
     dedupe_mihomo_proxy_names(&mut root);
+    compact_builtin_mihomo_policy_groups(&mut root, template);
 
     let mut used_proxy_names = collect_mihomo_proxy_names(&root);
     let mut proxy_items = Vec::with_capacity(subscription.nodes.len());
@@ -649,7 +752,7 @@ fn export_mihomo(
     ensure_mihomo_match_rule(&mut root);
     localize_mihomo_legacy_group_names(&mut root);
 
-    let yaml = serde_yaml::to_string(&root).map_err(|_| AppError::Internal)?;
+    let yaml = serialize_mihomo_yaml(&root, template)?;
     text_response(
         yaml,
         "application/yaml; charset=utf-8",
@@ -898,6 +1001,7 @@ fn export_sing_box(
 fn export_quantumult_x(
     subscription: SubscriptionView,
     mode: ExportMode,
+    template: Option<&TemplateRecord>,
 ) -> Result<Response, AppError> {
     let mut lines = Vec::new();
     let mut filtered_count = 0usize;
@@ -919,11 +1023,17 @@ fn export_quantumult_x(
         ));
     }
 
-    let body = format!(
-        "# Profile: {}\n[server_remote]\n{}\n\n[filter_remote]\n\n[rewrite_remote]\n\n[task_local]\n",
-        subscription.name,
-        lines.join("\n")
-    );
+    let body = if let Some(template) = template {
+        let mut ini = parse_surge_template(&template.content);
+        append_lines_to_section(&mut ini.sections, "server_remote", lines);
+        render_surge_ini(ini)
+    } else {
+        format!(
+            "# Profile: {}\n[server_remote]\n{}\n\n[filter_remote]\n\n[rewrite_remote]\n\n[task_local]\n",
+            subscription.name,
+            lines.join("\n")
+        )
+    };
 
     text_response(
         body,
@@ -938,6 +1048,7 @@ fn export_legacy_client_profile(
     subscription: SubscriptionView,
     mode: ExportMode,
     client_name: &str,
+    template: Option<&TemplateRecord>,
 ) -> Result<Response, AppError> {
     let mut proxy_lines = Vec::new();
     let mut proxy_names = Vec::new();
@@ -972,18 +1083,34 @@ fn export_legacy_client_profile(
         )));
     }
 
-    let mut body = format!(
-        "#!MANAGED-CONFIG {} interval=86400 strict=false\n# Profile: {}\n# Client: {}\n\n[General]\nloglevel = notify\n\n[Proxy]\n{}\n\n[Proxy Group]\nProxy = select, {}, DIRECT\n\n[Rule]\nFINAL,Proxy\n",
-        subscription.name,
-        subscription.name,
-        client_name,
-        proxy_lines.join("\n"),
-        proxy_names.join(", ")
-    );
+    let mut body = if let Some(template) = template {
+        let mut ini = parse_surge_template(&template.content);
+        let proxy_section = if client_name == "Quantumult" {
+            "SERVER"
+        } else {
+            "Proxy"
+        };
+        append_lines_to_section(&mut ini.sections, proxy_section, proxy_lines);
+        ini.trailing_raw_sections.extend(wireguard_sections);
+        render_surge_ini(ini)
+    } else {
+        let mut generated = format!(
+            "#!MANAGED-CONFIG {} interval=86400 strict=false\n# Profile: {}\n# Client: {}\n\n[General]\nloglevel = notify\n\n[Proxy]\n{}\n\n[Proxy Group]\nProxy = select, {}, DIRECT\n\n[Rule]\nFINAL,Proxy\n",
+            subscription.name,
+            subscription.name,
+            client_name,
+            proxy_lines.join("\n"),
+            proxy_names.join(", ")
+        );
 
-    if !wireguard_sections.is_empty() {
-        body.push('\n');
-        body.push_str(&wireguard_sections.join("\n\n"));
+        if !wireguard_sections.is_empty() {
+            generated.push('\n');
+            generated.push_str(&wireguard_sections.join("\n\n"));
+            generated.push('\n');
+        }
+        generated
+    };
+    if !body.ends_with('\n') {
         body.push('\n');
     }
 
@@ -2457,25 +2584,21 @@ fn template_kind_applies(template_kind: &str, target: &str) -> bool {
 }
 
 async fn load_export_template(
-    state: &AppState,
+    pool: &DbPool,
     template_id: Option<i64>,
     target: &str,
 ) -> Result<Option<TemplateRecord>, AppError> {
-    let Some(template_id) = template_id else {
-        return Ok(None);
-    };
+    if let Some(template_id) = template_id {
+        let template = template_repo::find_by_id(pool, template_id)
+            .await?
+            .ok_or_else(|| AppError::BadRequest(format!("template not found: {}", template_id)))?;
 
-    let template = template_repo::find_by_id(&state.db, template_id)
-        .await?
-        .ok_or_else(|| AppError::BadRequest(format!("template not found: {}", template_id)))?;
-
-    let applies = template_kind_applies(template.kind.as_str(), target);
-
-    if applies {
-        Ok(Some(template))
-    } else {
-        Ok(None)
+        if template_kind_applies(template.kind.as_str(), target) {
+            return Ok(Some(template));
+        }
     }
+
+    Ok(template_repo::find_latest_builtin_by_kind(pool, target).await?)
 }
 
 fn parse_yaml_template(
@@ -2510,27 +2633,7 @@ fn parse_yaml_template(
 }
 
 fn built_in_clash_routing_template() -> Result<&'static str, AppError> {
-    let section = [
-        "## ACL4SSR 风格完整分流模板",
-        "## ACL4SSR-Style Full Routing Template",
-    ]
-    .iter()
-    .find_map(|heading| {
-        CLASH_ROUTING_TEMPLATE_DOC
-            .find(heading)
-            .map(|section_start| &CLASH_ROUTING_TEMPLATE_DOC[section_start..])
-    })
-    .unwrap_or(CLASH_ROUTING_TEMPLATE_DOC);
-    let yaml_start_marker = "```yaml";
-    let yaml_start = section.find(yaml_start_marker).ok_or_else(|| {
-        AppError::BadRequest("built-in Clash routing template is missing a YAML block".to_string())
-    })? + yaml_start_marker.len();
-    let yaml_section = &section[yaml_start..];
-    let yaml_end = yaml_section.find("```").ok_or_else(|| {
-        AppError::BadRequest("built-in Clash routing template YAML block is not closed".to_string())
-    })?;
-
-    Ok(yaml_section[..yaml_end].trim())
+    Ok(crate::services::template_seed_service::CLASH_TEMPLATE)
 }
 
 fn yaml_insert_if_missing(root: &mut Mapping, key: &str, value: Value) {
@@ -3049,6 +3152,101 @@ fn ensure_mihomo_match_rule(root: &mut Mapping) {
     );
 }
 
+fn compact_builtin_mihomo_policy_groups(root: &mut Mapping, template: Option<&TemplateRecord>) {
+    let Some(template) = template.filter(|template| template.is_builtin != 0) else {
+        return;
+    };
+    let (aliases, removed_groups) = match (template.kind.as_str(), template.name.as_str()) {
+        ("clash", BUILTIN_CLASH_TEMPLATE_NAME) => (
+            BUILTIN_CLASH_COMPACT_GROUP_ALIASES,
+            BUILTIN_CLASH_REMOVED_GROUPS,
+        ),
+        ("mihomo", BUILTIN_MIHOMO_TEMPLATE_NAME) => (
+            BUILTIN_MIHOMO_COMPACT_GROUP_ALIASES,
+            BUILTIN_MIHOMO_REMOVED_GROUPS,
+        ),
+        _ => return,
+    };
+
+    if let Some(groups) = root
+        .get_mut(Value::String("proxy-groups".to_string()))
+        .and_then(Value::as_sequence_mut)
+    {
+        groups.retain(|group| {
+            let Some(name) = group
+                .as_mapping()
+                .and_then(|group| group.get(Value::String("name".to_string())))
+                .and_then(Value::as_str)
+            else {
+                return true;
+            };
+            !removed_groups.contains(&name)
+        });
+    }
+
+    rewrite_mihomo_group_references(root, aliases);
+}
+
+fn serialize_mihomo_yaml(
+    root: &Mapping,
+    template: Option<&TemplateRecord>,
+) -> Result<String, AppError> {
+    let yaml = serde_yaml::to_string(root).map_err(|_| AppError::Internal)?;
+    let is_builtin_mihomo = template.is_some_and(|template| {
+        template.is_builtin != 0
+            && template.kind == "mihomo"
+            && template.name == BUILTIN_MIHOMO_TEMPLATE_NAME
+    });
+    if !is_builtin_mihomo {
+        return Ok(yaml);
+    }
+
+    let providers = MIHOMO_INLINE_RULE_PROVIDERS_BLOCK.get_or_init(|| {
+        let mut block = String::with_capacity(MIHOMO_INLINE_RULE_PROVIDERS_YAML.len() + 1024);
+        block.push_str("rule-providers:\n");
+        for line in MIHOMO_INLINE_RULE_PROVIDERS_YAML.lines() {
+            block.push_str("  ");
+            block.push_str(line);
+            block.push('\n');
+        }
+        block
+    });
+    replace_top_level_yaml_section(&yaml, "rule-providers", providers).ok_or_else(|| {
+        tracing::error!("built-in Mihomo template is missing its rule-providers section");
+        AppError::Internal
+    })
+}
+
+fn replace_top_level_yaml_section(
+    yaml: &str,
+    section_name: &str,
+    replacement: &str,
+) -> Option<String> {
+    let marker = format!("{section_name}:\n");
+    let start = if yaml.starts_with(&marker) {
+        0
+    } else {
+        yaml.find(&format!("\n{marker}"))? + 1
+    };
+    let content_start = start + marker.len();
+    let mut end = yaml.len();
+    let mut cursor = content_start;
+    for line in yaml[content_start..].split_inclusive('\n') {
+        let line_without_newline = line.strip_suffix('\n').unwrap_or(line);
+        if !line_without_newline.is_empty() && !line_without_newline.starts_with([' ', '\t', '#']) {
+            end = cursor;
+            break;
+        }
+        cursor += line.len();
+    }
+
+    let mut result = String::with_capacity(yaml.len() - (end - start) + replacement.len());
+    result.push_str(&yaml[..start]);
+    result.push_str(replacement);
+    result.push_str(&yaml[end..]);
+    Some(result)
+}
+
 fn localize_mihomo_legacy_group_names(root: &mut Mapping) {
     let existing_group_names = root
         .get(Value::String("proxy-groups".to_string()))
@@ -3071,6 +3269,10 @@ fn localize_mihomo_legacy_group_names(root: &mut Mapping) {
         return;
     }
 
+    rewrite_mihomo_group_references(root, &aliases);
+}
+
+fn rewrite_mihomo_group_references(root: &mut Mapping, aliases: &[(&str, &str)]) {
     if let Some(groups) = root
         .get_mut(Value::String("proxy-groups".to_string()))
         .and_then(Value::as_sequence_mut)
@@ -3082,7 +3284,7 @@ fn localize_mihomo_legacy_group_names(root: &mut Mapping) {
             if let Some(name) = group
                 .get_mut(Value::String("name".to_string()))
                 .and_then(|value| value.as_str())
-                .and_then(|name| localized_mihomo_group_name(name, &aliases))
+                .and_then(|name| localized_mihomo_group_name(name, aliases))
             {
                 group.insert(
                     Value::String("name".to_string()),
@@ -3096,7 +3298,7 @@ fn localize_mihomo_legacy_group_names(root: &mut Mapping) {
                 for member in members {
                     let Some(localized) = member
                         .as_str()
-                        .and_then(|name| localized_mihomo_group_name(name, &aliases))
+                        .and_then(|name| localized_mihomo_group_name(name, aliases))
                         .map(str::to_string)
                     else {
                         continue;
@@ -3115,7 +3317,7 @@ fn localize_mihomo_legacy_group_names(root: &mut Mapping) {
             let Some(rule_text) = rule.as_str() else {
                 continue;
             };
-            for (legacy, localized) in &aliases {
+            for (legacy, localized) in aliases {
                 let suffix = format!(",{legacy}");
                 let no_resolve_suffix = format!(",{legacy},no-resolve");
                 if let Some(prefix) = rule_text.strip_suffix(&no_resolve_suffix) {
@@ -3131,7 +3333,7 @@ fn localize_mihomo_legacy_group_names(root: &mut Mapping) {
     }
 
     if let Some(dns) = root.get_mut(Value::String("dns".to_string())) {
-        localize_mihomo_dns_group_references(dns, &aliases);
+        localize_mihomo_dns_group_references(dns, aliases);
     }
 }
 
@@ -3357,7 +3559,10 @@ fn parse_surge_template(content: &str) -> SurgeIni {
 }
 
 fn ensure_section(sections: &mut Vec<SurgeSection>, name: &str, lines: Vec<String>) {
-    if sections.iter().any(|section| section.name == name) {
+    if sections
+        .iter()
+        .any(|section| section.name.eq_ignore_ascii_case(name))
+    {
         return;
     }
 
@@ -3368,7 +3573,10 @@ fn ensure_section(sections: &mut Vec<SurgeSection>, name: &str, lines: Vec<Strin
 }
 
 fn append_lines_to_section(sections: &mut Vec<SurgeSection>, name: &str, mut lines: Vec<String>) {
-    if let Some(section) = sections.iter_mut().find(|section| section.name == name) {
+    if let Some(section) = sections
+        .iter_mut()
+        .find(|section| section.name.eq_ignore_ascii_case(name))
+    {
         section.lines.append(&mut lines);
         return;
     }
@@ -3778,16 +3986,422 @@ mod tests {
     use axum::http::header;
 
     use super::{
-        ExportMode, MIHOMO_DEFAULT_DELAY_TEST_URL, dedupe_mihomo_proxy_names,
-        ensure_mihomo_country_load_balance_groups, ensure_mihomo_default_proxy_groups,
-        ensure_mihomo_match_rule, expand_mihomo_include_all_proxy_groups, export_mihomo,
-        export_sing_box, is_xray_supported, localize_mihomo_legacy_group_names,
-        mihomo_proxy_group_exists, normalize_sing_box_server_ports, resolve_export_mode,
-        safe_inline_value, safe_line_value, text_response, unique_mihomo_proxy_name,
+        ExportMode, MIHOMO_DEFAULT_DELAY_TEST_URL, MIHOMO_INLINE_RULE_PROVIDERS_YAML,
+        PUBLIC_EXPORT_CACHE_BODY_LIMIT, compact_builtin_mihomo_policy_groups,
+        dedupe_mihomo_proxy_names, ensure_mihomo_country_load_balance_groups,
+        ensure_mihomo_default_proxy_groups, ensure_mihomo_match_rule,
+        expand_mihomo_include_all_proxy_groups, export_legacy_client_profile, export_mihomo,
+        export_quantumult_x, export_sing_box, export_ssd, export_sssub, is_xray_supported,
+        load_export_template, localize_mihomo_legacy_group_names, mihomo_proxy_group_exists,
+        normalize_sing_box_server_ports, resolve_export_mode, safe_inline_value, safe_line_value,
+        text_response, unique_mihomo_proxy_name,
     };
-    use crate::domain::{node::NodeView, subscription::SubscriptionView};
+    use crate::domain::{node::NodeView, subscription::SubscriptionView, template::TemplateRecord};
     use serde_yaml::Value;
-    use std::collections::{HashMap, HashSet};
+    use std::{
+        collections::{HashMap, HashSet},
+        time::{SystemTime, UNIX_EPOCH},
+    };
+
+    fn sample_shadowsocks_subscription(default_client: &str) -> SubscriptionView {
+        SubscriptionView {
+            id: 1,
+            name: "Template test".to_string(),
+            token: "test-token".to_string(),
+            description: String::new(),
+            default_client: Some(default_client.to_string()),
+            template_id: None,
+            group_id: None,
+            enabled: true,
+            expires_at: None,
+            status: "active".to_string(),
+            node_group_ids: Vec::new(),
+            node_ids: vec![1],
+            nodes: vec![NodeView {
+                id: 1,
+                name: "SS node".to_string(),
+                protocol: "shadowsocks".to_string(),
+                raw_link: String::new(),
+                server: "192.0.2.1".to_string(),
+                port: 443,
+                enabled: true,
+                group_id: None,
+                source_type: "manual".to_string(),
+                source_ref: None,
+                upstream_missing: false,
+                fingerprint: "fingerprint-1".to_string(),
+                settings: serde_json::json!({
+                    "method": "aes-128-gcm",
+                    "password": "test-password"
+                }),
+                remark: String::new(),
+                last_latency_ms: None,
+                last_latency_status: None,
+                last_latency_message: None,
+                last_latency_tested_at: None,
+                created_at: String::new(),
+                updated_at: String::new(),
+            }],
+            created_at: String::new(),
+            updated_at: String::new(),
+        }
+    }
+
+    fn sample_template(kind: &str, content: &str) -> TemplateRecord {
+        TemplateRecord {
+            id: 1,
+            name: format!("Test {kind} template"),
+            kind: kind.to_string(),
+            content: content.to_string(),
+            is_builtin: 1,
+            created_at: String::new(),
+            updated_at: String::new(),
+        }
+    }
+
+    async fn response_body(response: axum::response::Response) -> String {
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("response body should be readable");
+        String::from_utf8(body.to_vec()).expect("response body should be UTF-8")
+    }
+
+    #[tokio::test]
+    async fn selects_system_templates_by_target_unless_an_explicit_template_applies() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time should be after unix epoch")
+            .as_nanos();
+        let database_relative_path = format!(
+            "target/test-data/sublinkx-export-template-{}-{nonce}.db",
+            std::process::id()
+        );
+        let database_path = std::env::current_dir()
+            .expect("current directory should exist")
+            .join(&database_relative_path);
+        let pool = crate::db::new_database_pool(&format!("sqlite://{database_relative_path}"))
+            .await
+            .expect("test database should initialize");
+        crate::services::template_seed_service::seed_default_templates(&pool)
+            .await
+            .expect("system templates should seed");
+
+        for kind in [
+            "xray",
+            "clash",
+            "mihomo",
+            "surge",
+            "sing-box",
+            "surge3",
+            "surge2",
+            "quanx",
+            "quan",
+            "loon",
+            "surfboard",
+            "mellow",
+            "clashr",
+            "ss",
+            "sssub",
+            "ssr",
+            "ssd",
+            "trojan",
+            "mixed",
+        ] {
+            let template = load_export_template(&pool, None, kind)
+                .await
+                .expect("system template lookup should succeed")
+                .unwrap_or_else(|| panic!("system template should exist for {kind}"));
+            assert_eq!(template.kind, kind);
+            assert_eq!(template.is_builtin, 1);
+        }
+
+        let mihomo = load_export_template(&pool, None, "mihomo")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(mihomo.name, "Built-in Mihomo Policy Orchestrator");
+
+        let now = "2026-09-01T00:00:00Z";
+        let explicit = crate::repository::template_repo::insert(
+            &pool,
+            &crate::repository::template_repo::NewTemplateRecord {
+                name: "Explicit Mihomo template",
+                kind: "mihomo",
+                content: "rules: [MATCH,DIRECT]",
+                is_builtin: 0,
+                created_at: now,
+                updated_at: now,
+            },
+        )
+        .await
+        .expect("explicit template should insert");
+        assert_eq!(
+            load_export_template(&pool, Some(explicit.id), "mihomo")
+                .await
+                .unwrap()
+                .unwrap()
+                .id,
+            explicit.id
+        );
+        assert_eq!(
+            load_export_template(&pool, Some(explicit.id), "sing-box")
+                .await
+                .unwrap()
+                .unwrap()
+                .name,
+            "Built-in sing-box Route Base"
+        );
+
+        pool.close().await;
+        for attempt in 0..10 {
+            match std::fs::remove_file(&database_path) {
+                Ok(()) => break,
+                Err(error) if attempt < 9 => {
+                    tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+                    if error.kind() == std::io::ErrorKind::NotFound {
+                        break;
+                    }
+                }
+                Err(error) => panic!("test database should be removable: {error}"),
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn template_backed_exporters_preserve_configuration_and_add_nodes() {
+        let sssub_template =
+            sample_template("sssub", r#"{"version":1,"custom":"kept","servers":[]}"#);
+        let sssub = response_body(
+            export_sssub(
+                sample_shadowsocks_subscription("sssub"),
+                ExportMode::Strict,
+                Some(&sssub_template),
+            )
+            .unwrap(),
+        )
+        .await;
+        let sssub = serde_json::from_str::<serde_json::Value>(&sssub).unwrap();
+        assert_eq!(sssub["custom"], "kept");
+        assert_eq!(sssub["servers"].as_array().unwrap().len(), 1);
+
+        let ssd_template =
+            sample_template("ssd", r#"{"airport":"old","custom":"kept","servers":[]}"#);
+        let ssd = response_body(
+            export_ssd(
+                sample_shadowsocks_subscription("ssd"),
+                ExportMode::Strict,
+                Some(&ssd_template),
+            )
+            .unwrap(),
+        )
+        .await;
+        let ssd = serde_json::from_str::<serde_json::Value>(&ssd).unwrap();
+        assert_eq!(ssd["airport"], "Template test");
+        assert_eq!(ssd["custom"], "kept");
+        assert_eq!(ssd["servers"].as_array().unwrap().len(), 1);
+
+        let quanx_template = sample_template(
+            "quanx",
+            "[general]\ncustom = kept\n\n[server_remote]\n\n[filter_remote]\n",
+        );
+        let quanx = response_body(
+            export_quantumult_x(
+                sample_shadowsocks_subscription("quanx"),
+                ExportMode::Strict,
+                Some(&quanx_template),
+            )
+            .unwrap(),
+        )
+        .await;
+        assert!(quanx.contains("custom = kept"));
+        assert!(quanx.contains("192.0.2.1"));
+
+        for (kind, client_name, template_content, preserved_line) in [
+            (
+                "quan",
+                "Quantumult",
+                "[SERVER]\n\n[POLICY]\nstatic=PROXY, auto, direct\n",
+                "static=PROXY, auto, direct",
+            ),
+            (
+                "loon",
+                "Loon",
+                "[General]\ncustom = kept\n\n[Proxy]\n\n[Rule]\nFINAL,Proxy\n",
+                "custom = kept",
+            ),
+            (
+                "surfboard",
+                "Surfboard",
+                "[General]\ncustom = kept\n\n[Proxy]\n\n[Rule]\nFINAL,Proxy\n",
+                "FINAL,Proxy",
+            ),
+        ] {
+            let template = sample_template(kind, template_content);
+            let body = response_body(
+                export_legacy_client_profile(
+                    sample_shadowsocks_subscription(kind),
+                    ExportMode::Strict,
+                    client_name,
+                    Some(&template),
+                )
+                .unwrap(),
+            )
+            .await;
+            assert!(
+                body.contains(preserved_line),
+                "{kind} should retain template content"
+            );
+            assert!(
+                body.contains("192.0.2.1"),
+                "{kind} should contain the selected node"
+            );
+        }
+
+        let mut mihomo_template = sample_template(
+            "mihomo",
+            r#"dns:
+  enable: true
+  nameserver: [1.1.1.1]
+rule-providers:
+  custom:
+    type: http
+    behavior: domain
+    url: https://example.invalid/rules.yaml
+    path: ./rules/custom.yaml
+rules:
+  - RULE-SET,custom,代理选择
+"#,
+        );
+        mihomo_template.name = "Built-in Mihomo Policy Orchestrator".to_string();
+        mihomo_template.is_builtin = 0;
+        let mihomo = response_body(
+            export_mihomo(
+                sample_shadowsocks_subscription("mihomo"),
+                ExportMode::Strict,
+                Some(&mihomo_template),
+                "mihomo",
+                &HashMap::new(),
+                2,
+                3,
+            )
+            .unwrap(),
+        )
+        .await;
+        assert!(mihomo.contains("dns:"));
+        assert!(mihomo.contains("rule-providers:"));
+        assert!(mihomo.contains("type: http"));
+        assert!(mihomo.contains("https://example.invalid/rules.yaml"));
+        assert!(mihomo.contains("192.0.2.1"));
+    }
+
+    #[tokio::test]
+    async fn built_in_mihomo_export_embeds_rule_providers() {
+        let mut template = sample_template(
+            "mihomo",
+            crate::services::template_seed_service::MIHOMO_TEMPLATE,
+        );
+        template.name = "Built-in Mihomo Policy Orchestrator".to_string();
+
+        let body = response_body(
+            export_mihomo(
+                sample_shadowsocks_subscription("mihomo"),
+                ExportMode::Strict,
+                Some(&template),
+                "mihomo",
+                &HashMap::new(),
+                2,
+                3,
+            )
+            .unwrap(),
+        )
+        .await;
+        assert!(MIHOMO_INLINE_RULE_PROVIDERS_YAML.len() < 512 * 1024);
+        assert!(body.len() < 1024 * 1024);
+        assert!(body.len() < PUBLIC_EXPORT_CACHE_BODY_LIMIT);
+        assert!(!body.contains("raw.githubusercontent.com/MetaCubeX/meta-rules-dat"));
+
+        let root = serde_yaml::from_str::<Value>(&body).unwrap();
+        let providers = root
+            .as_mapping()
+            .and_then(|root| root.get(Value::String("rule-providers".to_string())))
+            .and_then(Value::as_mapping)
+            .unwrap();
+        assert_eq!(providers.len(), 23);
+        assert_eq!(
+            providers
+                .values()
+                .filter_map(Value::as_mapping)
+                .filter_map(|provider| provider.get(Value::String("payload".to_string())))
+                .filter_map(Value::as_sequence)
+                .map(Vec::len)
+                .sum::<usize>(),
+            17_937
+        );
+
+        for provider in providers.values() {
+            let provider = provider.as_mapping().unwrap();
+            assert_eq!(
+                provider
+                    .get(Value::String("type".to_string()))
+                    .and_then(Value::as_str),
+                Some("inline")
+            );
+            assert!(
+                provider
+                    .get(Value::String("payload".to_string()))
+                    .and_then(Value::as_sequence)
+                    .is_some_and(|payload| !payload.is_empty())
+            );
+            for remote_only_key in ["url", "path", "interval", "format"] {
+                assert!(!provider.contains_key(Value::String(remote_only_key.to_string())));
+            }
+        }
+
+        let provider_names = providers
+            .keys()
+            .filter_map(Value::as_str)
+            .collect::<HashSet<_>>();
+        let rules = root
+            .as_mapping()
+            .and_then(|root| root.get(Value::String("rules".to_string())))
+            .and_then(Value::as_sequence)
+            .unwrap();
+        for provider_name in rules.iter().filter_map(Value::as_str).filter_map(|rule| {
+            rule.strip_prefix("RULE-SET,")
+                .and_then(|rule| rule.split(',').next())
+        }) {
+            assert!(
+                provider_names.contains(provider_name),
+                "rule references missing provider {provider_name}"
+            );
+        }
+
+        let nameserver_policy = root
+            .as_mapping()
+            .and_then(|root| root.get(Value::String("dns".to_string())))
+            .and_then(Value::as_mapping)
+            .and_then(|dns| dns.get(Value::String("nameserver-policy".to_string())))
+            .and_then(Value::as_mapping)
+            .unwrap();
+        for provider_name in nameserver_policy
+            .keys()
+            .filter_map(Value::as_str)
+            .filter_map(|key| key.strip_prefix("rule-set:"))
+        {
+            assert!(
+                provider_names.contains(provider_name),
+                "DNS policy references missing provider {provider_name}"
+            );
+        }
+
+        let cn_domain_count = providers
+            .get(Value::String("cn_domain".to_string()))
+            .and_then(Value::as_mapping)
+            .and_then(|provider| provider.get(Value::String("payload".to_string())))
+            .and_then(Value::as_sequence)
+            .map(Vec::len);
+        assert_eq!(cn_domain_count, Some(3_691));
+    }
 
     #[test]
     fn rejects_inline_export_delimiters() {
@@ -4532,15 +5146,26 @@ rules:
     #[test]
     fn built_in_clash_template_avoids_geoip_database_dependency() {
         let template = super::built_in_clash_routing_template().unwrap();
+        let parsed = serde_yaml::from_str::<Value>(template).unwrap();
+        let root = parsed.as_mapping().unwrap();
+        let groups = root
+            .get(Value::String("proxy-groups".to_string()))
+            .and_then(Value::as_sequence)
+            .unwrap();
 
         assert!(!template.contains("GEOIP,CN"));
         assert!(!template.contains("fallback-filter:"));
         assert!(!template.contains("\n  fallback:\n"));
-        assert!(template.contains("      - 手动切换\n      - 自动选择"));
-        assert!(template.contains("DOMAIN-SUFFIX,chatgpt.com,Ai平台"));
+        assert_eq!(groups.len(), 5);
+        assert!(template.contains("      - 手动选择\n      - 自动选择"));
+        assert!(!template.contains("  - name: Ai平台"));
+        assert!(!template.contains("  - name: 漏网之鱼"));
+        assert!(template.contains("DOMAIN-SUFFIX,chatgpt.com,节点选择"));
         assert!(template.contains("DOMAIN-SUFFIX,github.com,节点选择"));
         assert!(template.contains("RULE-SET,proxygfw,节点选择"));
-        assert!(template.contains("MATCH,漏网之鱼"));
+        assert!(template.contains("RULE-SET,banad,REJECT"));
+        assert!(template.contains("RULE-SET,chinadomain,DIRECT"));
+        assert!(template.contains("MATCH,节点选择"));
     }
 
     #[test]
@@ -4608,20 +5233,136 @@ rules:
         assert!(template.contains(
             "      - 手动选择\n      - 自动选择\n      - 故障转移\n      - 负载均衡\n      - DIRECT"
         ));
-        assert!(template.contains("  - name: 流媒体"));
-        assert!(template.contains("  - name: 谷歌服务"));
-        assert!(template.contains("  - name: 国内网站"));
-        assert!(template.contains("  - name: 下载拦截"));
-        assert!(template.contains("DOMAIN-SUFFIX,chatgpt.com,AI 服务"));
+        let groups = root
+            .get(Value::String("proxy-groups".to_string()))
+            .and_then(Value::as_sequence)
+            .unwrap();
+        assert_eq!(groups.len(), 5);
+        assert!(!template.contains("  - name: 流媒体"));
+        assert!(!template.contains("  - name: 谷歌服务"));
+        assert!(!template.contains("  - name: 国内网站"));
+        assert!(!template.contains("  - name: 下载拦截"));
+        assert!(template.contains("DOMAIN-SUFFIX,chatgpt.com,代理选择"));
         assert!(template.contains("DOMAIN-SUFFIX,github.com,代理选择"));
-        assert!(template.contains("DOMAIN-SUFFIX,steamcommunity.com,游戏平台"));
-        assert!(template.contains("RULE-SET,google_domain,谷歌服务"));
-        assert!(template.contains("RULE-SET,cn_domain,国内网站"));
-        assert!(template.contains("PROCESS-NAME-WILDCARD,*torrent*,下载拦截"));
-        assert!(template.contains("RULE-SET,tracker_domain,下载拦截"));
-        assert!(template.contains("DST-PORT,6881-6999,下载拦截"));
+        assert!(template.contains("DOMAIN-SUFFIX,steamcommunity.com,代理选择"));
+        assert!(template.contains("RULE-SET,google_domain,代理选择"));
+        assert!(template.contains("RULE-SET,cn_domain,DIRECT"));
+        assert!(template.contains("PROCESS-NAME-WILDCARD,*torrent*,REJECT"));
+        assert!(template.contains("RULE-SET,tracker_domain,REJECT"));
+        assert!(template.contains("DST-PORT,6881-6999,REJECT"));
+        assert!(template.contains("MATCH,代理选择"));
         assert!(!template.contains("  - name: YOUTUBE"));
         assert!(!template.contains("  - name: NETFLIX"));
         assert!(!template.contains("  - name: MEDIA"));
+    }
+
+    #[test]
+    fn compacts_only_legacy_persisted_builtin_policy_groups() {
+        let content = r#"proxy-groups:
+  - name: 节点选择
+    type: select
+    proxies: [手动切换, Ai平台, 全球直连, 广告拦截, 漏网之鱼]
+  - name: 手动切换
+    type: select
+    proxies: [DIRECT]
+  - name: Ai平台
+    type: select
+    proxies: [节点选择]
+  - name: 全球直连
+    type: select
+    proxies: [DIRECT]
+  - name: 广告拦截
+    type: select
+    proxies: [REJECT]
+  - name: 漏网之鱼
+    type: select
+    proxies: [节点选择]
+rules:
+  - DOMAIN-SUFFIX,example.com,Ai平台
+  - RULE-SET,localarea,全球直连,no-resolve
+  - RULE-SET,banad,广告拦截
+  - MATCH,漏网之鱼
+"#;
+        let mut template = sample_template("clash", content);
+        template.name = "Built-in Clash ACL4SSR Style".to_string();
+        let mut root = serde_yaml::from_str::<Value>(content)
+            .unwrap()
+            .as_mapping()
+            .unwrap()
+            .clone();
+
+        compact_builtin_mihomo_policy_groups(&mut root, Some(&template));
+        ensure_mihomo_default_proxy_groups(&mut root, &["Proxy".to_string()]);
+
+        for removed in ["手动切换", "Ai平台", "全球直连", "广告拦截", "漏网之鱼"]
+        {
+            assert!(!mihomo_proxy_group_exists(&root, removed));
+        }
+        for retained in ["节点选择", "手动选择", "自动选择", "故障转移", "负载均衡"]
+        {
+            assert!(mihomo_proxy_group_exists(&root, retained));
+        }
+        let rendered = serde_yaml::to_string(&root).unwrap();
+        assert!(rendered.contains("DOMAIN-SUFFIX,example.com,节点选择"));
+        assert!(rendered.contains("RULE-SET,localarea,DIRECT,no-resolve"));
+        assert!(rendered.contains("RULE-SET,banad,REJECT"));
+        assert!(rendered.contains("MATCH,节点选择"));
+
+        let legacy_mihomo_content = r#"proxy-groups:
+  - name: PROXY
+    type: select
+    proxies: [MANUAL, AUTO, AI, DOMESTIC, DOWNLOAD-BLOCK, FINAL]
+  - name: MANUAL
+    type: select
+    proxies: [DIRECT]
+  - name: AI
+    type: select
+    proxies: [PROXY]
+  - name: DOMESTIC
+    type: select
+    proxies: [DIRECT]
+  - name: DOWNLOAD-BLOCK
+    type: select
+    proxies: [REJECT]
+  - name: FINAL
+    type: select
+    proxies: [PROXY]
+rules:
+  - RULE-SET,ai,AI
+  - RULE-SET,cn_domain,DOMESTIC,no-resolve
+  - PROCESS-NAME,qbittorrent,DOWNLOAD-BLOCK
+  - MATCH,FINAL
+"#;
+        let mut legacy_mihomo_template = sample_template("mihomo", legacy_mihomo_content);
+        legacy_mihomo_template.name = "Built-in Mihomo Policy Orchestrator".to_string();
+        let mut legacy_mihomo_root = serde_yaml::from_str::<Value>(legacy_mihomo_content)
+            .unwrap()
+            .as_mapping()
+            .unwrap()
+            .clone();
+        compact_builtin_mihomo_policy_groups(
+            &mut legacy_mihomo_root,
+            Some(&legacy_mihomo_template),
+        );
+        ensure_mihomo_default_proxy_groups(&mut legacy_mihomo_root, &["Proxy".to_string()]);
+        let rendered = serde_yaml::to_string(&legacy_mihomo_root).unwrap();
+        assert!(mihomo_proxy_group_exists(&legacy_mihomo_root, "代理选择"));
+        assert!(mihomo_proxy_group_exists(&legacy_mihomo_root, "手动选择"));
+        assert!(!mihomo_proxy_group_exists(&legacy_mihomo_root, "AI"));
+        assert!(!mihomo_proxy_group_exists(&legacy_mihomo_root, "FINAL"));
+        assert!(rendered.contains("RULE-SET,ai,代理选择"));
+        assert!(rendered.contains("RULE-SET,cn_domain,DIRECT,no-resolve"));
+        assert!(rendered.contains("PROCESS-NAME,qbittorrent,REJECT"));
+        assert!(rendered.contains("MATCH,代理选择"));
+
+        template.is_builtin = 0;
+        let mut custom_root = serde_yaml::from_str::<Value>(content)
+            .unwrap()
+            .as_mapping()
+            .unwrap()
+            .clone();
+        compact_builtin_mihomo_policy_groups(&mut custom_root, Some(&template));
+        assert!(mihomo_proxy_group_exists(&custom_root, "Ai平台"));
+        assert!(mihomo_proxy_group_exists(&custom_root, "漏网之鱼"));
     }
 }

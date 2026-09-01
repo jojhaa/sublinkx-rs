@@ -31,10 +31,12 @@ proxy-groups:
   - name: 节点选择
     type: select
     proxies:
-      - 手动切换
+      - 手动选择
       - 自动选择
+      - 故障转移
+      - 负载均衡
       - DIRECT
-  - name: 手动切换
+  - name: 手动选择
     type: select
     include-all-proxies: true
   - name: 自动选择
@@ -43,60 +45,19 @@ proxy-groups:
     url: https://cp.cloudflare.com/generate_204
     interval: 300
     tolerance: 50
-  - name: Ai平台
-    type: select
-    proxies:
-      - 节点选择
-      - 自动选择
-      - 手动切换
-      - DIRECT
-  - name: 油管视频
-    type: select
-    proxies:
-      - 节点选择
-      - 自动选择
-      - 手动切换
-  - name: 奈飞视频
-    type: select
-    proxies:
-      - 节点选择
-      - 自动选择
-      - 手动切换
-  - name: 电报消息
-    type: select
-    proxies:
-      - 节点选择
-      - 自动选择
-      - 手动切换
-      - DIRECT
-  - name: 微软服务
-    type: select
-    proxies:
-      - DIRECT
-      - 节点选择
-      - 手动切换
-  - name: 苹果服务
-    type: select
-    proxies:
-      - DIRECT
-      - 节点选择
-      - 手动切换
-  - name: 全球直连
-    type: select
-    proxies:
-      - DIRECT
-      - 节点选择
-  - name: 广告拦截
-    type: select
-    proxies:
-      - REJECT
-      - DIRECT
-  - name: 漏网之鱼
-    type: select
-    proxies:
-      - 节点选择
-      - 自动选择
-      - DIRECT
+  - name: 故障转移
+    type: fallback
+    include-all-proxies: true
+    url: https://cp.cloudflare.com/generate_204
+    interval: 300
+    lazy: true
+  - name: 负载均衡
+    type: load-balance
+    strategy: consistent-hashing
+    include-all-proxies: true
+    url: https://cp.cloudflare.com/generate_204
+    interval: 300
+    lazy: true
 rule-providers:
   localarea:
     type: http
@@ -183,23 +144,23 @@ rule-providers:
     path: ./ruleset/download.yaml
     interval: 86400
 rules:
-  - RULE-SET,localarea,全球直连
-  - RULE-SET,unban,全球直连
-  - RULE-SET,banad,广告拦截
-  - DOMAIN-SUFFIX,chatgpt.com,Ai平台
-  - DOMAIN-SUFFIX,openai.com,Ai平台
-  - DOMAIN-SUFFIX,anthropic.com,Ai平台
-  - DOMAIN-SUFFIX,claude.ai,Ai平台
+  - RULE-SET,localarea,DIRECT
+  - RULE-SET,unban,DIRECT
+  - RULE-SET,banad,REJECT
+  - DOMAIN-SUFFIX,chatgpt.com,节点选择
+  - DOMAIN-SUFFIX,openai.com,节点选择
+  - DOMAIN-SUFFIX,anthropic.com,节点选择
+  - DOMAIN-SUFFIX,claude.ai,节点选择
   - DOMAIN-SUFFIX,github.com,节点选择
   - DOMAIN-SUFFIX,githubusercontent.com,节点选择
   - DOMAIN-SUFFIX,githubassets.com,节点选择
-  - DOMAIN-SUFFIX,youtube.com,油管视频
-  - DOMAIN-SUFFIX,googlevideo.com,油管视频
-  - DOMAIN-SUFFIX,ytimg.com,油管视频
-  - DOMAIN-SUFFIX,netflix.com,奈飞视频
-  - DOMAIN-SUFFIX,nflxvideo.net,奈飞视频
-  - DOMAIN-SUFFIX,t.me,电报消息
-  - DOMAIN-SUFFIX,telegram.org,电报消息
+  - DOMAIN-SUFFIX,youtube.com,节点选择
+  - DOMAIN-SUFFIX,googlevideo.com,节点选择
+  - DOMAIN-SUFFIX,ytimg.com,节点选择
+  - DOMAIN-SUFFIX,netflix.com,节点选择
+  - DOMAIN-SUFFIX,nflxvideo.net,节点选择
+  - DOMAIN-SUFFIX,t.me,节点选择
+  - DOMAIN-SUFFIX,telegram.org,节点选择
   - DOMAIN-SUFFIX,x.com,节点选择
   - DOMAIN-SUFFIX,twitter.com,节点选择
   - DOMAIN-SUFFIX,instagram.com,节点选择
@@ -212,18 +173,18 @@ rules:
   - DOMAIN-SUFFIX,steamcommunity.com,节点选择
   - DOMAIN-SUFFIX,steampowered.com,节点选择
   - DOMAIN-SUFFIX,epicgames.com,节点选择
-  - RULE-SET,googlecn,全球直连
-  - RULE-SET,apple,苹果服务
-  - RULE-SET,microsoft,微软服务
-  - RULE-SET,telegram,电报消息
-  - RULE-SET,ai,Ai平台
-  - RULE-SET,openai,Ai平台
-  - RULE-SET,youtube,油管视频
-  - RULE-SET,netflix,奈飞视频
+  - RULE-SET,googlecn,DIRECT
+  - RULE-SET,apple,节点选择
+  - RULE-SET,microsoft,节点选择
+  - RULE-SET,telegram,节点选择
+  - RULE-SET,ai,节点选择
+  - RULE-SET,openai,节点选择
+  - RULE-SET,youtube,节点选择
+  - RULE-SET,netflix,节点选择
   - RULE-SET,proxygfw,节点选择
-  - RULE-SET,chinadomain,全球直连
-  - RULE-SET,download,全球直连
-  - MATCH,漏网之鱼
+  - RULE-SET,chinadomain,DIRECT
+  - RULE-SET,download,DIRECT
+  - MATCH,节点选择
 "#;
 
 pub(crate) const MIHOMO_TEMPLATE: &str = r#"mixed-port: 7890
@@ -313,69 +274,6 @@ proxy-groups:
     url: https://cp.cloudflare.com/generate_204
     interval: 300
     lazy: true
-  - name: AI 服务
-    type: select
-    proxies:
-      - 代理选择
-      - 自动选择
-      - 手动选择
-      - DIRECT
-  - name: 流媒体
-    type: select
-    proxies:
-      - 代理选择
-      - 自动选择
-      - 手动选择
-      - DIRECT
-  - name: 谷歌服务
-    type: select
-    proxies:
-      - 代理选择
-      - 自动选择
-      - 手动选择
-      - DIRECT
-  - name: 电报消息
-    type: select
-    proxies:
-      - 代理选择
-      - 自动选择
-      - 手动选择
-      - DIRECT
-  - name: 微软服务
-    type: select
-    proxies:
-      - DIRECT
-      - 代理选择
-      - 手动选择
-  - name: 苹果服务
-    type: select
-    proxies:
-      - DIRECT
-      - 代理选择
-      - 手动选择
-  - name: 国内网站
-    type: select
-    proxies:
-      - DIRECT
-      - 代理选择
-  - name: 游戏平台
-    type: select
-    proxies:
-      - 代理选择
-      - 手动选择
-      - 自动选择
-      - DIRECT
-  - name: 下载拦截
-    type: select
-    proxies:
-      - REJECT
-      - DIRECT
-  - name: 漏网之鱼
-    type: select
-    proxies:
-      - 代理选择
-      - 自动选择
-      - DIRECT
 rule-providers:
   private_domain:
     type: http
@@ -518,67 +416,67 @@ rule-providers:
 rules:
   - RULE-SET,private_ip,DIRECT,no-resolve
   - RULE-SET,private_domain,DIRECT
-  - PROCESS-NAME-WILDCARD,*torrent*,下载拦截
-  - PROCESS-NAME,qbittorrent,下载拦截
-  - PROCESS-NAME,qbittorrent.exe,下载拦截
-  - PROCESS-NAME,transmission-daemon,下载拦截
-  - PROCESS-NAME,transmission-qt,下载拦截
-  - PROCESS-NAME,deluge,下载拦截
-  - PROCESS-NAME,deluged,下载拦截
-  - PROCESS-NAME,aria2c,下载拦截
-  - PROCESS-NAME,motrix,下载拦截
-  - PROCESS-NAME,Thunder.exe,下载拦截
-  - PROCESS-NAME,DownloadSDKServer.exe,下载拦截
-  - RULE-SET,tracker_domain,下载拦截
-  - RULE-SET,private_tracker_domain,下载拦截
-  - DST-PORT,6881-6999,下载拦截
-  - DST-PORT,51413,下载拦截
-  - DOMAIN-SUFFIX,chatgpt.com,AI 服务
-  - DOMAIN-SUFFIX,openai.com,AI 服务
-  - DOMAIN-SUFFIX,anthropic.com,AI 服务
-  - DOMAIN-SUFFIX,claude.ai,AI 服务
+  - PROCESS-NAME-WILDCARD,*torrent*,REJECT
+  - PROCESS-NAME,qbittorrent,REJECT
+  - PROCESS-NAME,qbittorrent.exe,REJECT
+  - PROCESS-NAME,transmission-daemon,REJECT
+  - PROCESS-NAME,transmission-qt,REJECT
+  - PROCESS-NAME,deluge,REJECT
+  - PROCESS-NAME,deluged,REJECT
+  - PROCESS-NAME,aria2c,REJECT
+  - PROCESS-NAME,motrix,REJECT
+  - PROCESS-NAME,Thunder.exe,REJECT
+  - PROCESS-NAME,DownloadSDKServer.exe,REJECT
+  - RULE-SET,tracker_domain,REJECT
+  - RULE-SET,private_tracker_domain,REJECT
+  - DST-PORT,6881-6999,REJECT
+  - DST-PORT,51413,REJECT
+  - DOMAIN-SUFFIX,chatgpt.com,代理选择
+  - DOMAIN-SUFFIX,openai.com,代理选择
+  - DOMAIN-SUFFIX,anthropic.com,代理选择
+  - DOMAIN-SUFFIX,claude.ai,代理选择
   - DOMAIN-SUFFIX,github.com,代理选择
   - DOMAIN-SUFFIX,githubusercontent.com,代理选择
   - DOMAIN-SUFFIX,githubassets.com,代理选择
-  - DOMAIN-SUFFIX,youtube.com,流媒体
-  - DOMAIN-SUFFIX,googlevideo.com,流媒体
-  - DOMAIN-SUFFIX,ytimg.com,流媒体
-  - DOMAIN-SUFFIX,netflix.com,流媒体
-  - DOMAIN-SUFFIX,nflxvideo.net,流媒体
-  - DOMAIN-SUFFIX,t.me,电报消息
-  - DOMAIN-SUFFIX,telegram.org,电报消息
+  - DOMAIN-SUFFIX,youtube.com,代理选择
+  - DOMAIN-SUFFIX,googlevideo.com,代理选择
+  - DOMAIN-SUFFIX,ytimg.com,代理选择
+  - DOMAIN-SUFFIX,netflix.com,代理选择
+  - DOMAIN-SUFFIX,nflxvideo.net,代理选择
+  - DOMAIN-SUFFIX,t.me,代理选择
+  - DOMAIN-SUFFIX,telegram.org,代理选择
   - DOMAIN-SUFFIX,x.com,代理选择
   - DOMAIN-SUFFIX,twitter.com,代理选择
   - DOMAIN-SUFFIX,instagram.com,代理选择
-  - DOMAIN-SUFFIX,tiktok.com,流媒体
-  - DOMAIN-SUFFIX,spotify.com,流媒体
-  - DOMAIN-SUFFIX,disneyplus.com,流媒体
-  - DOMAIN-SUFFIX,primevideo.com,流媒体
-  - DOMAIN-SUFFIX,max.com,流媒体
-  - DOMAIN-SUFFIX,hbomax.com,流媒体
-  - DOMAIN-SUFFIX,steamcommunity.com,游戏平台
-  - DOMAIN-SUFFIX,steampowered.com,游戏平台
-  - DOMAIN-SUFFIX,epicgames.com,游戏平台
-  - RULE-SET,ai,AI 服务
+  - DOMAIN-SUFFIX,tiktok.com,代理选择
+  - DOMAIN-SUFFIX,spotify.com,代理选择
+  - DOMAIN-SUFFIX,disneyplus.com,代理选择
+  - DOMAIN-SUFFIX,primevideo.com,代理选择
+  - DOMAIN-SUFFIX,max.com,代理选择
+  - DOMAIN-SUFFIX,hbomax.com,代理选择
+  - DOMAIN-SUFFIX,steamcommunity.com,代理选择
+  - DOMAIN-SUFFIX,steampowered.com,代理选择
+  - DOMAIN-SUFFIX,epicgames.com,代理选择
+  - RULE-SET,ai,代理选择
   - RULE-SET,github_domain,代理选择
-  - RULE-SET,youtube_domain,流媒体
-  - RULE-SET,google_domain,谷歌服务
-  - RULE-SET,telegram_domain,电报消息
-  - RULE-SET,telegram_ip,电报消息,no-resolve
-  - RULE-SET,netflix_domain,流媒体
-  - RULE-SET,netflix_ip,流媒体,no-resolve
-  - RULE-SET,bilibili_domain,国内网站
-  - RULE-SET,spotify_domain,流媒体
-  - RULE-SET,steam_domain,游戏平台
+  - RULE-SET,youtube_domain,代理选择
+  - RULE-SET,google_domain,代理选择
+  - RULE-SET,telegram_domain,代理选择
+  - RULE-SET,telegram_ip,代理选择,no-resolve
+  - RULE-SET,netflix_domain,代理选择
+  - RULE-SET,netflix_ip,代理选择,no-resolve
+  - RULE-SET,bilibili_domain,DIRECT
+  - RULE-SET,spotify_domain,代理选择
+  - RULE-SET,steam_domain,代理选择
   - RULE-SET,paypal_domain,代理选择
-  - RULE-SET,onedrive_domain,微软服务
-  - RULE-SET,microsoft_domain,微软服务
-  - RULE-SET,apple_domain,苹果服务
-  - RULE-SET,apple_ip,苹果服务,no-resolve
+  - RULE-SET,onedrive_domain,代理选择
+  - RULE-SET,microsoft_domain,代理选择
+  - RULE-SET,apple_domain,代理选择
+  - RULE-SET,apple_ip,代理选择,no-resolve
   - RULE-SET,geolocation-not-cn,代理选择
-  - RULE-SET,cn_domain,国内网站
-  - RULE-SET,cn_ip,国内网站,no-resolve
-  - MATCH,漏网之鱼
+  - RULE-SET,cn_domain,DIRECT
+  - RULE-SET,cn_ip,DIRECT,no-resolve
+  - MATCH,代理选择
 "#;
 
 const SING_BOX_TEMPLATE: &str = r#"{

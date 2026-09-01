@@ -93,6 +93,24 @@ pub async fn find_by_name(
     .await
 }
 
+pub async fn find_latest_builtin_by_kind(
+    pool: &DbPool,
+    kind: &str,
+) -> Result<Option<TemplateRecord>, sqlx::Error> {
+    query_as::<TemplateRecord>(
+        r#"
+        SELECT id, name, kind, content, is_builtin + 0 AS is_builtin, created_at, updated_at
+        FROM templates
+        WHERE kind = ? AND is_builtin = 1
+        ORDER BY id DESC
+        LIMIT 1
+        "#,
+    )
+    .bind(kind)
+    .fetch_optional(pool)
+    .await
+}
+
 pub async fn list_upstream_passthrough(pool: &DbPool) -> Result<Vec<TemplateRecord>, sqlx::Error> {
     query_as::<TemplateRecord>(
         r#"

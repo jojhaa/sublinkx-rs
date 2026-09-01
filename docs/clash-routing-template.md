@@ -140,7 +140,13 @@ rules:
 
 ## 系统策略编排模板
 
-新安装会获得 `Built-in Mihomo Policy Orchestrator` 系统模板。它在四种节点策略和六个国家负载组之外，提供 `AI`、`STREAMING`、`GOOGLE`、`TELEGRAM`、`GAME`、`DOMESTIC` 与 `FINAL` 网站分流组。系统以新增模板的方式交付，不批量覆盖数据库中的旧模板或用户自定义模板；已有订阅需要主动选择新模板后才会使用新规则。
+新安装会获得 `Built-in Mihomo Policy Orchestrator` 系统模板。客户端只展示代理选择、手动选择、自动选择、故障转移、负载均衡，以及按出口国家动态生成的负载与故障转移组。DNS、规则 Provider 和完整分流规则仍然保留；网站与服务规则统一交给主代理选择，国内规则使用 `DIRECT`，广告和下载拦截使用 `REJECT`。
+
+数据库中已经保存的旧系统模板不会被覆盖。导出器会在生成订阅时兼容压缩旧系统分组并同步改写规则目标；自定义模板和上游 Mihomo 透传模板不参与该转换。
+
+系统 Mihomo 模板导出时会把 23 个规则 Provider 转换为 `type: inline` 并直接写入订阅 YAML。客户端首次加载不需要再访问 GitHub Raw，也不会在本地规则缓存尚未建立时因远程规则下载失败而缺少分流。数据库模板仍保留远程来源声明用于管理和审计；自定义模板中的远程 Provider 以及上游 Mihomo 透传配置不会被替换。
+
+内嵌规则快照由 `scripts/update-mihomo-rules.ps1` 从固定的 `MetaCubeX/meta-rules-dat` 提交生成。国内域名、国内 IP 和兼容名称 `geolocation-not-cn` 分别使用官方 `geo-lite` 的 `cn`、`cn` 和 `proxy` 常用集合，避免把完整地理数据库的十几万条记录展开进订阅。来源路径、条目数和 SHA-256 记录在 `backend/assets/mihomo-rules-manifest.json`，第三方许可证与修改说明记录在 `THIRD_PARTY_NOTICES.md`。更新规则必须重新运行脚本、审核差异并重新发布后端，不能在运行时静默拉取最新规则。
 
 ### DNS 分流
 
@@ -193,7 +199,7 @@ Mihomo 路由规则匹配连接属性，不能按连接累计字节数判定“�
 
 建议把 `PROXY` 作为通用代理组，再创建 `AI`、`STREAMING`、`GAME`、`DOWNLOAD` 等业务组。规则可以把特定域名导向业务组，其余流量由 `AUTO` 兜底。
 
-如果某些 Clash 客户端不支持远程 `rule-providers`，可以把 `RULE-SET` 替换成直接规则，例如：
+系统 Mihomo 导出已经使用内嵌 Provider。对于仍使用远程 `rule-providers` 的自定义 Clash/Mihomo 模板，如果客户端不支持远程 Provider，可以把 `RULE-SET` 替换成直接规则，例如：
 
 ```yaml
 rules:
@@ -202,7 +208,7 @@ rules:
   - RULE-SET,direct,DIRECT
 ```
 
-## ACL4SSR 风格完整分流模板
+## ACL4SSR 风格参考（非当前系统模板）
 
 `youshandefeiyang/sub-web-modify` 不直接写死 Clash YAML，而是把远程 subconverter `.ini` 配置传给后端。它的默认 Clash 分流主要参考 ACL4SSR 远程配置，例如：
 
@@ -215,7 +221,7 @@ rules:
 - 大量 `ruleset=PolicyGroup,RuleListUrl` 把流量导入命名策略组。
 - 大量 `custom_proxy_group=Name\`type\`filter` 创建手动选择、自动测速、故障转移、地区、媒体、AI 和兜底策略组。
 
-本项目使用原生 Clash/Mihomo YAML 模板，而不是 subconverter ini。最接近的原生模板如下：
+本项目使用原生 Clash/Mihomo YAML 模板，而不是 subconverter ini。下面保留的是多业务组写法参考，便于自定义模板作者理解 ACL4SSR 的映射方式；它不是当前系统内置模板，直接复制会产生较多客户端策略卡片。
 
 ```yaml
 mixed-port: 7890
@@ -623,4 +629,4 @@ rules:
   - MATCH,漏网之鱼
 ```
 
-导出器会追加真实 `proxies`，并把 `include-all-proxies: true` 的策略组展开为当前订阅节点。如果模板已有 `rules`，导出器会保留模板规则，不再强行追加 `MATCH,AUTO`，因此完整模板末尾应保留 `- MATCH,漏网之鱼`。
+导出器会追加真实 `proxies`，并把 `include-all-proxies: true` 的策略组展开为当前订阅节点。该参考仅用于用户自定义模板；系统内置 Clash/Mihomo 模板使用前文所述的五个基础策略组，不会直接采用这段多业务组配置。
