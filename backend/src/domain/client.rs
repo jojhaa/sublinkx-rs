@@ -9,6 +9,7 @@ pub enum RendererFamily {
     Surge,
     SingBox,
     QuantumultX,
+    ShadowrocketProfile,
     Quantumult,
     Loon,
     Surfboard,
@@ -27,6 +28,7 @@ impl RendererFamily {
             Self::Surge => Some("surge"),
             Self::SingBox => Some("sing-box"),
             Self::QuantumultX => Some("quanx"),
+            Self::ShadowrocketProfile => Some("shadowrocket-profile"),
             Self::Quantumult => Some("quan"),
             Self::Loon => Some("loon"),
             Self::Surfboard => Some("surfboard"),
@@ -118,6 +120,16 @@ pub const CLIENT_TARGETS: &[ClientTarget] = &[
         status: ClientTargetStatus::Implemented,
         aliases: &["shadow-rocket"],
         user_agent_markers: &["shadowrocket"],
+    },
+    ClientTarget {
+        key: "shadowrocket-profile",
+        label: "Shadowrocket 完整配置",
+        family: RendererFamily::ShadowrocketProfile,
+        template_kind: "shadowrocket-profile",
+        status: ClientTargetStatus::Implemented,
+        aliases: &["shadowrocket-conf", "shadowrocket-config"],
+        // Keep automatic Shadowrocket detection on the legacy URI bundle target.
+        user_agent_markers: &[],
     },
     ClientTarget {
         key: "surge3",

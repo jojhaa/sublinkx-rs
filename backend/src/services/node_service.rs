@@ -1518,6 +1518,8 @@ fn check_quanx_proxy_fidelity(
     let rendered = export_service::render_quantumult_x_proxy(node).ok()?;
     let missing_fields = mapped_missing_fields(proxy, quanx_field_mappings(protocol), |target| {
         rendered.contains(target)
+            || (target == "quanx-tls"
+                && (rendered.contains("over-tls=true") || rendered.contains("obfs=wss")))
     });
     if missing_fields.is_empty() {
         None
@@ -1682,20 +1684,25 @@ fn quanx_field_mappings(protocol: &str) -> &'static [(&'static str, &'static str
     match protocol {
         "vless" => &[
             ("uuid", "password="),
-            ("flow", "flow="),
+            ("flow", "vless-flow="),
             ("network", "obfs=ws"),
-            ("tls", "over-tls=true"),
+            ("tls", "quanx-tls"),
             ("skip-cert-verify", "tls-verification=false"),
             ("servername", "tls-host="),
             ("sni", "tls-host="),
-            ("reality-opts", "reality-public-key="),
+            ("reality-opts", "reality-base64-pubkey="),
             ("ws-opts", "obfs-uri="),
         ],
-        "hysteria2" | "hy2" => &[("password", "password="), ("sni", "server_check_url=")],
+        "anytls" | "any-tls" => &[
+            ("password", "password="),
+            ("sni", "tls-host="),
+            ("skip-cert-verify", "tls-verification=false"),
+            ("udp", "udp-relay=true"),
+        ],
         "trojan" => &[
             ("password", "password="),
             ("network", "obfs=ws"),
-            ("tls", "over-tls=true"),
+            ("tls", "quanx-tls"),
             ("skip-cert-verify", "tls-verification=false"),
             ("servername", "tls-host="),
             ("sni", "tls-host="),
@@ -3298,7 +3305,7 @@ proxies:
     }
 
     #[test]
-    fn checks_hysteria2_across_client_renderers_without_missing_fields() {
+    fn checks_hysteria2_across_supported_client_renderers_without_missing_fields() {
         let yaml = r#"
 proxies:
   - name: HY2 Full

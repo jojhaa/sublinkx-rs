@@ -24,6 +24,7 @@ type TemplateKind =
   | 'surge2'
   | 'surge3'
   | 'quanx'
+  | 'shadowrocket-profile'
   | 'quan'
   | 'loon'
   | 'surfboard'
@@ -52,6 +53,7 @@ const TEMPLATE_KIND_OPTIONS: TemplateKindOption[] = [
   { value: 'surge3', label: 'Surge 3', noteKey: 'templateKindSurge3Note' },
   { value: 'surge2', label: 'Surge 2', noteKey: 'templateKindSurge2Note' },
   { value: 'quanx', label: 'Quantumult X', noteKey: 'templateKindQuanxNote' },
+  { value: 'shadowrocket-profile', label: 'Shadowrocket 完整配置', noteKey: 'templateKindShadowrocketProfileNote' },
   { value: 'quan', label: 'Quantumult', noteKey: 'templateKindQuanNote' },
   { value: 'loon', label: 'Loon', noteKey: 'templateKindLoonNote' },
   { value: 'surfboard', label: 'Surfboard', noteKey: 'templateKindSurfboardNote' },

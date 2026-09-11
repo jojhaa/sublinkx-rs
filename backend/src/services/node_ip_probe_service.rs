@@ -18,7 +18,8 @@ use tokio_stream::wrappers::ReceiverStream;
 use crate::{
     domain::{node::NodeView, node_ip_probe::NodeIpProbeRecord},
     dto::node_ip_probes::{
-        NodeIpProbeEvent, NodeIpProbeListResponse, NodeIpProbeRequest, NodeIpProbeResponse,
+        BatchNodeRiskScoreRequest, BatchNodeRiskScoreResponse, NodeIpProbeEvent,
+        NodeIpProbeListResponse, NodeIpProbeRequest, NodeIpProbeResponse, NodeRiskScoreResult,
         RefreshNodeIpIntelligenceRequest, RefreshNodeIpIntelligenceResponse,
         UpdateNodeIpCountryRequest,
     },
@@ -196,6 +197,167 @@ pub async fn refresh_intelligence(
         failed,
         data,
     })
+}
+
+pub async fn query_risk_scores(
+    state: &AppState,
+    payload: BatchNodeRiskScoreRequest,
+) -> Result<BatchNodeRiskScoreResponse, AppError> {
+    validate_request(&NodeIpProbeRequest {
+        ids: payload.ids.clone(),
+    })?;
+    if !ip_intelligence_service::configured(state) {
+        return Err(AppError::BadRequest(
+            "IP intelligence integration is disabled".to_string(),
+        ));
+    }
+
+    let requested_ids = dedupe_ids(&payload.ids);
+    let nodes = node_repo::find_by_ids(&state.db, &requested_ids)
+        .await?
+        .into_iter()
+        .map(|record| {
+            let view = NodeView::try_from(record).map_err(|_| AppError::Internal)?;
+            Ok((view.id, view))
+        })
+        .collect::<Result<HashMap<_, _>, AppError>>()?;
+    let probes = node_ip_probe_repo::list(&state.db)
+        .await?
+        .into_iter()
+        .map(|probe| (probe.node_id, probe))
+        .collect::<HashMap<_, _>>();
+
+    let mut node_ips = HashMap::new();
+    let mut unique_ips = Vec::new();
+    let mut seen_ips = HashSet::new();
+    for id in &requested_ids {
+        if !nodes.contains_key(id) {
+            continue;
+        }
+        let Some(ip) = probes
+            .get(id)
+            .filter(|probe| probe.status == "ok")
+            .and_then(|probe| probe.ip.as_deref())
+            .and_then(|ip| normalize_public_ip(ip).ok())
+        else {
+            continue;
+        };
+        if seen_ips.insert(ip.clone()) {
+            unique_ips.push(ip.clone());
+        }
+        node_ips.insert(*id, ip);
+    }
+
+    let batch_lookup = ip_intelligence_service::lookup_risk_scores_batch(state, &unique_ips).await;
+
+    let mut complete = 0;
+    let mut partial = 0;
+    let mut pending = 0;
+    let mut failed = 0;
+    let mut data = Vec::with_capacity(requested_ids.len());
+    for id in &requested_ids {
+        let Some(node) = nodes.get(id) else {
+            failed += 1;
+            data.push(risk_score_failure(*id, None, None, "node_not_found"));
+            continue;
+        };
+        let Some(ip) = node_ips.get(id) else {
+            failed += 1;
+            data.push(risk_score_failure(
+                *id,
+                Some(node.name.clone()),
+                None,
+                "the node does not have a successful public exit IP probe",
+            ));
+            continue;
+        };
+        match batch_lookup
+            .as_ref()
+            .ok()
+            .and_then(|lookups| lookups.get(ip))
+        {
+            Some(lookup) => {
+                let (status, message) = match (
+                    lookup.scamalytics_fraud_score,
+                    lookup.scamalytics_isp_risk_score,
+                ) {
+                    (Some(_), Some(_)) => {
+                        complete += 1;
+                        ("complete", None)
+                    }
+                    (Some(_), None) | (None, Some(_)) => {
+                        partial += 1;
+                        (
+                            "partial",
+                            Some("one Scamalytics risk score is not available".to_string()),
+                        )
+                    }
+                    (None, None) => {
+                        pending += 1;
+                        (
+                            "pending",
+                            Some(
+                                "Scamalytics risk scores are not available in cache yet"
+                                    .to_string(),
+                            ),
+                        )
+                    }
+                };
+                data.push(NodeRiskScoreResult {
+                    node_id: *id,
+                    node_name: Some(node.name.clone()),
+                    ip: Some(ip.clone()),
+                    status,
+                    intelligence_cache_status: Some(lookup.cache_status.clone()),
+                    scamalytics_fraud_score: lookup.scamalytics_fraud_score,
+                    scamalytics_isp_risk_score: lookup.scamalytics_isp_risk_score,
+                    message,
+                });
+            }
+            None => {
+                failed += 1;
+                data.push(risk_score_failure(
+                    *id,
+                    Some(node.name.clone()),
+                    Some(ip.clone()),
+                    batch_lookup
+                        .as_ref()
+                        .err()
+                        .map(String::as_str)
+                        .unwrap_or("IP intelligence result is unavailable"),
+                ));
+            }
+        }
+    }
+
+    Ok(BatchNodeRiskScoreResponse {
+        code: "00000",
+        requested: requested_ids.len(),
+        unique_ips: unique_ips.len(),
+        complete,
+        partial,
+        pending,
+        failed,
+        data,
+    })
+}
+
+fn risk_score_failure(
+    node_id: i64,
+    node_name: Option<String>,
+    ip: Option<String>,
+    message: &str,
+) -> NodeRiskScoreResult {
+    NodeRiskScoreResult {
+        node_id,
+        node_name,
+        ip,
+        status: "failed",
+        intelligence_cache_status: None,
+        scamalytics_fraud_score: None,
+        scamalytics_isp_risk_score: None,
+        message: Some(truncate_message(message)),
+    }
 }
 
 pub async fn stream(state: AppState, payload: NodeIpProbeRequest) -> Result<Body, AppError> {
@@ -796,6 +958,13 @@ async fn send_intelligence_record(
             intelligence_status: record.intelligence_status.clone(),
             intelligence_message: record.intelligence_message.clone(),
             intelligence_updated_at: record.intelligence_updated_at.clone(),
+            risk_ip: record.risk_ip.clone(),
+            risk_status: record.risk_status.clone(),
+            scamalytics_fraud_score: record.scamalytics_fraud_score,
+            scamalytics_isp_risk_score: record.scamalytics_isp_risk_score,
+            risk_checked_at: record.risk_checked_at.clone(),
+            risk_expires_at_unix_ms: record.risk_expires_at_unix_ms,
+            risk_message: record.risk_message.clone(),
         },
     )
     .await
@@ -963,10 +1132,29 @@ impl Drop for TempFileGuard {
 
 #[cfg(test)]
 mod tests {
-    use std::net::IpAddr;
+    use std::{
+        net::IpAddr,
+        sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        },
+        time::SystemTime,
+    };
 
-    use super::{MAX_PROBE_NODES, dedupe_ids, is_public_ip, normalize_public_ip, validate_request};
-    use crate::dto::node_ip_probes::NodeIpProbeRequest;
+    use axum::{Json, Router, http::HeaderMap, routing::post};
+    use serde_json::{Value, json};
+
+    use super::{
+        MAX_PROBE_NODES, dedupe_ids, is_public_ip, normalize_public_ip, query_risk_scores,
+        validate_request,
+    };
+    use crate::{
+        config::{AppConfig, DatabaseConfig, IpIntelligenceConfig, SecurityConfig, ServerConfig},
+        db::new_database_pool,
+        dto::node_ip_probes::{BatchNodeRiskScoreRequest, NodeIpProbeRequest},
+        repository::node_ip_probe_repo,
+        state::AppState,
+    };
 
     #[test]
     fn rejects_empty_and_oversized_probe_requests() {
@@ -1007,5 +1195,123 @@ mod tests {
         let deduped = dedupe_ids(&ids);
         assert_eq!(deduped.len(), MAX_PROBE_NODES + 1);
         assert_eq!(deduped.chunks(MAX_PROBE_NODES).count(), 2);
+    }
+
+    #[tokio::test]
+    async fn batch_risk_scores_query_each_unique_exit_ip_once() {
+        let token = "0123456789abcdef0123456789abcdef";
+        let request_count = Arc::new(AtomicUsize::new(0));
+        let handler_count = request_count.clone();
+        let app = Router::new().route(
+            "/api/v1/ips/batch",
+            post(
+                move |headers: HeaderMap, Json(body): Json<Value>| async move {
+                    assert_eq!(
+                        headers
+                            .get("authorization")
+                            .and_then(|value| value.to_str().ok()),
+                        Some("Bearer 0123456789abcdef0123456789abcdef")
+                    );
+                    assert_eq!(body["ips"], json!(["1.1.1.1"]));
+                    handler_count.fetch_add(1, Ordering::SeqCst);
+                    Json(json!({
+                        "items": [{
+                            "ip": "1.1.1.1",
+                            "status": "fresh",
+                            "profile": {
+                                "fresh": true,
+                                "country_code": "JP"
+                            },
+                            "scamalytics": {
+                                "status": "fresh",
+                                "fraud_score": 61,
+                                "isp_risk_score": 34,
+                                "expires_at_unix_ms": 1893456000000_i64
+                            }
+                        }]
+                    }))
+                },
+            ),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+
+        let nonce = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let relative_path = format!("backend/target/test-data/risk-score-batch-{nonce}.db");
+        let absolute_path = std::env::current_dir().unwrap().join(&relative_path);
+        let pool = new_database_pool(&format!("sqlite://{relative_path}"))
+            .await
+            .unwrap();
+        let now = "2026-09-01T00:00:00Z";
+        for id in [1_i64, 2_i64] {
+            sqlx::query(
+                r#"
+                INSERT INTO nodes (
+                  id, name, protocol, raw_link, server, port, enabled, group_id, source_type,
+                  source_ref, upstream_missing, fingerprint, fingerprint_scope, settings_json,
+                  remark, created_at, updated_at
+                ) VALUES (?, ?, 'vless', 'vless://test', 'node.example', 443, 1, NULL,
+                  'manual', NULL, 0, ?, 0, '{}', '', ?, ?)
+                "#,
+            )
+            .bind(id)
+            .bind(format!("JP-{id:02}"))
+            .bind(format!("risk-score-{nonce}-{id}"))
+            .bind(now)
+            .bind(now)
+            .execute(&pool)
+            .await
+            .unwrap();
+            node_ip_probe_repo::save_success(&pool, id, "1.1.1.1", 4, now)
+                .await
+                .unwrap();
+        }
+        let state = AppState::new(
+            AppConfig {
+                server: ServerConfig {
+                    port: 0,
+                    environment: "test".to_string(),
+                },
+                database: DatabaseConfig {
+                    url: format!("sqlite://{relative_path}"),
+                },
+                security: SecurityConfig {
+                    jwt_secret: "test".repeat(16),
+                    jwt_exp_hours: 24,
+                    bootstrap_admin_username: "admin".to_string(),
+                    bootstrap_admin_password: "password".to_string(),
+                    trust_proxy_headers: false,
+                    auth_cookie_secure: false,
+                },
+                ip_intelligence: IpIntelligenceConfig {
+                    enabled: true,
+                    base_url: format!("http://{address}/api/v1"),
+                    api_token: token.to_string(),
+                    source_key: "sublinkx-rs:test".to_string(),
+                },
+            },
+            pool.clone(),
+        );
+
+        let response = query_risk_scores(&state, BatchNodeRiskScoreRequest { ids: vec![2, 1] })
+            .await
+            .unwrap();
+        assert_eq!(response.requested, 2);
+        assert_eq!(response.unique_ips, 1);
+        assert_eq!(response.complete, 2);
+        assert_eq!(response.failed, 0);
+        assert_eq!(response.data[0].node_id, 2);
+        assert_eq!(response.data[1].node_id, 1);
+        assert_eq!(response.data[0].scamalytics_fraud_score, Some(61));
+        assert_eq!(response.data[1].scamalytics_isp_risk_score, Some(34));
+        assert_eq!(request_count.load(Ordering::SeqCst), 1);
+
+        pool.close().await;
+        server.abort();
+        let _ = std::fs::remove_file(absolute_path);
     }
 }

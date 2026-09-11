@@ -35,6 +35,15 @@ pub fn build_app(state: AppState) -> Router {
     Router::new()
         .route("/healthz", get(api::health::healthz))
         .route("/s/{token}", get(api::exports::get_subscription))
+        .route(
+            "/s/{token}/profile/{target}",
+            get(api::exports::get_subscription_profile),
+        )
+        .route(
+            "/api/public/v1/subscription-portals/{portal_slug}/unlock",
+            axum::routing::post(api::subscriptions::unlock_portal)
+                .layer(axum::extract::DefaultBodyLimit::max(1024)),
+        )
         .route("/api/v1/version", get(api::version::version))
         .route("/api/v1/dashboard/stats", get(api::dashboard::stats))
         .route(
@@ -134,6 +143,10 @@ pub fn build_app(state: AppState) -> Router {
             axum::routing::post(api::node_ip_probes::refresh_intelligence),
         )
         .route(
+            "/api/v1/node-ip-probes/intelligence/risk-scores",
+            axum::routing::post(api::node_ip_probes::query_risk_scores),
+        )
+        .route(
             "/api/v1/node-ip-probes/{id}/country",
             axum::routing::put(api::node_ip_probes::update_country),
         )
@@ -222,6 +235,8 @@ fn redacted_request_path(uri: &Uri) -> String {
     let path = uri.path();
     if path == "/s" || path.starts_with("/s/") {
         "/s/<redacted>".to_string()
+    } else if path.starts_with("/api/public/v1/subscription-portals/") {
+        "/api/public/v1/subscription-portals/<redacted>/unlock".to_string()
     } else {
         path.to_string()
     }
@@ -245,5 +260,15 @@ mod tests {
         let uri = Uri::from_static("/api/v1/nodes?token=accidental");
 
         assert_eq!(redacted_request_path(&uri), "/api/v1/nodes");
+    }
+
+    #[test]
+    fn redacts_subscription_portal_slug_from_trace_path() {
+        let uri = Uri::from_static("/api/public/v1/subscription-portals/secret-portal-slug/unlock");
+
+        assert_eq!(
+            redacted_request_path(&uri),
+            "/api/public/v1/subscription-portals/<redacted>/unlock"
+        );
     }
 }

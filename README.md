@@ -113,6 +113,8 @@ Mihomo/Clash YAML 当前覆盖以下协议：
 | sing-box | JSON 配置 |
 | v2rayN / Xray | 多协议 URI Bundle |
 | Surge | Surge 配置 |
+| Quantumult X | 完整配置、风险策略组与本地规则 |
+| Shadowrocket | 兼容 URI Bundle 或独立完整配置 |
 | 其他客户端 | 通过内置或自定义模板输出 |
 
 完整支持情况见 [客户端兼容矩阵](docs/client-compatibility.md) 和 [协议与客户端矩阵](docs/protocol-client-matrix.md)。客户端如果不肯好好报告 User-Agent，可以在订阅链接中固定 `target`，不和它猜谜。
@@ -174,6 +176,20 @@ IP_INTELLIGENCE_SOURCE_KEY=replace_with_a_unique_source_key
 两个独立项目位于同一 Docker 网络时，应给情报 API 设置唯一别名，例如 `ip-intelligence-api`。不要复用 `backend`，不同 Compose 项目的同名服务会让 Docker DNS 开始左右为难。
 
 情报服务不可用不会覆盖已取得的出口 IP，也不会接收到代理节点认证信息。它负责认 IP，不负责翻你的订阅家底。
+
+已登录管理员可以按节点批量读取 Scamalytics 风险分：
+
+```http
+POST /api/v1/node-ip-probes/intelligence/risk-scores
+Authorization: Bearer <access_token>
+Content-Type: application/json
+
+{"ids":[12,18,27]}
+```
+
+单次最多查询 200 个节点。后端使用节点最近一次成功探测的公网出口 IP，同一 IP 只请求情报服务一次，外部查询并发限制为 8。响应为每个节点返回 `scamalytics_fraud_score`、`scamalytics_isp_risk_score`、情报缓存状态以及 `complete`、`partial`、`pending` 或 `failed` 结果状态。
+
+情报服务的受保护查询接口只立即返回本地缓存；首次查询或缓存过期时会在情报服务内排队补全，因此本次结果可能为 `pending`，稍后再次查询即可取得更新后的分数。该接口不会启动 Mihomo，也不会修改节点、订阅或探测记录。
 
 ## 安全边界
 

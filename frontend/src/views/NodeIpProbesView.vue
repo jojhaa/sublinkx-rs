@@ -126,11 +126,19 @@ function applyEvent(event: NodeIpProbeEvent) {
         status: event.status,
         ip: event.ip,
         ip_version: event.ip_version,
+        exit_ip_revision: previous?.exit_ip_revision ?? 0,
         country_code: event.country_code,
         country_name: event.country_name,
         country_source: event.country_code ? (previous?.country_source ?? null) : null,
         intelligence_status: previous?.intelligence_status ?? null,
         intelligence_message: previous?.intelligence_message ?? null,
+        risk_ip: previous?.risk_ip ?? null,
+        risk_status: previous?.risk_status ?? null,
+        scamalytics_fraud_score: previous?.scamalytics_fraud_score ?? null,
+        scamalytics_isp_risk_score: previous?.scamalytics_isp_risk_score ?? null,
+        risk_checked_at: previous?.risk_checked_at ?? null,
+        risk_expires_at_unix_ms: previous?.risk_expires_at_unix_ms ?? null,
+        risk_message: previous?.risk_message ?? null,
         message: event.message,
         probed_at: event.probed_at,
         country_updated_at: event.country_code ? (previous?.country_updated_at ?? null) : null,
@@ -154,6 +162,13 @@ function applyEvent(event: NodeIpProbeEvent) {
         intelligence_status: event.intelligence_status,
         intelligence_message: event.intelligence_message,
         intelligence_updated_at: event.intelligence_updated_at,
+        risk_ip: event.risk_ip,
+        risk_status: event.risk_status,
+        scamalytics_fraud_score: event.scamalytics_fraud_score,
+        scamalytics_isp_risk_score: event.scamalytics_isp_risk_score,
+        risk_checked_at: event.risk_checked_at,
+        risk_expires_at_unix_ms: event.risk_expires_at_unix_ms,
+        risk_message: event.risk_message,
       },
     }
     return
@@ -256,6 +271,11 @@ function intelligenceLabel(item: NodeIpProbeItem | undefined) {
   if (item?.intelligence_status === 'pending' || item?.intelligence_status === 'syncing') return t('ipIntelligencePending')
   if (item?.intelligence_status === 'error') return t('ipIntelligenceError')
   return t('ipIntelligenceNotSynced')
+}
+
+function riskLabel(item: NodeIpProbeItem | undefined) {
+  if (!item?.risk_status) return t('riskNotAssessed')
+  return t(`riskStatus_${item.risk_status}`)
 }
 
 async function load() {
@@ -401,6 +421,14 @@ onMounted(load)
             <strong>{{ formatCountryName(probes[node.id]?.country_code) ?? '未识别' }}</strong>
           </div>
           <small v-if="probes[node.id]?.country_source">{{ probes[node.id]?.country_source }}</small>
+          <div class="ip-intelligence-result" :class="`risk-${probes[node.id]?.risk_status ?? 'pending'}`">
+            <span>{{ riskLabel(probes[node.id]) }}</span>
+            <strong>{{ t('fraudScoreShort') }} {{ probes[node.id]?.scamalytics_fraud_score ?? '—' }}</strong>
+          </div>
+          <small v-if="probes[node.id]?.scamalytics_isp_risk_score != null">
+            {{ t('ispRiskScoreShort') }} {{ probes[node.id]?.scamalytics_isp_risk_score }}
+          </small>
+          <p v-if="probes[node.id]?.risk_message" class="connectivity-result-message">{{ probes[node.id]?.risk_message }}</p>
           <p v-if="probes[node.id]?.intelligence_message" class="connectivity-result-message">{{ probes[node.id]?.intelligence_message }}</p>
           <p v-if="probes[node.id]?.message" class="connectivity-result-message">{{ probes[node.id]?.message }}</p>
           <time v-if="probes[node.id]?.probed_at">{{ probes[node.id]?.probed_at }}</time>

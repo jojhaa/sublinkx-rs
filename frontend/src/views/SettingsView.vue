@@ -34,6 +34,7 @@ const form = reactive({
   ip_probe_after_upstream_import: true,
   country_detection_auto_enabled: true,
   country_detection_interval_minutes: 5,
+  risk_enforcement_enabled: false,
   connectivity_default_target: 'system_default' as 'system_default' | 'cloudflare_204' | 'google_204',
   connectivity_default_rounds: 3 as 1 | 3 | 5,
   connectivity_sync_last_latency: true,
@@ -61,6 +62,7 @@ async function load() {
     form.ip_probe_after_upstream_import = response.data.ip_probe_after_upstream_import
     form.country_detection_auto_enabled = response.data.country_detection_auto_enabled
     form.country_detection_interval_minutes = response.data.country_detection_interval_minutes
+    form.risk_enforcement_enabled = response.data.risk_enforcement_enabled
     form.connectivity_default_target = response.data.connectivity_default_target
     form.connectivity_default_rounds = response.data.connectivity_default_rounds
     form.connectivity_sync_last_latency = response.data.connectivity_sync_last_latency
@@ -95,6 +97,7 @@ async function submit() {
       ip_probe_after_upstream_import: form.ip_probe_after_upstream_import,
       country_detection_auto_enabled: form.country_detection_auto_enabled,
       country_detection_interval_minutes: form.country_detection_interval_minutes,
+      risk_enforcement_enabled: form.risk_enforcement_enabled,
       connectivity_default_target: form.connectivity_default_target,
       connectivity_default_rounds: form.connectivity_default_rounds,
       connectivity_sync_last_latency: form.connectivity_sync_last_latency,
@@ -116,6 +119,7 @@ async function submit() {
     form.ip_probe_after_upstream_import = response.data.ip_probe_after_upstream_import
     form.country_detection_auto_enabled = response.data.country_detection_auto_enabled
     form.country_detection_interval_minutes = response.data.country_detection_interval_minutes
+    form.risk_enforcement_enabled = response.data.risk_enforcement_enabled
     form.connectivity_default_target = response.data.connectivity_default_target
     form.connectivity_default_rounds = response.data.connectivity_default_rounds
     form.connectivity_sync_last_latency = response.data.connectivity_sync_last_latency
@@ -438,6 +442,15 @@ onMounted(load)
                 type="number"
               />
               <span class="metric-chip">{{ t('minute') }}</span>
+            </div>
+          </label>
+
+          <label class="settings-switch settings-switch-danger">
+            <input v-model="form.risk_enforcement_enabled" type="checkbox" />
+            <span></span>
+            <div>
+              <strong>{{ t('riskEnforcement') }}</strong>
+              <small>{{ t('riskEnforcementHint') }}</small>
             </div>
           </label>
 

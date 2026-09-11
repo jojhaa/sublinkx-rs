@@ -4,10 +4,26 @@ use crate::{
 };
 
 const SELECT_FIELDS: &str = r#"
-node_id, status, ip, ip_version, country_code, country_name, country_source,
-intelligence_status, intelligence_message, message, probed_at, country_updated_at,
-intelligence_updated_at, updated_at
+node_id, status, ip, ip_version, exit_ip_revision, country_code, country_name, country_source,
+intelligence_status, intelligence_message, risk_ip, risk_status, scamalytics_fraud_score,
+scamalytics_isp_risk_score, risk_checked_at, risk_expires_at_unix_ms, risk_message,
+ risk_traits_json, risk_traits_expires_at_unix_ms,
+message, probed_at, country_updated_at, intelligence_updated_at, updated_at
 "#;
+
+pub struct RiskDecision<'a> {
+    pub status: &'a str,
+    pub fraud_score: i64,
+    pub isp_risk_score: Option<i64>,
+    pub expires_at_unix_ms: Option<i64>,
+    pub now: &'a str,
+}
+
+pub struct RiskTraitsSnapshot<'a> {
+    pub json: &'a str,
+    pub expires_at_unix_ms: i64,
+    pub now: &'a str,
+}
 
 pub async fn list(pool: &DbPool) -> Result<Vec<NodeIpProbeRecord>, sqlx::Error> {
     sqlx::query_as::<_, NodeIpProbeRecord>(&format!(
@@ -41,6 +57,7 @@ pub async fn save_success(
         r#"
         UPDATE node_ip_probes
         SET status = 'ok',
+            exit_ip_revision = CASE WHEN ip = ? THEN exit_ip_revision ELSE exit_ip_revision + 1 END,
             country_code = CASE WHEN ip = ? THEN country_code ELSE NULL END,
             country_name = CASE WHEN ip = ? THEN country_name ELSE NULL END,
             country_source = CASE WHEN ip = ? THEN country_source ELSE NULL END,
@@ -48,10 +65,30 @@ pub async fn save_success(
             intelligence_status = CASE WHEN ip = ? THEN intelligence_status ELSE NULL END,
             intelligence_message = CASE WHEN ip = ? THEN intelligence_message ELSE NULL END,
             intelligence_updated_at = CASE WHEN ip = ? THEN intelligence_updated_at ELSE NULL END,
+            risk_ip = CASE WHEN ip = ? THEN risk_ip ELSE ? END,
+            risk_status = CASE WHEN ip = ? THEN risk_status ELSE 'pending' END,
+            scamalytics_fraud_score = CASE WHEN ip = ? THEN scamalytics_fraud_score ELSE NULL END,
+            scamalytics_isp_risk_score = CASE WHEN ip = ? THEN scamalytics_isp_risk_score ELSE NULL END,
+            risk_checked_at = CASE WHEN ip = ? THEN risk_checked_at ELSE NULL END,
+            risk_expires_at_unix_ms = CASE WHEN ip = ? THEN risk_expires_at_unix_ms ELSE NULL END,
+            risk_message = CASE WHEN ip = ? THEN risk_message ELSE 'awaiting risk assessment' END,
+            risk_traits_json = CASE WHEN ip = ? THEN risk_traits_json ELSE NULL END,
+            risk_traits_expires_at_unix_ms = CASE WHEN ip = ? THEN risk_traits_expires_at_unix_ms ELSE NULL END,
             ip = ?, ip_version = ?, message = NULL, probed_at = ?, updated_at = ?
         WHERE node_id = ?
         "#,
     )
+    .bind(ip)
+    .bind(ip)
+    .bind(ip)
+    .bind(ip)
+    .bind(ip)
+    .bind(ip)
+    .bind(ip)
+    .bind(ip)
+    .bind(ip)
+    .bind(ip)
+    .bind(ip)
     .bind(ip)
     .bind(ip)
     .bind(ip)
@@ -71,15 +108,19 @@ pub async fn save_success(
         query(
             r#"
             INSERT INTO node_ip_probes (
-              node_id, status, ip, ip_version, country_code, country_name, country_source,
-              intelligence_status, intelligence_message, message, probed_at,
+              node_id, status, ip, ip_version, exit_ip_revision,
+              country_code, country_name, country_source,
+              intelligence_status, intelligence_message,
+              risk_ip, risk_status, risk_message, message, probed_at,
               country_updated_at, intelligence_updated_at, updated_at
-            ) VALUES (?, 'ok', ?, ?, NULL, NULL, NULL, NULL, NULL, NULL, ?, NULL, NULL, ?)
+            ) VALUES (?, 'ok', ?, ?, 1, NULL, NULL, NULL, NULL, NULL,
+              ?, 'pending', 'awaiting risk assessment', NULL, ?, NULL, NULL, ?)
             "#,
         )
         .bind(node_id)
         .bind(ip)
         .bind(ip_version)
+        .bind(ip)
         .bind(now)
         .bind(now)
         .execute(pool)
@@ -89,6 +130,136 @@ pub async fn save_success(
     find_by_node_id(pool, node_id)
         .await?
         .ok_or(sqlx::Error::RowNotFound)
+}
+
+pub async fn invalidate_risk_for_node_ids(
+    pool: &DbPool,
+    node_ids: &[i64],
+    now: &str,
+) -> Result<u64, sqlx::Error> {
+    if node_ids.is_empty() {
+        return Ok(0);
+    }
+    let mut builder = DbQueryBuilder::new(
+        r#"
+        UPDATE node_ip_probes
+        SET exit_ip_revision = exit_ip_revision + 1,
+            risk_status = 'pending', risk_message = 'awaiting exit IP revalidation',
+            risk_expires_at_unix_ms = NULL, risk_traits_json = NULL,
+            risk_traits_expires_at_unix_ms = NULL, updated_at =
+        "#,
+    );
+    builder.push_bind(now);
+    builder.push(" WHERE node_id IN (");
+    {
+        let mut separated = builder.separated(", ");
+        for node_id in node_ids {
+            separated.push_bind(*node_id);
+        }
+    }
+    builder.push(")");
+    Ok(builder.build().execute(pool).await?.rows_affected())
+}
+
+pub async fn update_risk_decision(
+    pool: &DbPool,
+    node_id: i64,
+    ip: &str,
+    exit_ip_revision: i64,
+    decision: RiskDecision<'_>,
+) -> Result<Option<NodeIpProbeRecord>, sqlx::Error> {
+    let result = query(
+        r#"
+        UPDATE node_ip_probes
+        SET risk_ip = ?, risk_status = ?, scamalytics_fraud_score = ?,
+            scamalytics_isp_risk_score = ?, risk_checked_at = ?,
+            risk_expires_at_unix_ms = ?, risk_message = NULL, updated_at = ?
+        WHERE node_id = ? AND ip = ? AND exit_ip_revision = ?
+        "#,
+    )
+    .bind(ip)
+    .bind(decision.status)
+    .bind(decision.fraud_score)
+    .bind(decision.isp_risk_score)
+    .bind(decision.now)
+    .bind(decision.expires_at_unix_ms)
+    .bind(decision.now)
+    .bind(node_id)
+    .bind(ip)
+    .bind(exit_ip_revision)
+    .execute(pool)
+    .await?;
+    if result.rows_affected() == 0 {
+        return Ok(None);
+    }
+    find_by_node_id(pool, node_id).await
+}
+
+pub async fn update_risk_refresh_message(
+    pool: &DbPool,
+    node_id: i64,
+    ip: &str,
+    exit_ip_revision: i64,
+    message: &str,
+    now: &str,
+) -> Result<Option<NodeIpProbeRecord>, sqlx::Error> {
+    let result = query(
+        r#"
+        UPDATE node_ip_probes
+        SET risk_message = ?, updated_at = ?
+        WHERE node_id = ? AND ip = ? AND exit_ip_revision = ?
+        "#,
+    )
+    .bind(message)
+    .bind(now)
+    .bind(node_id)
+    .bind(ip)
+    .bind(exit_ip_revision)
+    .execute(pool)
+    .await?;
+    if result.rows_affected() == 0 {
+        return Ok(None);
+    }
+    find_by_node_id(pool, node_id).await
+}
+
+pub async fn update_risk_traits(
+    pool: &DbPool,
+    node_id: i64,
+    ip: &str,
+    exit_ip_revision: i64,
+    snapshot: RiskTraitsSnapshot<'_>,
+) -> Result<Option<NodeIpProbeRecord>, sqlx::Error> {
+    let result = query(
+        r#"
+        UPDATE node_ip_probes
+        SET risk_traits_json = ?, risk_traits_expires_at_unix_ms = ?, updated_at = ?
+        WHERE node_id = ? AND ip = ? AND exit_ip_revision = ?
+        "#,
+    )
+    .bind(snapshot.json)
+    .bind(snapshot.expires_at_unix_ms)
+    .bind(snapshot.now)
+    .bind(node_id)
+    .bind(ip)
+    .bind(exit_ip_revision)
+    .execute(pool)
+    .await?;
+    if result.rows_affected() == 0 {
+        return Ok(None);
+    }
+    find_by_node_id(pool, node_id).await
+}
+
+pub fn risk_allows_export(record: Option<&NodeIpProbeRecord>, enforcement_enabled: bool) -> bool {
+    !enforcement_enabled
+        || record.is_some_and(|record| {
+            record.risk_ip == record.ip
+                && matches!(
+                    record.risk_status.as_deref(),
+                    Some("zero" | "low" | "normal")
+                )
+        })
 }
 
 pub async fn save_failure(
@@ -221,6 +392,33 @@ pub async fn countries_by_node_ids(
     Ok(countries)
 }
 
+pub async fn records_by_node_ids(
+    pool: &DbPool,
+    node_ids: &[i64],
+) -> Result<std::collections::HashMap<i64, NodeIpProbeRecord>, sqlx::Error> {
+    if node_ids.is_empty() {
+        return Ok(std::collections::HashMap::new());
+    }
+    let mut builder = DbQueryBuilder::new(format!(
+        "SELECT {SELECT_FIELDS} FROM node_ip_probes WHERE node_id IN ("
+    ));
+    {
+        let mut separated = builder.separated(", ");
+        for node_id in node_ids {
+            separated.push_bind(*node_id);
+        }
+    }
+    builder.push(")");
+    let records = builder
+        .build_query_as::<NodeIpProbeRecord>()
+        .fetch_all(pool)
+        .await?;
+    Ok(records
+        .into_iter()
+        .map(|record| (record.node_id, record))
+        .collect())
+}
+
 pub async fn intelligence_refresh_candidates(
     pool: &DbPool,
     stale_before: &str,
@@ -297,9 +495,43 @@ mod tests {
             .await
             .expect("node should exist");
 
-        save_success(&pool, node_id, "1.1.1.1", 4, now)
+        let first = save_success(&pool, node_id, "1.1.1.1", 4, now)
             .await
             .expect("first probe should save");
+        assert_eq!(first.exit_ip_revision, 1);
+        assert_eq!(first.risk_status.as_deref(), Some("pending"));
+        let _assessed = update_risk_decision(
+            &pool,
+            node_id,
+            "1.1.1.1",
+            first.exit_ip_revision,
+            RiskDecision {
+                status: "zero",
+                fraud_score: 0,
+                isp_risk_score: Some(5),
+                expires_at_unix_ms: Some(1_893_456_000_000),
+                now,
+            },
+        )
+        .await
+        .expect("risk decision should execute")
+        .expect("risk decision should persist");
+        let assessed = update_risk_traits(
+            &pool,
+            node_id,
+            "1.1.1.1",
+            first.exit_ip_revision,
+            RiskTraitsSnapshot {
+                json: r#"{"usage_type":"residential","is_proxy":false,"is_vpn":false,"is_tor":false,"is_hosting":false,"is_abuser":false,"is_relay":false,"threat_level":null,"is_botnet_c2":false,"conflicts":[]}"#,
+                expires_at_unix_ms: 1_893_456_000_000,
+                now,
+            },
+        )
+        .await
+        .expect("risk traits should execute")
+        .expect("risk traits should persist");
+        assert!(assessed.risk_traits_json.is_some());
+        assert!(risk_allows_export(Some(&assessed), true));
         assert!(
             update_country(
                 &pool,
@@ -365,6 +597,29 @@ mod tests {
         assert!(changed.country_code.is_none());
         assert!(changed.country_name.is_none());
         assert!(changed.country_source.is_none());
+        assert_eq!(changed.exit_ip_revision, first.exit_ip_revision + 1);
+        assert_eq!(changed.risk_status.as_deref(), Some("pending"));
+        assert!(changed.risk_traits_json.is_none());
+        assert!(changed.risk_traits_expires_at_unix_ms.is_none());
+        assert!(!risk_allows_export(Some(&changed), true));
+        assert!(
+            update_risk_decision(
+                &pool,
+                node_id,
+                "8.8.8.8",
+                first.exit_ip_revision,
+                RiskDecision {
+                    status: "blocked",
+                    fraud_score: 80,
+                    isp_risk_score: None,
+                    expires_at_unix_ms: None,
+                    now,
+                },
+            )
+            .await
+            .expect("stale risk decision should execute")
+            .is_none()
+        );
         assert!(
             countries_by_node_ids(&pool, &[node_id])
                 .await

@@ -1,0 +1,1 @@
+ALTER TABLE subscriptions ADD COLUMN include_rules INTEGER NOT NULL DEFAULT 0;

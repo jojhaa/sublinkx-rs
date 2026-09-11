@@ -3,6 +3,7 @@ import { computed, onMounted, reactive, ref, watch } from 'vue'
 import QRCode from 'qrcode'
 import { extractApiError } from '../api/client'
 import { useI18n } from '../i18n'
+import { shadowrocketProfileInstallUrl } from '../utils/clientProfileLinks'
 import { listNodes, type NodeItem } from '../api/nodes'
 import { listTemplates, type TemplateItem } from '../api/templates'
 import {
@@ -37,6 +38,7 @@ type ExportTarget =
   | 'surge3'
   | 'surge2'
   | 'quanx'
+  | 'shadowrocket-profile'
   | 'quan'
   | 'loon'
   | 'surfboard'
@@ -65,6 +67,7 @@ const exportTargets: ExportTarget[] = [
   'surge3',
   'surge2',
   'quanx',
+  'shadowrocket-profile',
   'quan',
   'loon',
   'surfboard',
@@ -88,7 +91,8 @@ const TARGET_LABELS: Record<ExportTarget, string> = {
   'sing-box': 'sing-box',
   surge3: 'Surge 3',
   surge2: 'Surge 2',
-  quanx: 'Quantumult X',
+  quanx: 'Quantumult X 完整配置',
+  'shadowrocket-profile': 'Shadowrocket 完整配置',
   quan: 'Quantumult',
   loon: 'Loon',
   surfboard: 'Surfboard',
@@ -110,7 +114,8 @@ const TARGET_SUPPORT: Record<ExportTarget, Set<string>> = {
   'sing-box': new Set(['shadowsocks', 'vmess', 'vless', 'trojan', 'hysteria2', 'tuic', 'wireguard', 'anytls']),
   surge3: new Set(['shadowsocks', 'vmess', 'vless', 'trojan', 'hysteria2', 'tuic', 'wireguard']),
   surge2: new Set(['shadowsocks', 'vmess', 'vless', 'trojan', 'hysteria2', 'tuic', 'wireguard']),
-  quanx: new Set(['shadowsocks', 'vmess', 'vless', 'trojan', 'hysteria2']),
+  quanx: new Set(['shadowsocks', 'vmess', 'vless', 'trojan', 'anytls']),
+  'shadowrocket-profile': new Set(['shadowsocks', 'vmess', 'vless', 'trojan', 'hysteria2', 'tuic', 'wireguard']),
   quan: new Set(['shadowsocks', 'vmess', 'vless', 'trojan', 'hysteria2', 'tuic', 'wireguard']),
   loon: new Set(['shadowsocks', 'vmess', 'vless', 'trojan', 'hysteria2', 'tuic', 'wireguard']),
   surfboard: new Set(['shadowsocks', 'vmess', 'vless', 'trojan', 'hysteria2', 'tuic', 'wireguard']),
@@ -160,10 +165,14 @@ const form = reactive({
   name: '',
   description: '',
   default_client: 'mihomo' as ExportTarget,
+  include_rules: false,
   template_id: null as number | null,
   group_id: null as number | null,
   enabled: true,
   expires_at: '',
+  portal_enabled: false,
+  portal_access_code: '',
+  portal_access_code_set: false,
   node_group_ids: [] as number[],
   node_ids: [] as number[],
 })
@@ -253,7 +262,10 @@ const formCompatibility = computed(() => summarizeCompatibility(selectedNodes.va
 const selectedTemplate = computed(() => templates.value.find((item) => item.id === form.template_id) ?? null)
 const usesUpstreamRawTemplate = computed(() => isUpstreamRawTemplate(selectedTemplate.value))
 const canSubmitSubscription = computed(
-  () => !saving.value && !!form.name && (effectiveFormNodeIds.value.length > 0 || form.node_group_ids.length > 0 || usesUpstreamRawTemplate.value),
+  () => !saving.value
+    && !!form.name
+    && (effectiveFormNodeIds.value.length > 0 || form.node_group_ids.length > 0 || usesUpstreamRawTemplate.value)
+    && (!form.portal_enabled || form.portal_access_code_set || form.portal_access_code.length >= 4),
 )
 const selectedTemplateMessage = computed(() => {
   if (!selectedTemplate.value) {
@@ -398,11 +410,33 @@ function subscriptionBaseUrl() {
 }
 
 function publicExportLink(token: string, target: ExportTarget) {
+  if (isFullProfileTarget(target)) {
+    return `${subscriptionBaseUrl()}/s/${token}/profile/${target}`
+  }
   return `${subscriptionBaseUrl()}/s/${token}?target=${target}&mode=${exportMode.value}`
 }
 
 function publicSubscriptionLink(item: SubscriptionItem) {
   return `${subscriptionBaseUrl()}/s/${item.token}?mode=best_effort`
+}
+
+function subscriptionPortalLink(item: SubscriptionItem) {
+  if (!item.portal_slug) {
+    return ''
+  }
+  return `${window.location.origin.replace(/\/$/, '')}/portal/${item.portal_slug}`
+}
+
+function isFullProfileTarget(target: ExportTarget): target is 'quanx' | 'shadowrocket-profile' {
+  return target === 'quanx' || target === 'shadowrocket-profile'
+}
+
+function shadowrocketProfileInstallLink(item: SubscriptionItem) {
+  return shadowrocketProfileInstallUrl(publicExportLink(item.token, 'shadowrocket-profile'))
+}
+
+function downloadQuantumultXProfile(item: SubscriptionItem) {
+  window.open(publicExportLink(item.token, 'quanx'), '_blank', 'noopener,noreferrer')
 }
 
 async function openSubscriptionQr(item: SubscriptionItem) {
@@ -816,10 +850,14 @@ function resetForm() {
   form.name = ''
   form.description = ''
   form.default_client = 'mihomo'
+  form.include_rules = false
   form.template_id = null
   form.group_id = null
   form.enabled = true
   form.expires_at = ''
+  form.portal_enabled = false
+  form.portal_access_code = ''
+  form.portal_access_code_set = false
   form.node_group_ids = []
   form.node_ids = []
   nodeGroupFilter.value = 'all'
@@ -863,10 +901,14 @@ function startEdit(item: SubscriptionItem) {
   form.name = item.name
   form.description = item.description
   form.default_client = normalizeTarget(item.default_client)
+  form.include_rules = item.include_rules ?? false
   form.template_id = item.template_id
   form.group_id = item.group_id
   form.enabled = item.enabled
   form.expires_at = toDateTimeLocal(item.expires_at)
+  form.portal_enabled = item.portal_enabled
+  form.portal_access_code = ''
+  form.portal_access_code_set = item.portal_access_code_set
   form.node_group_ids = [...(item.node_group_ids ?? [])]
   form.node_ids = [...item.node_ids]
   nodeGroupFilter.value = 'all'
@@ -1040,10 +1082,13 @@ async function submit() {
       name: form.name,
       description: form.description || undefined,
       default_client: form.default_client,
+      include_rules: form.include_rules,
       template_id: form.template_id,
       group_id: form.group_id,
       enabled: form.enabled,
       expires_at: fromDateTimeLocal(form.expires_at),
+      portal_enabled: form.portal_enabled,
+      ...(form.portal_access_code ? { portal_access_code: form.portal_access_code } : {}),
       node_group_ids: form.node_group_ids,
       node_ids: form.node_ids,
     }
@@ -1083,6 +1128,7 @@ async function moveSelectedSubscriptions() {
           name: item.name,
           description: item.description || undefined,
           default_client: item.default_client,
+          include_rules: item.include_rules,
           template_id: item.template_id,
           group_id: batchGroupId.value,
           enabled: item.enabled,
@@ -1149,7 +1195,8 @@ async function toggleSubscriptionEnabled(item: SubscriptionItem) {
       name: item.name,
       description: item.description || undefined,
       default_client: item.default_client,
-      template_id: item.template_id,
+      include_rules: item.include_rules,
+          template_id: item.template_id,
       group_id: item.group_id,
       enabled: !item.enabled,
       expires_at: item.expires_at,
@@ -1348,6 +1395,9 @@ onMounted(load)
                   <span v-if="item.node_group_ids?.length" class="metric-chip metric-chip-ok">
                     {{ t('followingGroupsUnit', { count: item.node_group_ids.length }) }}
                   </span>
+                  <span v-if="item.portal_enabled" class="metric-chip metric-chip-ok">
+                    {{ t('portalEnabledBadge') }}
+                  </span>
                   <span class="metric-chip" :class="{ 'metric-chip-warn': subscriptionStatus(item) === 'expired' }">
                     {{ formatExpiry(item.expires_at) }}
                   </span>
@@ -1371,6 +1421,14 @@ onMounted(load)
                   </button>
                   <button class="button button-accent button-compact" type="button" @click="openExportConsole(item)">
                     {{ t('export') }}
+                  </button>
+                  <button
+                    v-if="item.portal_enabled && item.portal_slug"
+                    class="button button-ghost button-compact"
+                    type="button"
+                    @click="copyText(subscriptionPortalLink(item), t('portalLinkCopied'))"
+                  >
+                    {{ t('copyPortalLink') }}
                   </button>
                 </div>
               </td>
@@ -1418,11 +1476,18 @@ onMounted(load)
             <div><span>{{ t('node') }}</span><strong>{{ t('nodesUnit', { count: detailSubscription.node_ids.length }) }}</strong></div>
             <div><span>{{ t('followNodeGroups') }}</span><strong>{{ t('groupsUnit', { count: detailSubscription.node_group_ids?.length ?? 0 }) }}</strong></div>
             <div><span>{{ t('defaultClientLabel') }}</span><strong>{{ TARGET_LABELS[defaultTarget(detailSubscription)] }}</strong></div>
+            <div><span>{{ t('subscriptionPortal') }}</span><strong>{{ detailSubscription.portal_enabled ? t('enabled') : t('disabled') }}</strong></div>
           </div>
           <div class="modal-actions">
             <button class="button button-ghost" type="button" @click="copyText(publicSubscriptionLink(detailSubscription), t('autoLinkCopied'))">{{ t('copyAutoLink') }}</button>
             <button class="button button-ghost" type="button" @click="openSubscriptionQr(detailSubscription)">{{ t('qrCode') }}</button>
             <button class="button button-accent" type="button" @click="openExportConsole(detailSubscription); detailSubscription = null">{{ t('export') }}</button>
+            <button
+              v-if="detailSubscription.portal_enabled && detailSubscription.portal_slug"
+              class="button button-ghost"
+              type="button"
+              @click="copyText(subscriptionPortalLink(detailSubscription), t('portalLinkCopied'))"
+            >{{ t('copyPortalLink') }}</button>
             <button class="button button-ghost" type="button" @click="startEdit(detailSubscription); detailSubscription = null">{{ t('edit') }}</button>
           </div>
         </section>
@@ -1485,6 +1550,15 @@ onMounted(load)
                 </div>
 
                 <div>
+                  <label class="field-label" for="subscription-content">导出内容</label>
+                  <select id="subscription-content" v-model="form.include_rules" class="select">
+                    <option :value="true">节点＋规则</option>
+                    <option :value="false">仅节点</option>
+                  </select>
+                  <p class="hint">仅节点保留节点、国家分组、负载均衡和故障转移等策略组，不携带 DNS、网站分流规则或远程规则集。Clash/Mihomo 仅保留指向“节点选择”的兜底规则，流量跟随所选策略组；自定义模板使用现有策略组。原订阅链接保持不变。</p>
+                </div>
+
+                <div>
                   <label class="field-label" for="subscription-template">{{ t('templateLabel') }}</label>
                   <select id="subscription-template" v-model="form.template_id" class="select">
                     <option :value="null">{{ t('noTemplate') }}</option>
@@ -1504,6 +1578,30 @@ onMounted(load)
                     <div class="muted">{{ t('enableSubscriptionHint') }}</div>
                   </span>
                 </label>
+
+                <div class="subscription-portal-editor">
+                  <label class="checkbox-item">
+                    <input v-model="form.portal_enabled" type="checkbox" />
+                    <span>
+                      <strong>{{ t('enableSubscriptionPortal') }}</strong>
+                      <div class="muted">{{ t('enableSubscriptionPortalHint') }}</div>
+                    </span>
+                  </label>
+                  <div v-if="form.portal_enabled">
+                    <label class="field-label" for="subscription-portal-access-code">{{ t('portalAccessCode') }}</label>
+                    <input
+                      id="subscription-portal-access-code"
+                      v-model="form.portal_access_code"
+                      class="input"
+                      type="password"
+                      autocomplete="new-password"
+                      :placeholder="form.portal_access_code_set ? t('portalAccessCodeKeepPlaceholder') : t('portalAccessCodePlaceholder')"
+                    />
+                    <p class="hint template-kind-hint">
+                      {{ form.portal_access_code_set ? t('portalAccessCodeKeepHint') : t('portalAccessCodeCreateHint') }}
+                    </p>
+                  </div>
+                </div>
 
                 <div v-if="usesUpstreamRawTemplate" class="compat-panel">
                   <div class="inline-actions">
@@ -1692,6 +1790,7 @@ onMounted(load)
           <div class="export-console-hero">
             <div>
               <div class="hint">{{ t('autoDetectSubscription') }}</div>
+              <p class="export-profile-hint">{{ t('adaptiveSubscriptionHint') }}</p>
               <button class="button button-ghost token-link export-console-auto-link" type="button" @click="openAdminExport(exportConsole)">
                 {{ t('preview') }}
               </button>
@@ -1727,14 +1826,33 @@ onMounted(load)
               <button class="button button-ghost token-link export-console-link" type="button" @click="openAdminExport(exportConsole, target)">
                 {{ t('preview') }}
               </button>
+              <p v-if="target === 'quanx'" class="export-profile-hint">
+                {{ t('quanxProfileImportHint') }}
+              </p>
+              <p v-else-if="target === 'shadowrocket-profile'" class="export-profile-hint">
+                {{ t('shadowrocketProfileImportHint') }}
+              </p>
               <div class="export-console-actions">
                 <button
                   class="button button-ghost button-compact"
                   type="button"
-                  @click="copyText(publicExportLink(exportConsole.token, target), t('targetLinkCopied', { target: TARGET_LABELS[target] }))"
+                  @click="copyText(publicExportLink(exportConsole.token, target), isFullProfileTarget(target) ? t('profileLinkCopied', { target: TARGET_LABELS[target] }) : t('targetLinkCopied', { target: TARGET_LABELS[target] }))"
                 >
-                  {{ t('copyLink') }}
+                  {{ isFullProfileTarget(target) ? t('copyProfileLink') : t('copyLink') }}
                 </button>
+                <button
+                  v-if="target === 'quanx'"
+                  class="button button-accent button-compact"
+                  type="button"
+                  @click="downloadQuantumultXProfile(exportConsole)"
+                >
+                  {{ t('downloadFullProfile') }}
+                </button>
+                <a
+                  v-else-if="target === 'shadowrocket-profile'"
+                  class="button button-accent button-compact"
+                  :href="shadowrocketProfileInstallLink(exportConsole)"
+                >{{ t('installFullProfile') }}</a>
                 <button
                   v-if="subscriptionCompatibility(exportConsole, target).unsupportedNodes.length > 0"
                   class="button button-ghost button-compact"

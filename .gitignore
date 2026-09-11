@@ -14,6 +14,9 @@ docs/plan.md
 /开发日志.md
 
 # Environment and local secrets
+output/
+.playwright-cli/
+CONOUT$
 .env
 .env.*
 !.env.example

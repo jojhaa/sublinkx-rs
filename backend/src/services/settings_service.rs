@@ -23,6 +23,7 @@ const IP_PROBE_INTERVAL_MINUTES: &str = "ip_probe.interval_minutes";
 const IP_PROBE_AFTER_UPSTREAM_IMPORT: &str = "ip_probe.after_upstream_import";
 const COUNTRY_DETECTION_AUTO_ENABLED: &str = "ip_intelligence.auto_enabled";
 const COUNTRY_DETECTION_INTERVAL_MINUTES: &str = "ip_intelligence.interval_minutes";
+const RISK_ENFORCEMENT_ENABLED: &str = "ip_intelligence.risk_enforcement_enabled";
 const CONNECTIVITY_DEFAULT_TARGET: &str = "connectivity.default_target";
 const CONNECTIVITY_DEFAULT_ROUNDS: &str = "connectivity.default_rounds";
 const CONNECTIVITY_SYNC_LAST_LATENCY: &str = "connectivity.sync_last_latency";
@@ -41,6 +42,7 @@ const DEFAULT_IP_PROBE_INTERVAL_MINUTES: i64 = 360;
 const DEFAULT_IP_PROBE_AFTER_UPSTREAM_IMPORT: bool = true;
 const DEFAULT_COUNTRY_DETECTION_AUTO_ENABLED: bool = true;
 const DEFAULT_COUNTRY_DETECTION_INTERVAL_MINUTES: i64 = 5;
+const DEFAULT_RISK_ENFORCEMENT_ENABLED: bool = false;
 const DEFAULT_CONNECTIVITY_TARGET: &str = "system_default";
 const DEFAULT_CONNECTIVITY_ROUNDS: i64 = 3;
 const DEFAULT_CONNECTIVITY_SYNC_LAST_LATENCY: bool = true;
@@ -143,6 +145,7 @@ pub async fn load_settings(state: &AppState) -> Result<AppSettingsView, AppError
             IP_PROBE_AFTER_UPSTREAM_IMPORT,
             COUNTRY_DETECTION_AUTO_ENABLED,
             COUNTRY_DETECTION_INTERVAL_MINUTES,
+            RISK_ENFORCEMENT_ENABLED,
             CONNECTIVITY_DEFAULT_TARGET,
             CONNECTIVITY_DEFAULT_ROUNDS,
             CONNECTIVITY_SYNC_LAST_LATENCY,
@@ -197,6 +200,10 @@ pub async fn load_settings(state: &AppState) -> Result<AppSettingsView, AppError
         .get(COUNTRY_DETECTION_INTERVAL_MINUTES)
         .and_then(|value| value.parse::<i64>().ok())
         .unwrap_or(DEFAULT_COUNTRY_DETECTION_INTERVAL_MINUTES);
+    let risk_enforcement_enabled = values
+        .get(RISK_ENFORCEMENT_ENABLED)
+        .and_then(|value| value.parse::<bool>().ok())
+        .unwrap_or(DEFAULT_RISK_ENFORCEMENT_ENABLED);
     let connectivity_default_target = values
         .get(CONNECTIVITY_DEFAULT_TARGET)
         .filter(|value| validate_connectivity_target(value).is_ok())
@@ -263,6 +270,7 @@ pub async fn load_settings(state: &AppState) -> Result<AppSettingsView, AppError
             MIN_COUNTRY_DETECTION_INTERVAL_MINUTES,
             MAX_COUNTRY_DETECTION_INTERVAL_MINUTES,
         ),
+        risk_enforcement_enabled,
         connectivity_default_target,
         connectivity_default_rounds,
         connectivity_sync_last_latency,
@@ -374,6 +382,15 @@ async fn save_settings(state: &AppState, payload: &UpdateSettingsRequest) -> Res
         )
         .await?;
     }
+    if let Some(enabled) = payload.risk_enforcement_enabled {
+        settings_repo::set(
+            &state.db,
+            RISK_ENFORCEMENT_ENABLED,
+            if enabled { "true" } else { "false" },
+            &now,
+        )
+        .await?;
+    }
     if let Some(target) = payload.connectivity_default_target.as_deref() {
         settings_repo::set(&state.db, CONNECTIVITY_DEFAULT_TARGET, target.trim(), &now).await?;
     }
@@ -431,6 +448,7 @@ async fn save_settings(state: &AppState, payload: &UpdateSettingsRequest) -> Res
     )
     .await?;
     if payload.public_export_cache_ttl_seconds.is_some()
+        || payload.risk_enforcement_enabled.is_some()
         || payload.mihomo_country_load_min_nodes.is_some()
         || payload.mihomo_country_fallback_min_nodes.is_some()
     {

@@ -8,11 +8,19 @@ export interface NodeIpProbeItem {
   status: 'ok' | 'error'
   ip: string | null
   ip_version: 4 | 6 | null
+  exit_ip_revision: number
   country_code: string | null
   country_name: string | null
   country_source: string | null
   intelligence_status: 'syncing' | 'pending' | 'enriched' | 'error' | 'disabled' | null
   intelligence_message: string | null
+  risk_ip: string | null
+  risk_status: 'pending' | 'zero' | 'low' | 'normal' | 'blocked' | null
+  scamalytics_fraud_score: number | null
+  scamalytics_isp_risk_score: number | null
+  risk_checked_at: string | null
+  risk_expires_at_unix_ms: number | null
+  risk_message: string | null
   message: string | null
   probed_at: string
   country_updated_at: string | null
@@ -51,6 +59,13 @@ export type NodeIpProbeEvent =
       intelligence_status: NodeIpProbeItem['intelligence_status']
       intelligence_message: string | null
       intelligence_updated_at: string | null
+      risk_ip: string | null
+      risk_status: NodeIpProbeItem['risk_status']
+      scamalytics_fraud_score: number | null
+      scamalytics_isp_risk_score: number | null
+      risk_checked_at: string | null
+      risk_expires_at_unix_ms: number | null
+      risk_message: string | null
     }
   | {
       type: 'job_completed'

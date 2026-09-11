@@ -8,7 +8,7 @@ use percent_encoding::{NON_ALPHANUMERIC, utf8_percent_encode};
 use serde_json::json;
 use serde_yaml::{Mapping, Value};
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{BTreeMap, HashMap, HashSet},
     net::IpAddr,
     sync::OnceLock,
     time::{Duration, Instant},
@@ -20,6 +20,7 @@ use crate::{
     domain::{
         client::{detect_client_target_from_user_agent, resolve_client_target},
         node::NodeView,
+        node_ip_probe::NodeIpProbeRecord,
         settings::AppSettingsView,
         subscription::SubscriptionView,
         template::TemplateRecord,
@@ -42,8 +43,25 @@ const MIHOMO_GROUP_MANUAL: &str = "手动选择";
 const MIHOMO_GROUP_AUTO: &str = "自动选择";
 const MIHOMO_GROUP_FALLBACK: &str = "故障转移";
 const MIHOMO_GROUP_LOAD_BALANCE: &str = "负载均衡";
+const MIHOMO_GROUP_ZERO_FRAUD: &str = "0欺诈";
+const MIHOMO_GROUP_LOW_FRAUD: &str = "低欺诈";
+const MIHOMO_GROUP_RESIDENTIAL_MANUAL: &str = "手动选择住宅网络";
+const QUANX_GROUP_PROXY: &str = "节点选择";
+const BUILTIN_QUANX_TEMPLATE_NAME: &str = "Built-in Quantumult X Base";
 const BUILTIN_CLASH_TEMPLATE_NAME: &str = "Built-in Clash ACL4SSR Style";
 const BUILTIN_MIHOMO_TEMPLATE_NAME: &str = "Built-in Mihomo Policy Orchestrator";
+pub(crate) const QUANX_DEFAULT_TEMPLATE: &str = "[general]\n\
+server_check_url=http://cp.cloudflare.com/generate_204\n\n\
+[server_local]\n\n\
+[policy]\n\
+static=节点选择, 自动选择, direct\n\
+url-latency-benchmark=自动选择, server-tag-regex=.*, check-interval=600, tolerance=0, alive-checking=false\n\n\
+[filter_remote]\n\n\
+[filter_local]\n\
+geoip, cn, direct\n\
+final, 节点选择\n\n\
+[rewrite_remote]\n\n\
+[task_local]\n";
 const MIHOMO_INLINE_RULE_PROVIDERS_YAML: &str =
     include_str!("../../assets/mihomo-rules-inline.yaml");
 static MIHOMO_INLINE_RULE_PROVIDERS_BLOCK: OnceLock<String> = OnceLock::new();
@@ -144,11 +162,271 @@ const MIHOMO_COUNTRY_GROUPS: &[(&str, &str, &str)] = &[
     ("TW", "台湾负载", "台湾故障转移"),
 ];
 const MIHOMO_OTHER_COUNTRY_GROUP: &str = "其他地区负载";
+const COUNTRY_NAMES_ZH: &[(&str, &str)] = &[
+    ("AD", "安道尔"),
+    ("AE", "阿联酋"),
+    ("AF", "阿富汗"),
+    ("AG", "安提瓜和巴布达"),
+    ("AI", "安圭拉"),
+    ("AL", "阿尔巴尼亚"),
+    ("AM", "亚美尼亚"),
+    ("AO", "安哥拉"),
+    ("AQ", "南极洲"),
+    ("AR", "阿根廷"),
+    ("AS", "美属萨摩亚"),
+    ("AT", "奥地利"),
+    ("AU", "澳大利亚"),
+    ("AW", "阿鲁巴"),
+    ("AX", "奥兰群岛"),
+    ("AZ", "阿塞拜疆"),
+    ("BA", "波斯尼亚和黑塞哥维那"),
+    ("BB", "巴巴多斯"),
+    ("BD", "孟加拉国"),
+    ("BE", "比利时"),
+    ("BF", "布基纳法索"),
+    ("BG", "保加利亚"),
+    ("BH", "巴林"),
+    ("BI", "布隆迪"),
+    ("BJ", "贝宁"),
+    ("BL", "圣巴泰勒米"),
+    ("BM", "百慕大"),
+    ("BN", "文莱"),
+    ("BO", "玻利维亚"),
+    ("BQ", "荷兰加勒比区"),
+    ("BR", "巴西"),
+    ("BS", "巴哈马"),
+    ("BT", "不丹"),
+    ("BV", "布韦岛"),
+    ("BW", "博茨瓦纳"),
+    ("BY", "白俄罗斯"),
+    ("BZ", "伯利兹"),
+    ("CA", "加拿大"),
+    ("CC", "科科斯群岛"),
+    ("CD", "刚果（金）"),
+    ("CF", "中非共和国"),
+    ("CG", "刚果（布）"),
+    ("CH", "瑞士"),
+    ("CI", "科特迪瓦"),
+    ("CK", "库克群岛"),
+    ("CL", "智利"),
+    ("CM", "喀麦隆"),
+    ("CN", "中国"),
+    ("CO", "哥伦比亚"),
+    ("CR", "哥斯达黎加"),
+    ("CU", "古巴"),
+    ("CV", "佛得角"),
+    ("CW", "库拉索"),
+    ("CX", "圣诞岛"),
+    ("CY", "塞浦路斯"),
+    ("CZ", "捷克"),
+    ("DE", "德国"),
+    ("DJ", "吉布提"),
+    ("DK", "丹麦"),
+    ("DM", "多米尼克"),
+    ("DO", "多米尼加共和国"),
+    ("DZ", "阿尔及利亚"),
+    ("EC", "厄瓜多尔"),
+    ("EE", "爱沙尼亚"),
+    ("EG", "埃及"),
+    ("EH", "西撒哈拉"),
+    ("ER", "厄立特里亚"),
+    ("ES", "西班牙"),
+    ("ET", "埃塞俄比亚"),
+    ("FI", "芬兰"),
+    ("FJ", "斐济"),
+    ("FK", "福克兰群岛"),
+    ("FM", "密克罗尼西亚联邦"),
+    ("FO", "法罗群岛"),
+    ("FR", "法国"),
+    ("GA", "加蓬"),
+    ("GB", "英国"),
+    ("GD", "格林纳达"),
+    ("GE", "格鲁吉亚"),
+    ("GF", "法属圭亚那"),
+    ("GG", "根西岛"),
+    ("GH", "加纳"),
+    ("GI", "直布罗陀"),
+    ("GL", "格陵兰"),
+    ("GM", "冈比亚"),
+    ("GN", "几内亚"),
+    ("GP", "瓜德罗普"),
+    ("GQ", "赤道几内亚"),
+    ("GR", "希腊"),
+    ("GS", "南乔治亚和南桑威奇群岛"),
+    ("GT", "危地马拉"),
+    ("GU", "关岛"),
+    ("GW", "几内亚比绍"),
+    ("GY", "圭亚那"),
+    ("HK", "香港"),
+    ("HM", "赫德岛和麦克唐纳群岛"),
+    ("HN", "洪都拉斯"),
+    ("HR", "克罗地亚"),
+    ("HT", "海地"),
+    ("HU", "匈牙利"),
+    ("ID", "印度尼西亚"),
+    ("IE", "爱尔兰"),
+    ("IL", "以色列"),
+    ("IM", "马恩岛"),
+    ("IN", "印度"),
+    ("IO", "英属印度洋领地"),
+    ("IQ", "伊拉克"),
+    ("IR", "伊朗"),
+    ("IS", "冰岛"),
+    ("IT", "意大利"),
+    ("JE", "泽西岛"),
+    ("JM", "牙买加"),
+    ("JO", "约旦"),
+    ("JP", "日本"),
+    ("KE", "肯尼亚"),
+    ("KG", "吉尔吉斯斯坦"),
+    ("KH", "柬埔寨"),
+    ("KI", "基里巴斯"),
+    ("KM", "科摩罗"),
+    ("KN", "圣基茨和尼维斯"),
+    ("KP", "朝鲜"),
+    ("KR", "韩国"),
+    ("KW", "科威特"),
+    ("KY", "开曼群岛"),
+    ("KZ", "哈萨克斯坦"),
+    ("LA", "老挝"),
+    ("LB", "黎巴嫩"),
+    ("LC", "圣卢西亚"),
+    ("LI", "列支敦士登"),
+    ("LK", "斯里兰卡"),
+    ("LR", "利比里亚"),
+    ("LS", "莱索托"),
+    ("LT", "立陶宛"),
+    ("LU", "卢森堡"),
+    ("LV", "拉脱维亚"),
+    ("LY", "利比亚"),
+    ("MA", "摩洛哥"),
+    ("MC", "摩纳哥"),
+    ("MD", "摩尔多瓦"),
+    ("ME", "黑山"),
+    ("MF", "法属圣马丁"),
+    ("MG", "马达加斯加"),
+    ("MH", "马绍尔群岛"),
+    ("MK", "北马其顿"),
+    ("ML", "马里"),
+    ("MM", "缅甸"),
+    ("MN", "蒙古"),
+    ("MO", "澳门"),
+    ("MP", "北马里亚纳群岛"),
+    ("MQ", "马提尼克"),
+    ("MR", "毛里塔尼亚"),
+    ("MS", "蒙特塞拉特"),
+    ("MT", "马耳他"),
+    ("MU", "毛里求斯"),
+    ("MV", "马尔代夫"),
+    ("MW", "马拉维"),
+    ("MX", "墨西哥"),
+    ("MY", "马来西亚"),
+    ("MZ", "莫桑比克"),
+    ("NA", "纳米比亚"),
+    ("NC", "新喀里多尼亚"),
+    ("NE", "尼日尔"),
+    ("NF", "诺福克岛"),
+    ("NG", "尼日利亚"),
+    ("NI", "尼加拉瓜"),
+    ("NL", "荷兰"),
+    ("NO", "挪威"),
+    ("NP", "尼泊尔"),
+    ("NR", "瑙鲁"),
+    ("NU", "纽埃"),
+    ("NZ", "新西兰"),
+    ("OM", "阿曼"),
+    ("PA", "巴拿马"),
+    ("PE", "秘鲁"),
+    ("PF", "法属波利尼西亚"),
+    ("PG", "巴布亚新几内亚"),
+    ("PH", "菲律宾"),
+    ("PK", "巴基斯坦"),
+    ("PL", "波兰"),
+    ("PM", "圣皮埃尔和密克隆"),
+    ("PN", "皮特凯恩群岛"),
+    ("PR", "波多黎各"),
+    ("PS", "巴勒斯坦"),
+    ("PT", "葡萄牙"),
+    ("PW", "帕劳"),
+    ("PY", "巴拉圭"),
+    ("QA", "卡塔尔"),
+    ("RE", "留尼汪"),
+    ("RO", "罗马尼亚"),
+    ("RS", "塞尔维亚"),
+    ("RU", "俄罗斯"),
+    ("RW", "卢旺达"),
+    ("SA", "沙特阿拉伯"),
+    ("SB", "所罗门群岛"),
+    ("SC", "塞舌尔"),
+    ("SD", "苏丹"),
+    ("SE", "瑞典"),
+    ("SG", "新加坡"),
+    ("SH", "圣赫勒拿"),
+    ("SI", "斯洛文尼亚"),
+    ("SJ", "斯瓦尔巴和扬马延"),
+    ("SK", "斯洛伐克"),
+    ("SL", "塞拉利昂"),
+    ("SM", "圣马力诺"),
+    ("SN", "塞内加尔"),
+    ("SO", "索马里"),
+    ("SR", "苏里南"),
+    ("SS", "南苏丹"),
+    ("ST", "圣多美和普林西比"),
+    ("SV", "萨尔瓦多"),
+    ("SX", "荷属圣马丁"),
+    ("SY", "叙利亚"),
+    ("SZ", "斯威士兰"),
+    ("TC", "特克斯和凯科斯群岛"),
+    ("TD", "乍得"),
+    ("TF", "法属南部领地"),
+    ("TG", "多哥"),
+    ("TH", "泰国"),
+    ("TJ", "塔吉克斯坦"),
+    ("TK", "托克劳"),
+    ("TL", "东帝汶"),
+    ("TM", "土库曼斯坦"),
+    ("TN", "突尼斯"),
+    ("TO", "汤加"),
+    ("TR", "土耳其"),
+    ("TT", "特立尼达和多巴哥"),
+    ("TV", "图瓦卢"),
+    ("TW", "台湾"),
+    ("TZ", "坦桑尼亚"),
+    ("UA", "乌克兰"),
+    ("UG", "乌干达"),
+    ("UM", "美国本土外小岛屿"),
+    ("US", "美国"),
+    ("UY", "乌拉圭"),
+    ("UZ", "乌兹别克斯坦"),
+    ("VA", "梵蒂冈"),
+    ("VC", "圣文森特和格林纳丁斯"),
+    ("VE", "委内瑞拉"),
+    ("VG", "英属维尔京群岛"),
+    ("VI", "美属维尔京群岛"),
+    ("VN", "越南"),
+    ("VU", "瓦努阿图"),
+    ("WF", "瓦利斯和富图纳"),
+    ("WS", "萨摩亚"),
+    ("YE", "也门"),
+    ("YT", "马约特"),
+    ("ZA", "南非"),
+    ("ZM", "赞比亚"),
+    ("ZW", "津巴布韦"),
+    ("AP", "亚太地区"),
+    ("EU", "欧盟"),
+    ("UK", "英国"),
+    ("XK", "科索沃"),
+];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ExportMode {
     Strict,
     BestEffort,
+}
+
+struct ExportNodeMetadata<'a> {
+    countries: &'a HashMap<i64, String>,
+    risks: &'a HashMap<i64, NodeIpProbeRecord>,
 }
 
 impl ExportMode {
@@ -195,6 +473,7 @@ pub async fn export_subscription(
         subscription_record.expires_at.as_deref(),
         &export_target,
         export_mode,
+        subscription_record.include_rules != 0,
     );
     let cache_ttl = Duration::from_secs(settings.public_export_cache_ttl_seconds as u64);
     if !cache_ttl.is_zero()
@@ -278,9 +557,10 @@ fn public_export_cache_key(
     expires_at: Option<&str>,
     export_target: &str,
     export_mode: ExportMode,
+    include_rules: bool,
 ) -> String {
     format!(
-        "public-export:v1:{subscription_id}:{token}:{updated_at}:{}:{export_target}:{}",
+        "public-export:v2:{subscription_id}:{token}:{updated_at}:{}:{export_target}:{}:{include_rules}",
         expires_at.unwrap_or_default(),
         export_mode.as_cache_key()
     )
@@ -368,20 +648,36 @@ async fn export_subscription_view_with_resolved_target(
     template_target: &str,
     settings: &AppSettingsView,
 ) -> Result<Response, AppError> {
-    subscription
+    let candidate_node_ids = subscription
         .nodes
-        .retain(|node| node.enabled && !node.upstream_missing);
+        .iter()
+        .map(|node| node.id)
+        .collect::<Vec<_>>();
+    let node_risks =
+        node_ip_probe_repo::records_by_node_ids(&state.db, &candidate_node_ids).await?;
+    subscription.nodes.retain(|node| {
+        node.enabled
+            && !node.upstream_missing
+            && node_ip_probe_repo::risk_allows_export(
+                node_risks.get(&node.id),
+                settings.risk_enforcement_enabled,
+            )
+    });
     subscription.node_ids = subscription.nodes.iter().map(|node| node.id).collect();
     sort_subscription_nodes_for_export(state, &mut subscription).await?;
     let template =
         load_export_template(&state.db, subscription.template_id, template_target).await?;
-    let node_countries = if matches!(canonical_target, "mihomo" | "mellow") {
+    let node_countries = if matches!(
+        canonical_target,
+        "mihomo" | "mellow" | "quanx" | "shadowrocket-profile"
+    ) {
         node_ip_probe_repo::countries_by_node_ids(&state.db, &subscription.node_ids).await?
     } else {
         HashMap::new()
     };
 
-    match canonical_target {
+    let include_rules = subscription.include_rules;
+    let response = match canonical_target {
         "xray" => export_xray_bundle(subscription, export_mode),
         "uri-bundle" => export_uri_bundle(subscription, export_mode, &export_target),
         "sssub" => export_sssub(subscription, export_mode, template.as_ref()),
@@ -391,13 +687,33 @@ async fn export_subscription_view_with_resolved_target(
             export_mode,
             template.as_ref(),
             template_target,
-            &node_countries,
+            &ExportNodeMetadata {
+                countries: &node_countries,
+                risks: &node_risks,
+            },
             settings.mihomo_country_load_min_nodes as usize,
             settings.mihomo_country_fallback_min_nodes as usize,
         ),
         "surge" => export_surge(subscription, export_mode, template.as_ref()),
         "sing-box" => export_sing_box(subscription, export_mode, template.as_ref()),
-        "quanx" => export_quantumult_x(subscription, export_mode, template.as_ref()),
+        "quanx" => export_quantumult_x(
+            subscription,
+            export_mode,
+            template.as_ref(),
+            &ExportNodeMetadata {
+                countries: &node_countries,
+                risks: &node_risks,
+            },
+        ),
+        "shadowrocket-profile" => export_shadowrocket_profile(
+            subscription,
+            export_mode,
+            template.as_ref(),
+            &ExportNodeMetadata {
+                countries: &node_countries,
+                risks: &node_risks,
+            },
+        ),
         "quan" => {
             export_legacy_client_profile(subscription, export_mode, "Quantumult", template.as_ref())
         }
@@ -412,11 +728,75 @@ async fn export_subscription_view_with_resolved_target(
             export_mode,
             template.as_ref(),
             template_target,
-            &node_countries,
+            &ExportNodeMetadata {
+                countries: &node_countries,
+                risks: &node_risks,
+            },
             settings.mihomo_country_load_min_nodes as usize,
             settings.mihomo_country_fallback_min_nodes as usize,
         ),
         _ => Err(AppError::Internal),
+    }?;
+    if include_rules {
+        return Ok(response);
+    }
+    let (mut parts, body) = response.into_parts();
+    let bytes = to_bytes(body, usize::MAX)
+        .await
+        .map_err(|_| AppError::Internal)?;
+    let text = std::str::from_utf8(&bytes).map_err(|_| AppError::Internal)?;
+    let nodes = nodes_only_export(text, canonical_target)?;
+    parts.headers.remove(header::CONTENT_LENGTH);
+    Ok(Response::from_parts(parts, Body::from(nodes)))
+}
+
+fn nodes_only_export(text: &str, target: &str) -> Result<String, AppError> {
+    match target {
+        "mihomo" | "mellow" => {
+            let root: Value = serde_yaml::from_str(text).map_err(|_| AppError::Internal)?;
+            let mut nodes = Mapping::new();
+            for key in ["proxies", "proxy-providers", "proxy-groups"] {
+                if let Some(value) = root.get(key) {
+                    nodes.insert(Value::String(key.into()), value.clone());
+                }
+            }
+            // Keep routing tied to the selected group without importing website rules.
+            if mihomo_proxy_group_exists(&nodes, "节点选择") {
+                nodes.insert(
+                    Value::String("rules".into()),
+                    Value::Sequence(vec![Value::String("MATCH,节点选择".into())]),
+                );
+            }
+            ensure_mihomo_match_rule(&mut nodes);
+            nodes.insert(Value::String("mode".into()), Value::String("rule".into()));
+            serde_yaml::to_string(&nodes).map_err(|_| AppError::Internal)
+        }
+        "sing-box" => {
+            let mut root: serde_json::Value =
+                serde_json::from_str(text).map_err(|_| AppError::Internal)?;
+            let outbounds = root["outbounds"].as_array_mut().ok_or(AppError::Internal)?;
+            serde_json::to_string_pretty(&json!({"outbounds": outbounds}))
+                .map_err(|_| AppError::Internal)
+        }
+        "surge" | "quanx" | "shadowrocket-profile" | "quan" | "loon" | "surfboard" => {
+            let mut keep = false;
+            let mut lines = Vec::new();
+            for line in text.lines() {
+                let trimmed = line.trim();
+                if trimmed.starts_with('[') && trimmed.ends_with(']') {
+                    let section = trimmed.to_ascii_lowercase();
+                    keep = matches!(
+                        section.as_str(),
+                        "[proxy]" | "[server]" | "[server_local]" | "[proxy group]" | "[policy]"
+                    ) || section.starts_with("[wireguard ");
+                }
+                if keep {
+                    lines.push(line);
+                }
+            }
+            Ok(format!("{}\n", lines.join("\n")))
+        }
+        _ => Ok(text.to_string()),
     }
 }
 
@@ -663,7 +1043,7 @@ fn export_mihomo(
     mode: ExportMode,
     template: Option<&TemplateRecord>,
     target_name: &str,
-    node_countries: &HashMap<i64, String>,
+    metadata: &ExportNodeMetadata<'_>,
     country_load_min_nodes: usize,
     country_fallback_min_nodes: usize,
 ) -> Result<Response, AppError> {
@@ -744,10 +1124,16 @@ fn export_mihomo(
     ensure_mihomo_default_proxy_groups(&mut root, &proxy_names);
     ensure_mihomo_country_load_balance_groups(
         &mut root,
-        node_countries,
+        metadata.countries,
         &proxy_names_by_node_id,
         country_load_min_nodes,
         country_fallback_min_nodes,
+    );
+    ensure_mihomo_fraud_groups(
+        &mut root,
+        metadata.countries,
+        metadata.risks,
+        &proxy_names_by_node_id,
     );
     ensure_mihomo_match_rule(&mut root);
     localize_mihomo_legacy_group_names(&mut root);
@@ -1002,13 +1388,20 @@ fn export_quantumult_x(
     subscription: SubscriptionView,
     mode: ExportMode,
     template: Option<&TemplateRecord>,
+    metadata: &ExportNodeMetadata<'_>,
 ) -> Result<Response, AppError> {
     let mut lines = Vec::new();
+    let mut proxy_names_by_node_id = HashMap::with_capacity(subscription.nodes.len());
+    let mut used_names = HashSet::with_capacity(subscription.nodes.len());
     let mut filtered_count = 0usize;
 
     for node in &subscription.nodes {
-        match render_quantumult_x_proxy(node) {
-            Ok(line) => lines.push(line),
+        let tag = unique_line_proxy_name(node, &mut used_names);
+        match render_quantumult_x_proxy_with_tag(node, &tag) {
+            Ok(line) => {
+                proxy_names_by_node_id.insert(node.id, tag);
+                lines.push(line);
+            }
             Err(error) if matches!(mode, ExportMode::BestEffort) => {
                 tracing::debug!(?error, node_id = node.id, "filtered unsupported quanx node");
                 filtered_count += 1;
@@ -1023,17 +1416,122 @@ fn export_quantumult_x(
         ));
     }
 
-    let body = if let Some(template) = template {
-        let mut ini = parse_surge_template(&template.content);
-        append_lines_to_section(&mut ini.sections, "server_remote", lines);
-        render_surge_ini(ini)
+    let template_content = match template {
+        Some(template)
+            if template.is_builtin != 0 && template.name == BUILTIN_QUANX_TEMPLATE_NAME =>
+        {
+            QUANX_DEFAULT_TEMPLATE
+        }
+        Some(template) => &template.content,
+        None => QUANX_DEFAULT_TEMPLATE,
+    };
+    let mut ini = parse_surge_template(template_content);
+    append_lines_to_section(&mut ini.sections, "server_local", lines);
+    ensure_section(
+        &mut ini.sections,
+        "filter_local",
+        vec![
+            "geoip, cn, direct".to_string(),
+            format!("final, {QUANX_GROUP_PROXY}"),
+        ],
+    );
+    let groups =
+        collect_risk_policy_groups(metadata.countries, metadata.risks, &proxy_names_by_node_id);
+    configure_ini_risk_policy_groups(&mut ini.sections, IniPolicyFormat::QuantumultX, &groups);
+    let mut body = render_surge_ini(ini);
+    if !body.ends_with('\n') {
+        body.push('\n');
+    }
+
+    text_response(
+        body,
+        "text/plain; charset=utf-8",
+        &format!("{}.conf", subscription.name),
+        mode,
+        filtered_count,
+    )
+}
+
+fn export_shadowrocket_profile(
+    subscription: SubscriptionView,
+    mode: ExportMode,
+    template: Option<&TemplateRecord>,
+    metadata: &ExportNodeMetadata<'_>,
+) -> Result<Response, AppError> {
+    let mut proxy_lines = Vec::with_capacity(subscription.nodes.len());
+    let mut proxy_names_by_node_id = HashMap::with_capacity(subscription.nodes.len());
+    let mut profile_proxy_names = Vec::with_capacity(subscription.nodes.len());
+    let mut wireguard_sections = Vec::new();
+    let mut used_names = HashSet::with_capacity(subscription.nodes.len());
+    let mut filtered_count = 0usize;
+
+    for node in &subscription.nodes {
+        if !is_surge_supported(node) {
+            if matches!(mode, ExportMode::BestEffort) {
+                filtered_count += 1;
+                continue;
+            }
+            return Err(AppError::BadRequest(format!(
+                "node '{}' is not supported by shadowrocket profile export",
+                node.name
+            )));
+        }
+
+        let name = unique_line_proxy_name(node, &mut used_names);
+        match render_surge_proxy_with_name(node, name) {
+            Ok(rendered) => {
+                proxy_names_by_node_id.insert(node.id, rendered.name.clone());
+                profile_proxy_names.push(rendered.name.clone());
+                proxy_lines.push(rendered.proxy_line);
+                if let Some(section) = rendered.wireguard_section {
+                    wireguard_sections.push(section);
+                }
+            }
+            Err(error) if matches!(mode, ExportMode::BestEffort) => {
+                tracing::debug!(
+                    ?error,
+                    node_id = node.id,
+                    "filtered unsupported shadowrocket profile node"
+                );
+                filtered_count += 1;
+            }
+            Err(error) => return Err(error),
+        }
+    }
+
+    if proxy_lines.is_empty() {
+        return Err(AppError::BadRequest(
+            "no compatible nodes available for shadowrocket profile export".to_string(),
+        ));
+    }
+
+    let mut ini = if let Some(template) = template {
+        parse_surge_template(&template.content)
     } else {
-        format!(
-            "# Profile: {}\n[server_remote]\n{}\n\n[filter_remote]\n\n[rewrite_remote]\n\n[task_local]\n",
-            subscription.name,
-            lines.join("\n")
+        parse_surge_template(
+            "[General]\nloglevel = notify\n\n\
+[Proxy]\n\n\
+[Proxy Group]\n代理选择 = select, 手动选择, 自动选择, direct\n\
+手动选择 = select\n\
+自动选择 = url-test, url=https://cp.cloudflare.com/generate_204, interval=600, tolerance=0\n\n\
+[Rule]\nFINAL,代理选择\n",
         )
     };
+    append_lines_to_section(&mut ini.sections, "Proxy", proxy_lines);
+    configure_shadowrocket_base_policy_groups(&mut ini.sections, &profile_proxy_names);
+    let groups =
+        collect_risk_policy_groups(metadata.countries, metadata.risks, &proxy_names_by_node_id);
+    configure_ini_risk_policy_groups(&mut ini.sections, IniPolicyFormat::Shadowrocket, &groups);
+    ensure_section(
+        &mut ini.sections,
+        "Rule",
+        vec!["GEOIP,CN,DIRECT".to_string(), "FINAL,代理选择".to_string()],
+    );
+    ini.trailing_raw_sections.extend(wireguard_sections);
+    let mut body = render_surge_ini(ini);
+    if !body.ends_with('\n') {
+        body.push('\n');
+    }
 
     text_response(
         body,
@@ -2108,7 +2606,13 @@ fn normalize_sing_box_server_ports(value: &str) -> Option<Vec<String>> {
 
 pub(crate) fn render_surge_proxy(node: &NodeView) -> Result<SurgeRenderResult, AppError> {
     let name = sanitize_policy_name(&node.name, node.id);
+    render_surge_proxy_with_name(node, name)
+}
 
+fn render_surge_proxy_with_name(
+    node: &NodeView,
+    name: String,
+) -> Result<SurgeRenderResult, AppError> {
     match node.protocol.as_str() {
         "shadowsocks" => {
             let method = safe_inline_value(required_json_string(&node.settings, "method")?)?;
@@ -2376,69 +2880,94 @@ pub(crate) fn render_surge_proxy(node: &NodeView) -> Result<SurgeRenderResult, A
 
 pub(crate) fn render_quantumult_x_proxy(node: &NodeView) -> Result<String, AppError> {
     let tag = sanitize_policy_name(&node.name, node.id);
+    render_quantumult_x_proxy_with_tag(node, &tag)
+}
 
+fn render_quantumult_x_proxy_with_tag(node: &NodeView, tag: &str) -> Result<String, AppError> {
+    let endpoint = quantumult_x_endpoint(&node.server, node.port)?;
     match node.protocol.as_str() {
         "shadowsocks" => Ok(format!(
-            "shadowsocks={}, {}, method={}, password={}, tag={}",
-            node.server,
-            node.port,
+            "shadowsocks={endpoint}, method={}, password={}, tag={}",
             safe_inline_value(required_json_string(&node.settings, "method")?)?,
             safe_inline_value(required_json_string(&node.settings, "password")?)?,
             tag
         )),
         "vmess" => {
             let mut line = format!(
-                "vmess={}, {}, method=none, password={}, tag={}",
-                node.server,
-                node.port,
-                safe_inline_value(required_json_string(&node.settings, "id")?)?,
-                tag
+                "vmess={endpoint}, method=none, password={}",
+                safe_inline_value(required_json_string(&node.settings, "id")?)?
             );
-            append_quanx_v2ray_options(&mut line, &node.settings, &node.server)?;
+            append_quanx_v2ray_options(&mut line, &node.settings, &node.server, false)?;
+            line.push_str(&format!(", tag={tag}"));
             Ok(line)
         }
         "vless" => {
             let mut line = format!(
-                "vless={}, {}, method=none, password={}, tag={}",
-                node.server,
-                node.port,
-                safe_inline_value(required_json_string(&node.settings, "uuid")?)?,
-                tag
+                "vless={endpoint}, method=none, password={}",
+                safe_inline_value(required_json_string(&node.settings, "uuid")?)?
             );
             if let Some(flow) = node.settings.get("flow").and_then(|v| v.as_str())
                 && !flow.is_empty()
             {
                 let flow = safe_inline_value(flow)?;
-                line.push_str(&format!(", flow={flow}"));
+                line.push_str(&format!(", vless-flow={flow}"));
             }
-            append_quanx_v2ray_options(&mut line, &node.settings, &node.server)?;
+            append_quanx_v2ray_options(&mut line, &node.settings, &node.server, false)?;
+            line.push_str(&format!(", tag={tag}"));
+            Ok(line)
+        }
+        "anytls" => {
+            let mut line = format!(
+                "anytls={endpoint}, password={}, over-tls=true",
+                safe_inline_value(required_json_string(&node.settings, "password")?)?
+            );
+            if let Some(sni) = node.settings.get("sni").and_then(|value| value.as_str())
+                && !sni.is_empty()
+            {
+                line.push_str(&format!(", tls-host={}", safe_inline_value(sni)?));
+            }
+            if node
+                .settings
+                .get("insecure")
+                .and_then(json_to_bool)
+                .unwrap_or(false)
+            {
+                line.push_str(", tls-verification=false");
+            }
+            if node
+                .settings
+                .get("udp")
+                .and_then(json_to_bool)
+                .unwrap_or(true)
+            {
+                line.push_str(", udp-relay=true");
+            }
+            if let Some(pbk) = node.settings.get("pbk").and_then(|value| value.as_str())
+                && !pbk.is_empty()
+            {
+                line.push_str(&format!(
+                    ", reality-base64-pubkey={}",
+                    safe_inline_value(pbk)?
+                ));
+            }
+            if let Some(sid) = node.settings.get("sid").and_then(|value| value.as_str())
+                && !sid.is_empty()
+            {
+                line.push_str(&format!(
+                    ", reality-hex-shortid={}",
+                    safe_inline_value(sid)?
+                ));
+            }
+            line.push_str(&format!(", tag={tag}"));
             Ok(line)
         }
         "trojan" => {
             let mut line = format!(
-                "trojan={}, {}, password={}, tag={}",
-                node.server,
-                node.port,
-                safe_inline_value(required_json_string(&node.settings, "password")?)?,
-                tag
+                "trojan={endpoint}, password={}",
+                safe_inline_value(required_json_string(&node.settings, "password")?)?
             );
-            append_quanx_v2ray_options(&mut line, &node.settings, &node.server)?;
-            Ok(line)
-        }
-        "hysteria2" => {
-            let mut line = format!(
-                "hysteria2={}, {}, password={}, tag={}",
-                node.server,
-                node.port,
-                safe_inline_value(required_json_string(&node.settings, "password")?)?,
-                tag
-            );
-            if let Some(sni) = node.settings.get("sni").and_then(|v| v.as_str())
-                && !sni.is_empty()
-            {
-                let sni = safe_inline_value(sni)?;
-                line.push_str(&format!(", server_check_url=https://{sni}/"));
-            }
+            append_quanx_v2ray_options(&mut line, &node.settings, &node.server, true)?;
+            line.push_str(&format!(", tag={tag}"));
             Ok(line)
         }
         other => Err(AppError::BadRequest(format!(
@@ -2448,20 +2977,38 @@ pub(crate) fn render_quantumult_x_proxy(node: &NodeView) -> Result<String, AppEr
     }
 }
 
+fn quantumult_x_endpoint(server: &str, port: i64) -> Result<String, AppError> {
+    let server = safe_inline_value(server)?;
+    let host = if server.starts_with('[') && server.ends_with(']') {
+        server
+    } else if server.contains(':') {
+        format!("[{server}]")
+    } else {
+        server
+    };
+    Ok(format!("{host}:{port}"))
+}
+
 fn append_quanx_v2ray_options(
     line: &mut String,
     settings: &serde_json::Value,
     server: &str,
+    force_tls: bool,
 ) -> Result<(), AppError> {
     let network = settings
         .get("type")
         .and_then(|v| v.as_str())
         .or_else(|| settings.get("net").and_then(|v| v.as_str()));
 
-    if let Some(network) = network
-        && network.eq_ignore_ascii_case("ws")
-    {
-        line.push_str(", obfs=ws");
+    let uses_websocket = network.is_some_and(|network| network.eq_ignore_ascii_case("ws"));
+    let uses_tls = force_tls
+        || settings
+            .get("security")
+            .and_then(|value| value.as_str())
+            .is_some_and(|security| matches!(security, "tls" | "reality"));
+
+    if uses_websocket {
+        line.push_str(if uses_tls { ", obfs=wss" } else { ", obfs=ws" });
         if let Some(path) = settings.get("path").and_then(|v| v.as_str())
             && !path.is_empty()
         {
@@ -2476,9 +3023,7 @@ fn append_quanx_v2ray_options(
         }
     }
 
-    if let Some(security) = settings.get("security").and_then(|v| v.as_str())
-        && matches!(security, "tls" | "reality")
-    {
+    if uses_tls && !uses_websocket {
         line.push_str(", over-tls=true");
     }
     if let Some(sni) = settings.get("sni").and_then(|v| v.as_str())
@@ -2497,13 +3042,13 @@ fn append_quanx_v2ray_options(
         && !pbk.is_empty()
     {
         let pbk = safe_inline_value(pbk)?;
-        line.push_str(&format!(", reality-public-key={pbk}"));
+        line.push_str(&format!(", reality-base64-pubkey={pbk}"));
     }
     if let Some(sid) = settings.get("sid").and_then(|v| v.as_str())
         && !sid.is_empty()
     {
         let sid = safe_inline_value(sid)?;
-        line.push_str(&format!(", reality-short-id={sid}"));
+        line.push_str(&format!(", reality-hex-shortid={sid}"));
     }
     Ok(())
 }
@@ -2624,7 +3169,30 @@ fn parse_yaml_template(
     })?;
 
     match value {
-        Value::Mapping(mapping) => Ok(mapping),
+        Value::Mapping(mut mapping) => {
+            let builtin_kind = match template {
+                Some(record)
+                    if record.is_builtin != 0
+                        && record.kind == "clash"
+                        && record.name == BUILTIN_CLASH_TEMPLATE_NAME =>
+                {
+                    Some("clash")
+                }
+                Some(record)
+                    if record.is_builtin != 0
+                        && record.kind == "mihomo"
+                        && record.name == BUILTIN_MIHOMO_TEMPLATE_NAME =>
+                {
+                    Some("mihomo")
+                }
+                None if target_name == "clash" => Some("clash"),
+                _ => None,
+            };
+            if let Some(kind) = builtin_kind {
+                refresh_builtin_direct_network(&mut mapping, kind)?;
+            }
+            Ok(mapping)
+        }
         _ => Err(AppError::BadRequest(format!(
             "template '{}' must be a YAML mapping",
             template_name
@@ -2634,6 +3202,56 @@ fn parse_yaml_template(
 
 fn built_in_clash_routing_template() -> Result<&'static str, AppError> {
     Ok(crate::services::template_seed_service::CLASH_TEMPLATE)
+}
+
+// Apply network fixes at export time so existing built-in records need no DB rewrite.
+fn refresh_builtin_direct_network(root: &mut Mapping, kind: &str) -> Result<(), AppError> {
+    let defaults = if kind == "mihomo" {
+        crate::services::template_seed_service::MIHOMO_TEMPLATE
+    } else {
+        crate::services::template_seed_service::CLASH_TEMPLATE
+    };
+    let defaults: Value = serde_yaml::from_str(defaults).map_err(|_| AppError::Internal)?;
+    root.insert(Value::String("dns".into()), defaults["dns"].clone());
+    root.insert(Value::String("ipv6".into()), Value::Bool(false));
+    if kind == "clash"
+        && let Some(providers) = root
+            .get_mut("rule-providers")
+            .and_then(Value::as_mapping_mut)
+    {
+        for provider in providers.values_mut().filter_map(Value::as_mapping_mut) {
+            if provider
+                .get("url")
+                .and_then(Value::as_str)
+                .is_some_and(|url| url.ends_with(".list"))
+            {
+                provider.insert(Value::String("format".into()), Value::String("text".into()));
+            }
+        }
+    }
+    if let Some(rules) = root.get_mut("rules").and_then(Value::as_sequence_mut) {
+        // Fake-IP flows may not yet have a real address when reaching the IP fallback.
+        for rule in rules.iter_mut() {
+            if rule.as_str() == Some("RULE-SET,cn_ip,DIRECT,no-resolve") {
+                *rule = Value::String("RULE-SET,cn_ip,DIRECT".into());
+            }
+        }
+        let fallback = "DOMAIN-SUFFIX,cn,DIRECT";
+        if !rules.iter().any(|rule| rule.as_str() == Some(fallback)) {
+            let index = rules
+                .iter()
+                .position(|rule| {
+                    rule.as_str().is_some_and(|rule| {
+                        rule.starts_with("RULE-SET,geolocation-not-cn,")
+                            || rule.starts_with("RULE-SET,proxygfw,")
+                            || rule.starts_with("MATCH,")
+                    })
+                })
+                .unwrap_or(rules.len());
+            rules.insert(index, Value::String(fallback.into()));
+        }
+    }
+    Ok(())
 }
 
 fn yaml_insert_if_missing(root: &mut Mapping, key: &str, value: Value) {
@@ -2741,6 +3359,10 @@ fn unique_mihomo_proxy_name(base: &str, used_names: &mut HashSet<String>) -> Str
     }
 
     unreachable!("unbounded proxy name allocator must return before usize overflow")
+}
+
+fn unique_line_proxy_name(node: &NodeView, used_names: &mut HashSet<String>) -> String {
+    unique_mihomo_proxy_name(&sanitize_policy_name(&node.name, node.id), used_names)
 }
 
 fn expand_mihomo_proxy_group_refs(root: &mut Mapping, aliases: &HashMap<String, Vec<String>>) {
@@ -2990,6 +3612,209 @@ fn ensure_mihomo_country_load_balance_groups(
         generated_group_names.push(fallback_name);
     }
     append_groups_to_primary_selector(root, &generated_group_names);
+}
+
+fn ensure_mihomo_fraud_groups(
+    root: &mut Mapping,
+    node_countries: &HashMap<i64, String>,
+    node_risks: &HashMap<i64, NodeIpProbeRecord>,
+    proxy_names_by_node_id: &HashMap<i64, String>,
+) {
+    remove_reserved_mihomo_fraud_groups(root);
+
+    let mut groups = collect_risk_policy_groups(node_countries, node_risks, proxy_names_by_node_id);
+
+    let mut generated_names = Vec::new();
+    push_reserved_fraud_group(
+        root,
+        MIHOMO_GROUP_ZERO_FRAUD.to_string(),
+        &mut groups.zero_all,
+        &mut generated_names,
+    );
+    push_reserved_fraud_group(
+        root,
+        MIHOMO_GROUP_LOW_FRAUD.to_string(),
+        &mut groups.low_all,
+        &mut generated_names,
+    );
+    push_reserved_select_group(
+        root,
+        MIHOMO_GROUP_RESIDENTIAL_MANUAL.to_string(),
+        &mut groups.residential_all,
+        &mut generated_names,
+    );
+    for (country_code, mut proxies) in groups.zero_by_country {
+        push_reserved_fraud_group(
+            root,
+            format!("{}故障转移0欺诈", mihomo_country_label(&country_code)),
+            &mut proxies,
+            &mut generated_names,
+        );
+    }
+    for (country_code, mut proxies) in groups.low_by_country {
+        push_reserved_fraud_group(
+            root,
+            format!("{}故障转移低欺诈", mihomo_country_label(&country_code)),
+            &mut proxies,
+            &mut generated_names,
+        );
+    }
+    let generated_refs = generated_names
+        .iter()
+        .map(String::as_str)
+        .collect::<Vec<_>>();
+    append_groups_to_primary_selector(root, &generated_refs);
+}
+
+#[derive(Default)]
+struct RiskPolicyGroups {
+    zero_all: Vec<String>,
+    low_all: Vec<String>,
+    residential_all: Vec<String>,
+    zero_by_country: BTreeMap<String, Vec<String>>,
+    low_by_country: BTreeMap<String, Vec<String>>,
+}
+
+fn collect_risk_policy_groups(
+    node_countries: &HashMap<i64, String>,
+    node_risks: &HashMap<i64, NodeIpProbeRecord>,
+    proxy_names_by_node_id: &HashMap<i64, String>,
+) -> RiskPolicyGroups {
+    let mut groups = RiskPolicyGroups::default();
+    let now_unix_ms = OffsetDateTime::now_utc().unix_timestamp() * 1_000;
+
+    for (node_id, proxy_name) in proxy_names_by_node_id {
+        let Some(risk) = node_risks.get(node_id) else {
+            continue;
+        };
+        if risk.qualifies_for_residential(now_unix_ms) {
+            groups.residential_all.push(proxy_name.clone());
+        }
+        let target = if risk.qualifies_for_zero_fraud(now_unix_ms) {
+            groups.zero_all.push(proxy_name.clone());
+            &mut groups.zero_by_country
+        } else if risk.qualifies_for_low_fraud(now_unix_ms) {
+            groups.low_all.push(proxy_name.clone());
+            &mut groups.low_by_country
+        } else {
+            continue;
+        };
+        let Some(country_code) = node_countries.get(node_id) else {
+            continue;
+        };
+        let country_code = country_code.trim().to_ascii_uppercase();
+        if country_code.len() == 2 && country_code.bytes().all(|byte| byte.is_ascii_alphabetic()) {
+            target
+                .entry(country_code)
+                .or_default()
+                .push(proxy_name.clone());
+        }
+    }
+
+    sort_and_dedupe_policy_members(&mut groups.zero_all);
+    sort_and_dedupe_policy_members(&mut groups.low_all);
+    sort_and_dedupe_policy_members(&mut groups.residential_all);
+    for members in groups.zero_by_country.values_mut() {
+        sort_and_dedupe_policy_members(members);
+    }
+    for members in groups.low_by_country.values_mut() {
+        sort_and_dedupe_policy_members(members);
+    }
+    groups
+}
+
+fn sort_and_dedupe_policy_members(members: &mut Vec<String>) {
+    members.sort();
+    members.dedup();
+}
+
+fn push_reserved_select_group(
+    root: &mut Mapping,
+    name: String,
+    proxies: &mut Vec<String>,
+    generated_names: &mut Vec<String>,
+) {
+    proxies.sort();
+    proxies.dedup();
+    if proxies.is_empty() {
+        return;
+    }
+    yaml_push_sequence(
+        root,
+        "proxy-groups",
+        vec![Value::Mapping(mihomo_select_proxy_group(&name, proxies))],
+    );
+    generated_names.push(name);
+}
+
+fn push_reserved_fraud_group(
+    root: &mut Mapping,
+    name: String,
+    proxies: &mut Vec<String>,
+    generated_names: &mut Vec<String>,
+) {
+    proxies.sort();
+    proxies.dedup();
+    if proxies.is_empty() {
+        return;
+    }
+    yaml_push_sequence(
+        root,
+        "proxy-groups",
+        vec![Value::Mapping(mihomo_scoped_fallback_group(&name, proxies))],
+    );
+    generated_names.push(name);
+}
+
+fn mihomo_country_label(country_code: &str) -> String {
+    let country_code = country_code.trim().to_ascii_uppercase();
+    COUNTRY_NAMES_ZH
+        .iter()
+        .find(|(code, _)| *code == country_code)
+        .map(|(_, name)| *name)
+        .unwrap_or("未知地区")
+        .to_string()
+}
+
+fn remove_reserved_mihomo_fraud_groups(root: &mut Mapping) {
+    let Some(Value::Sequence(groups)) = root.get_mut(Value::String("proxy-groups".to_string()))
+    else {
+        return;
+    };
+    let reserved = |name: &str| {
+        name == MIHOMO_GROUP_ZERO_FRAUD
+            || name == MIHOMO_GROUP_LOW_FRAUD
+            || name == MIHOMO_GROUP_RESIDENTIAL_MANUAL
+            || name.ends_with("故障转移0欺诈")
+            || name.ends_with("故障转移低欺诈")
+    };
+    let removed = groups
+        .iter()
+        .filter_map(|group| {
+            group
+                .as_mapping()
+                .and_then(|mapping| mapping.get(Value::String("name".to_string())))
+                .and_then(Value::as_str)
+                .filter(|name| reserved(name))
+                .map(str::to_string)
+        })
+        .collect::<HashSet<_>>();
+    groups.retain(|group| {
+        !group
+            .as_mapping()
+            .and_then(|mapping| mapping.get(Value::String("name".to_string())))
+            .and_then(Value::as_str)
+            .is_some_and(&reserved)
+    });
+    if removed.is_empty() {
+        return;
+    }
+    for group in groups.iter_mut().filter_map(Value::as_mapping_mut) {
+        if let Some(Value::Sequence(proxies)) = group.get_mut(Value::String("proxies".to_string()))
+        {
+            proxies.retain(|proxy| proxy.as_str().is_none_or(|name| !removed.contains(name)));
+        }
+    }
 }
 
 fn mihomo_scoped_fallback_group(name: &str, proxy_names: &[String]) -> Mapping {
@@ -3393,10 +4218,14 @@ fn mihomo_proxy_select_group(proxy_names: &[String]) -> Mapping {
 }
 
 fn mihomo_manual_proxy_group(proxy_names: &[String]) -> Mapping {
+    mihomo_select_proxy_group(MIHOMO_GROUP_MANUAL, proxy_names)
+}
+
+fn mihomo_select_proxy_group(name: &str, proxy_names: &[String]) -> Mapping {
     let mut group = Mapping::new();
     group.insert(
         Value::String("name".to_string()),
-        Value::String(MIHOMO_GROUP_MANUAL.to_string()),
+        Value::String(name.to_string()),
     );
     group.insert(
         Value::String("type".to_string()),
@@ -3585,6 +4414,238 @@ fn append_lines_to_section(sections: &mut Vec<SurgeSection>, name: &str, mut lin
         name: name.to_string(),
         lines,
     });
+}
+
+#[derive(Clone, Copy)]
+enum IniPolicyFormat {
+    QuantumultX,
+    Shadowrocket,
+}
+
+fn configure_ini_risk_policy_groups(
+    sections: &mut Vec<SurgeSection>,
+    format: IniPolicyFormat,
+    groups: &RiskPolicyGroups,
+) {
+    let section_name = match format {
+        IniPolicyFormat::QuantumultX => "policy",
+        IniPolicyFormat::Shadowrocket => "Proxy Group",
+    };
+    ensure_section(sections, section_name, Vec::new());
+    let section = sections
+        .iter_mut()
+        .find(|section| section.name.eq_ignore_ascii_case(section_name))
+        .expect("policy section must exist after ensure_section");
+
+    section.lines.retain(|line| {
+        ini_policy_name(line, format).is_none_or(|name| !is_reserved_risk_policy_name(name))
+    });
+
+    let (generated_names, generated_lines) = render_ini_risk_policy_groups(format, groups);
+    rewrite_ini_primary_selector(&mut section.lines, format, &generated_names);
+    section.lines.extend(generated_lines);
+}
+
+fn configure_shadowrocket_base_policy_groups(
+    sections: &mut Vec<SurgeSection>,
+    proxy_names: &[String],
+) {
+    ensure_section(sections, "Proxy Group", Vec::new());
+    let section = sections
+        .iter_mut()
+        .find(|section| section.name.eq_ignore_ascii_case("Proxy Group"))
+        .expect("proxy group section must exist after ensure_section");
+
+    section.lines.retain(|line| {
+        ini_policy_name(line, IniPolicyFormat::Shadowrocket).is_none_or(|name| {
+            !matches!(
+                name,
+                MIHOMO_GROUP_PROXY | MIHOMO_GROUP_MANUAL | MIHOMO_GROUP_AUTO
+            )
+        })
+    });
+
+    let members = proxy_names.join(", ");
+    section.lines.splice(
+        0..0,
+        [
+            format!(
+                "{MIHOMO_GROUP_PROXY} = select, {MIHOMO_GROUP_MANUAL}, {MIHOMO_GROUP_AUTO}, direct"
+            ),
+            format!("{MIHOMO_GROUP_MANUAL} = select, {members}"),
+            format!(
+                "{MIHOMO_GROUP_AUTO} = url-test, {members}, url={MIHOMO_DEFAULT_DELAY_TEST_URL}, interval=600, tolerance=0"
+            ),
+        ],
+    );
+}
+
+fn render_ini_risk_policy_groups(
+    format: IniPolicyFormat,
+    groups: &RiskPolicyGroups,
+) -> (Vec<String>, Vec<String>) {
+    let mut names = Vec::new();
+    let mut lines = Vec::new();
+    push_ini_risk_policy(
+        format,
+        MIHOMO_GROUP_ZERO_FRAUD,
+        &groups.zero_all,
+        false,
+        &mut names,
+        &mut lines,
+    );
+    push_ini_risk_policy(
+        format,
+        MIHOMO_GROUP_LOW_FRAUD,
+        &groups.low_all,
+        false,
+        &mut names,
+        &mut lines,
+    );
+    push_ini_risk_policy(
+        format,
+        MIHOMO_GROUP_RESIDENTIAL_MANUAL,
+        &groups.residential_all,
+        true,
+        &mut names,
+        &mut lines,
+    );
+    for (country_code, members) in &groups.zero_by_country {
+        push_ini_risk_policy(
+            format,
+            &format!("{}故障转移0欺诈", mihomo_country_label(country_code)),
+            members,
+            false,
+            &mut names,
+            &mut lines,
+        );
+    }
+    for (country_code, members) in &groups.low_by_country {
+        push_ini_risk_policy(
+            format,
+            &format!("{}故障转移低欺诈", mihomo_country_label(country_code)),
+            members,
+            false,
+            &mut names,
+            &mut lines,
+        );
+    }
+    (names, lines)
+}
+
+fn push_ini_risk_policy(
+    format: IniPolicyFormat,
+    name: &str,
+    members: &[String],
+    manual: bool,
+    names: &mut Vec<String>,
+    lines: &mut Vec<String>,
+) {
+    if members.is_empty() {
+        return;
+    }
+    let members = members.join(", ");
+    let line = match (format, manual) {
+        (IniPolicyFormat::QuantumultX, true) => format!("static={name}, {members}"),
+        (IniPolicyFormat::QuantumultX, false) => format!(
+            "available={name}, {members}, check-interval=300, tolerance=0, alive-checking=false"
+        ),
+        (IniPolicyFormat::Shadowrocket, true) => format!("{name} = select, {members}"),
+        (IniPolicyFormat::Shadowrocket, false) => format!(
+            "{name} = fallback, {members}, url={MIHOMO_DEFAULT_DELAY_TEST_URL}, interval=300"
+        ),
+    };
+    names.push(name.to_string());
+    lines.push(line);
+}
+
+fn ini_policy_name(line: &str, format: IniPolicyFormat) -> Option<&str> {
+    let trimmed = line.trim();
+    if trimmed.is_empty() || trimmed.starts_with('#') || trimmed.starts_with(';') {
+        return None;
+    }
+    let (left, right) = trimmed.split_once('=')?;
+    match format {
+        IniPolicyFormat::QuantumultX => right.split(',').next().map(str::trim),
+        IniPolicyFormat::Shadowrocket => Some(left.trim()),
+    }
+}
+
+fn is_reserved_risk_policy_name(name: &str) -> bool {
+    name == MIHOMO_GROUP_ZERO_FRAUD
+        || name == MIHOMO_GROUP_LOW_FRAUD
+        || name == MIHOMO_GROUP_RESIDENTIAL_MANUAL
+        || name.ends_with("故障转移0欺诈")
+        || name.ends_with("故障转移低欺诈")
+}
+
+fn rewrite_ini_primary_selector(
+    lines: &mut Vec<String>,
+    format: IniPolicyFormat,
+    generated_names: &[String],
+) {
+    let primary_name = match format {
+        IniPolicyFormat::QuantumultX => QUANX_GROUP_PROXY,
+        IniPolicyFormat::Shadowrocket => MIHOMO_GROUP_PROXY,
+    };
+    let primary_index = lines
+        .iter()
+        .position(|line| ini_policy_name(line, format).is_some_and(|name| name == primary_name));
+
+    let Some(index) = primary_index else {
+        let generated = generated_names.join(", ");
+        let line = match format {
+            IniPolicyFormat::QuantumultX if generated.is_empty() => {
+                format!("static={primary_name}, 自动选择, direct")
+            }
+            IniPolicyFormat::QuantumultX => {
+                format!("static={primary_name}, 自动选择, {generated}, direct")
+            }
+            IniPolicyFormat::Shadowrocket if generated.is_empty() => {
+                format!("{primary_name} = select, 自动选择, direct")
+            }
+            IniPolicyFormat::Shadowrocket => {
+                format!("{primary_name} = select, 自动选择, {generated}, direct")
+            }
+        };
+        lines.insert(0, line);
+        return;
+    };
+
+    let Some((left, right)) = lines[index].split_once('=') else {
+        return;
+    };
+    let mut tokens = right
+        .split(',')
+        .map(str::trim)
+        .filter(|token| !token.is_empty())
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    tokens.retain(|token| !is_reserved_risk_policy_name(token));
+
+    let first_member = 1.min(tokens.len());
+    let insert_at = tokens[first_member..]
+        .iter()
+        .position(|token| {
+            token.eq_ignore_ascii_case("direct")
+                || token.eq_ignore_ascii_case("reject")
+                || token.contains('=')
+        })
+        .map(|index| first_member + index)
+        .unwrap_or(tokens.len());
+    for (offset, name) in generated_names.iter().enumerate() {
+        if !tokens.iter().any(|token| token == name) {
+            tokens.insert(insert_at + offset, name.clone());
+        }
+    }
+    lines[index] = match format {
+        IniPolicyFormat::QuantumultX => {
+            format!("{}={}", left.trim(), tokens.join(", "))
+        }
+        IniPolicyFormat::Shadowrocket => {
+            format!("{} = {}", left.trim(), tokens.join(", "))
+        }
+    };
 }
 
 fn render_surge_ini(ini: SurgeIni) -> String {
@@ -3983,21 +5044,166 @@ fn ascii_filename_fallback(filename: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn nodes_only_exports_drop_rules_without_losing_node_settings() {
+        let yaml = "dns: {enable: true}\nrules: [MATCH,DIRECT]\nproxy-groups: []\nproxies:\n  - {name: test, type: ss, server: example.com, password: test}\n";
+        let value: serde_yaml::Value =
+            serde_yaml::from_str(&super::nodes_only_export(yaml, "mihomo").unwrap()).unwrap();
+        assert_eq!(value.as_mapping().unwrap().len(), 4);
+        assert_eq!(value["rules"][0], "MATCH,DIRECT");
+        assert_eq!(value["mode"], "rule");
+        assert!(value.get("proxy-groups").is_some());
+        assert_eq!(value["proxies"][0]["password"], "test");
+        let json = r#"{"dns":{},"route":{},"outbounds":[{"type":"selector","tag":"proxy"},{"type":"direct"},{"type":"trojan","tag":"test","password":"kept"}]}"#;
+        let value: serde_json::Value =
+            serde_json::from_str(&super::nodes_only_export(json, "sing-box").unwrap()).unwrap();
+        assert_eq!(value.as_object().unwrap().len(), 1);
+        assert_eq!(value["outbounds"].as_array().unwrap().len(), 3);
+        assert_eq!(value["outbounds"][2]["password"], "kept");
+        for target in ["surge", "shadowrocket-profile", "loon", "surfboard", "quan"] {
+            let output = super::nodes_only_export("[General]\ndns-server=1.1.1.1\n[Proxy]\nnode=ss,example.com,443\n[WireGuard test]\nprivate-key=test\n[Rule]\nFINAL,proxy\n", target).unwrap();
+            assert!(output.contains("node=ss"));
+            assert!(output.contains("private-key=test"));
+            assert!(!output.contains("dns-server"));
+            assert!(!output.contains("FINAL"));
+        }
+        let output = super::nodes_only_export(
+            "[general]\nx=1\n[server_local]\nshadowsocks=test\n[policy]\nstatic=proxy\n",
+            "quanx",
+        )
+        .unwrap();
+        assert_eq!(
+            output,
+            "[server_local]\nshadowsocks=test\n[policy]\nstatic=proxy\n"
+        );
+        assert_eq!(
+            super::nodes_only_export("ss://example", "uri-bundle").unwrap(),
+            "ss://example"
+        );
+    }
+
+    #[test]
+    fn nodes_only_yaml_replaces_website_rules_with_selected_group_match() {
+        for (groups, expected) in [
+            ("[{name: 自动选择}, {name: 节点选择}]", "节点选择"),
+            ("[{name: Custom}]", "Custom"),
+            ("[{name: 自动选择}]", "自动选择"),
+        ] {
+            let source = format!(
+                "mode: direct\ndns: {{enable: true}}\nrule-providers: {{ads: {{type: http}}}}\nproxies: []\nproxy-providers: {{upstream: {{type: file}}}}\nproxy-groups: {groups}\nrules:\n  - DOMAIN-SUFFIX,example.com,DIRECT\n  - RULE-SET,ads,REJECT\n  - MATCH,DIRECT\n"
+            );
+            for target in ["mihomo", "mellow"] {
+                let output = super::nodes_only_export(&source, target).unwrap();
+                let value: Value = serde_yaml::from_str(&output).unwrap();
+                assert_eq!(value["mode"], "rule");
+                assert_eq!(
+                    value["rules"],
+                    serde_yaml::to_value(vec![format!("MATCH,{expected}")]).unwrap()
+                );
+                assert!(value.get("dns").is_none());
+                assert!(value.get("rule-providers").is_none());
+                assert!(value.get("proxy-providers").is_some());
+                assert_eq!(super::nodes_only_export(&output, target).unwrap(), output);
+            }
+        }
+    }
+
+    #[test]
+    fn content_choice_has_a_distinct_cache_key() {
+        assert_ne!(
+            super::public_export_cache_key(
+                1,
+                "token",
+                "same",
+                None,
+                "mihomo",
+                super::ExportMode::Strict,
+                true
+            ),
+            super::public_export_cache_key(
+                1,
+                "token",
+                "same",
+                None,
+                "mihomo",
+                super::ExportMode::Strict,
+                false
+            )
+        );
+    }
+
+    #[tokio::test]
+    async fn nodes_only_keeps_generated_country_load_and_fallback_groups() {
+        let mut subscription = sample_shadowsocks_subscription("mihomo");
+        let original = subscription.nodes[0].clone();
+        for id in [2, 3] {
+            let mut node = original.clone();
+            node.id = id;
+            node.name = format!("JP-{id}");
+            subscription.nodes.push(node);
+        }
+        let countries = subscription
+            .nodes
+            .iter()
+            .map(|node| (node.id, "JP".to_string()))
+            .collect();
+        let risks = HashMap::new();
+        let response = export_mihomo(
+            subscription,
+            ExportMode::Strict,
+            None,
+            "mihomo",
+            &ExportNodeMetadata {
+                countries: &countries,
+                risks: &risks,
+            },
+            2,
+            3,
+        )
+        .unwrap();
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let full: Value = serde_yaml::from_slice(&body).unwrap();
+        let nodes: Value = serde_yaml::from_str(
+            &super::nodes_only_export(std::str::from_utf8(&body).unwrap(), "mihomo").unwrap(),
+        )
+        .unwrap();
+        assert_eq!(full["proxy-groups"], nodes["proxy-groups"]);
+        let groups = nodes["proxy-groups"].as_sequence().unwrap();
+        assert!(groups.iter().any(|group| group["type"] == "load-balance"));
+        assert!(groups.iter().any(|group| group["type"] == "fallback"));
+        assert!(nodes.get("dns").is_none());
+        assert_eq!(
+            nodes["rules"],
+            serde_yaml::to_value(vec!["MATCH,代理选择"]).unwrap()
+        );
+        assert!(nodes.get("rule-providers").is_none());
+    }
+
     use axum::http::header;
 
     use super::{
-        ExportMode, MIHOMO_DEFAULT_DELAY_TEST_URL, MIHOMO_INLINE_RULE_PROVIDERS_YAML,
-        PUBLIC_EXPORT_CACHE_BODY_LIMIT, compact_builtin_mihomo_policy_groups,
-        dedupe_mihomo_proxy_names, ensure_mihomo_country_load_balance_groups,
-        ensure_mihomo_default_proxy_groups, ensure_mihomo_match_rule,
+        BUILTIN_CLASH_TEMPLATE_NAME, BUILTIN_MIHOMO_TEMPLATE_NAME, BUILTIN_QUANX_TEMPLATE_NAME,
+        ExportMode, ExportNodeMetadata, MIHOMO_DEFAULT_DELAY_TEST_URL,
+        MIHOMO_INLINE_RULE_PROVIDERS_YAML, PUBLIC_EXPORT_CACHE_BODY_LIMIT, canonical_export_target,
+        compact_builtin_mihomo_policy_groups, dedupe_mihomo_proxy_names,
+        ensure_mihomo_country_load_balance_groups, ensure_mihomo_default_proxy_groups,
+        ensure_mihomo_fraud_groups, ensure_mihomo_match_rule,
         expand_mihomo_include_all_proxy_groups, export_legacy_client_profile, export_mihomo,
-        export_quantumult_x, export_sing_box, export_ssd, export_sssub, is_xray_supported,
-        load_export_template, localize_mihomo_legacy_group_names, mihomo_proxy_group_exists,
-        normalize_sing_box_server_ports, resolve_export_mode, safe_inline_value, safe_line_value,
+        export_quantumult_x, export_shadowrocket_profile, export_sing_box, export_ssd,
+        export_sssub, is_xray_supported, load_export_template, localize_mihomo_legacy_group_names,
+        mihomo_country_label, mihomo_proxy_group_exists, normalize_sing_box_server_ports,
+        render_quantumult_x_proxy, resolve_export_mode, safe_inline_value, safe_line_value,
         text_response, unique_mihomo_proxy_name,
     };
-    use crate::domain::{node::NodeView, subscription::SubscriptionView, template::TemplateRecord};
-    use serde_yaml::Value;
+    use crate::domain::{
+        node::NodeView,
+        node_ip_probe::{NodeIpProbeRecord, NodeRiskTraits},
+        subscription::SubscriptionView,
+        template::TemplateRecord,
+    };
+    use serde_yaml::{Mapping, Value};
     use std::{
         collections::{HashMap, HashSet},
         time::{SystemTime, UNIX_EPOCH},
@@ -4015,6 +5221,10 @@ mod tests {
             enabled: true,
             expires_at: None,
             status: "active".to_string(),
+            include_rules: true,
+            portal_enabled: false,
+            portal_slug: None,
+            portal_access_code_set: false,
             node_group_ids: Vec::new(),
             node_ids: vec![1],
             nodes: vec![NodeView {
@@ -4059,6 +5269,47 @@ mod tests {
         }
     }
 
+    fn risk_record(node_id: i64, status: &str, score: i64) -> NodeIpProbeRecord {
+        let traits = NodeRiskTraits {
+            usage_type: Some("residential".to_string()),
+            is_proxy: Some(false),
+            is_vpn: Some(false),
+            is_tor: Some(false),
+            is_hosting: Some(false),
+            is_abuser: Some(false),
+            is_relay: Some(false),
+            threat_level: None,
+            is_botnet_c2: None,
+            conflicts: Vec::new(),
+        };
+        NodeIpProbeRecord {
+            node_id,
+            status: "ok".to_string(),
+            ip: Some("1.1.1.1".to_string()),
+            ip_version: Some(4),
+            exit_ip_revision: 1,
+            country_code: None,
+            country_name: None,
+            country_source: None,
+            intelligence_status: Some("enriched".to_string()),
+            intelligence_message: None,
+            risk_ip: Some("1.1.1.1".to_string()),
+            risk_status: Some(status.to_string()),
+            scamalytics_fraud_score: Some(score),
+            scamalytics_isp_risk_score: Some(score),
+            risk_checked_at: Some("2026-09-02T00:00:00Z".to_string()),
+            risk_expires_at_unix_ms: Some(1_893_456_000_000),
+            risk_message: None,
+            risk_traits_json: Some(serde_json::to_string(&traits).unwrap()),
+            risk_traits_expires_at_unix_ms: Some(1_893_456_000_000),
+            message: None,
+            probed_at: "2026-09-02T00:00:00Z".to_string(),
+            country_updated_at: None,
+            intelligence_updated_at: None,
+            updated_at: "2026-09-02T00:00:00Z".to_string(),
+        }
+    }
+
     async fn response_body(response: axum::response::Response) -> String {
         let body = axum::body::to_bytes(response.into_body(), usize::MAX)
             .await
@@ -4095,6 +5346,7 @@ mod tests {
             "surge3",
             "surge2",
             "quanx",
+            "shadowrocket-profile",
             "quan",
             "loon",
             "surfboard",
@@ -4202,19 +5454,24 @@ mod tests {
 
         let quanx_template = sample_template(
             "quanx",
-            "[general]\ncustom = kept\n\n[server_remote]\n\n[filter_remote]\n",
+            "[general]\ncustom = kept\n\n[server_local]\n\n[policy]\nstatic=节点选择, 自动选择, direct\n\n[filter_remote]\n",
         );
         let quanx = response_body(
             export_quantumult_x(
                 sample_shadowsocks_subscription("quanx"),
                 ExportMode::Strict,
                 Some(&quanx_template),
+                &ExportNodeMetadata {
+                    countries: &HashMap::new(),
+                    risks: &HashMap::new(),
+                },
             )
             .unwrap(),
         )
         .await;
         assert!(quanx.contains("custom = kept"));
         assert!(quanx.contains("192.0.2.1"));
+        assert!(quanx.contains("[server_local]"));
 
         for (kind, client_name, template_content, preserved_line) in [
             (
@@ -4280,7 +5537,10 @@ rules:
                 ExportMode::Strict,
                 Some(&mihomo_template),
                 "mihomo",
-                &HashMap::new(),
+                &ExportNodeMetadata {
+                    countries: &HashMap::new(),
+                    risks: &HashMap::new(),
+                },
                 2,
                 3,
             )
@@ -4292,6 +5552,233 @@ rules:
         assert!(mihomo.contains("type: http"));
         assert!(mihomo.contains("https://example.invalid/rules.yaml"));
         assert!(mihomo.contains("192.0.2.1"));
+    }
+
+    #[tokio::test]
+    async fn quanx_and_shadowrocket_profiles_share_risk_policy_groups() {
+        let mut subscription = sample_shadowsocks_subscription("quanx");
+        subscription.nodes[0].name = "JP Zero".to_string();
+        let mut low_node = subscription.nodes[0].clone();
+        low_node.id = 2;
+        low_node.name = "US Low".to_string();
+        low_node.server = "198.51.100.2".to_string();
+        subscription.nodes.push(low_node);
+        subscription.node_ids = vec![1, 2];
+
+        let countries = HashMap::from([(1, "JP".to_string()), (2, "US".to_string())]);
+        let risks = HashMap::from([
+            (1, risk_record(1, "zero", 0)),
+            (2, risk_record(2, "low", 12)),
+        ]);
+        let metadata = ExportNodeMetadata {
+            countries: &countries,
+            risks: &risks,
+        };
+
+        let quanx = response_body(
+            export_quantumult_x(subscription.clone(), ExportMode::Strict, None, &metadata).unwrap(),
+        )
+        .await;
+        assert!(quanx.contains("[server_local]"));
+        assert!(!quanx.contains("[server_remote]"));
+        assert!(quanx.contains("available=0欺诈, JP Zero"));
+        assert!(quanx.contains("available=低欺诈, US Low"));
+        assert!(quanx.contains("static=手动选择住宅网络, JP Zero"));
+        assert!(quanx.contains("available=日本故障转移0欺诈, JP Zero"));
+        assert!(quanx.contains("available=美国故障转移低欺诈, US Low"));
+        assert!(quanx.contains("static=节点选择, 自动选择, 0欺诈, 低欺诈, 手动选择住宅网络"));
+
+        let shadowrocket = response_body(
+            export_shadowrocket_profile(subscription, ExportMode::Strict, None, &metadata).unwrap(),
+        )
+        .await;
+        assert!(shadowrocket.contains("[Proxy]"));
+        assert!(shadowrocket.contains("手动选择 = select, JP Zero, US Low"));
+        assert!(shadowrocket.contains(
+            "自动选择 = url-test, JP Zero, US Low, url=https://cp.cloudflare.com/generate_204"
+        ));
+        assert!(shadowrocket.contains("0欺诈 = fallback, JP Zero"));
+        assert!(shadowrocket.contains("低欺诈 = fallback, US Low"));
+        assert!(shadowrocket.contains("手动选择住宅网络 = select, JP Zero"));
+        assert!(shadowrocket.contains("日本故障转移0欺诈 = fallback, JP Zero"));
+        assert!(shadowrocket.contains("美国故障转移低欺诈 = fallback, US Low"));
+        assert!(
+            shadowrocket
+                .contains("代理选择 = select, 手动选择, 自动选择, 0欺诈, 低欺诈, 手动选择住宅网络")
+        );
+        assert!(shadowrocket.contains("FINAL,代理选择"));
+        assert!(!shadowrocket.contains("FINAL,PROXY"));
+    }
+
+    #[tokio::test]
+    async fn quanx_complete_profile_filters_unsupported_hysteria2_nodes() {
+        let mut subscription = sample_shadowsocks_subscription("quanx");
+        let mut hysteria2 = subscription.nodes[0].clone();
+        hysteria2.id = 2;
+        hysteria2.name = "HY2 unsupported by QX".to_string();
+        hysteria2.protocol = "hysteria2".to_string();
+        hysteria2.settings = serde_json::json!({
+            "password": "secret",
+            "sni": "hy.example.com"
+        });
+        subscription.nodes.push(hysteria2);
+        subscription.node_ids.push(2);
+
+        let response = export_quantumult_x(
+            subscription,
+            ExportMode::BestEffort,
+            None,
+            &ExportNodeMetadata {
+                countries: &HashMap::new(),
+                risks: &HashMap::new(),
+            },
+        )
+        .unwrap();
+
+        assert_eq!(
+            response
+                .headers()
+                .get("x-sublinkx-filtered-count")
+                .and_then(|value| value.to_str().ok()),
+            Some("1")
+        );
+        let body = response_body(response).await;
+        assert!(body.contains("shadowsocks=192.0.2.1:443"));
+        assert!(!body.contains("hysteria2="));
+        assert!(!body.contains("HY2 unsupported by QX"));
+    }
+
+    #[tokio::test]
+    async fn quanx_rebuild_removes_stale_reserved_policy_groups() {
+        let template = sample_template(
+            "quanx",
+            "[server_local]\n\n[policy]\nstatic=节点选择, 日本故障转移0欺诈, direct\navailable=日本故障转移0欺诈, STALE, check-interval=300\n",
+        );
+        let body = response_body(
+            export_quantumult_x(
+                sample_shadowsocks_subscription("quanx"),
+                ExportMode::Strict,
+                Some(&template),
+                &ExportNodeMetadata {
+                    countries: &HashMap::new(),
+                    risks: &HashMap::new(),
+                },
+            )
+            .unwrap(),
+        )
+        .await;
+
+        assert!(!body.contains("日本故障转移0欺诈"));
+        assert!(!body.contains("STALE"));
+        assert!(body.contains("static=节点选择, direct"));
+    }
+
+    #[tokio::test]
+    async fn quanx_builtin_export_ignores_stale_persisted_template_content() {
+        let mut template = sample_template(
+            "quanx",
+            "[general]\nserver_check_url = https://www.gstatic.com/generate_204\n\n[server_remote]\n",
+        );
+        template.name = BUILTIN_QUANX_TEMPLATE_NAME.to_string();
+
+        let body = response_body(
+            export_quantumult_x(
+                sample_shadowsocks_subscription("quanx"),
+                ExportMode::Strict,
+                Some(&template),
+                &ExportNodeMetadata {
+                    countries: &HashMap::new(),
+                    risks: &HashMap::new(),
+                },
+            )
+            .unwrap(),
+        )
+        .await;
+
+        assert!(
+            body.starts_with("[general]\nserver_check_url=http://cp.cloudflare.com/generate_204\n")
+        );
+        assert!(body.contains("[server_local]"));
+        assert!(!body.contains("[server_remote]"));
+        assert!(!body.contains("geo_location_checker"));
+    }
+
+    #[test]
+    fn keeps_legacy_shadowrocket_target_separate_from_full_profile() {
+        assert_eq!(canonical_export_target("shadowrocket").unwrap(), "xray");
+        assert_eq!(
+            canonical_export_target("shadowrocket-profile").unwrap(),
+            "shadowrocket-profile"
+        );
+        assert_eq!(
+            canonical_export_target("shadowrocket-config").unwrap(),
+            "shadowrocket-profile"
+        );
+    }
+
+    #[test]
+    fn renders_quantumult_x_vless_reality_vision_with_official_syntax() {
+        let mut node = sample_shadowsocks_subscription("quanx").nodes.remove(0);
+        node.protocol = "vless".to_string();
+        node.name = "AU 01".to_string();
+        node.server = "direct-au.example.com".to_string();
+        node.port = 36699;
+        node.settings = serde_json::json!({
+            "uuid": "4c374a1d-e334-4ec1-b010-489bfa360ba9",
+            "flow": "xtls-rprx-vision",
+            "type": "tcp",
+            "security": "reality",
+            "sni": "swdist.apple.com",
+            "pbk": "base64-key",
+            "sid": "5f7b"
+        });
+
+        let rendered = render_quantumult_x_proxy(&node).unwrap();
+        assert!(rendered.starts_with(
+            "vless=direct-au.example.com:36699, method=none, password=4c374a1d-e334-4ec1-b010-489bfa360ba9"
+        ));
+        assert!(rendered.contains(", vless-flow=xtls-rprx-vision"));
+        assert!(!rendered.contains(", flow="));
+        assert!(rendered.contains(", over-tls=true"));
+        assert!(rendered.contains(", reality-base64-pubkey=base64-key"));
+        assert!(rendered.contains(", reality-hex-shortid=5f7b"));
+        assert!(rendered.ends_with(", tag=AU 01"));
+    }
+
+    #[test]
+    fn renders_quantumult_x_ipv6_endpoint_with_brackets() {
+        let mut node = sample_shadowsocks_subscription("quanx").nodes.remove(0);
+        node.server = "2001:db8::1".to_string();
+
+        let rendered = render_quantumult_x_proxy(&node).unwrap();
+        assert!(rendered.starts_with("shadowsocks=[2001:db8::1]:443, "));
+        assert!(rendered.ends_with("tag=SS node"));
+    }
+
+    #[test]
+    fn renders_quantumult_x_anytls_with_tls_and_reality_fields() {
+        let mut node = sample_shadowsocks_subscription("quanx").nodes.remove(0);
+        node.protocol = "anytls".to_string();
+        node.name = "AnyTLS node".to_string();
+        node.settings = serde_json::json!({
+            "password": "secret",
+            "sni": "edge.example.com",
+            "insecure": true,
+            "udp": true,
+            "pbk": "base64-key",
+            "sid": "0123456789abcdef"
+        });
+
+        let rendered = render_quantumult_x_proxy(&node).unwrap();
+        assert!(rendered.starts_with("anytls=192.0.2.1:443"));
+        assert!(rendered.contains("password=secret"));
+        assert!(rendered.contains("over-tls=true"));
+        assert!(rendered.contains("tls-host=edge.example.com"));
+        assert!(rendered.contains("tls-verification=false"));
+        assert!(rendered.contains("udp-relay=true"));
+        assert!(rendered.contains("reality-base64-pubkey=base64-key"));
+        assert!(rendered.contains("reality-hex-shortid=0123456789abcdef"));
+        assert!(rendered.ends_with("tag=AnyTLS node"));
     }
 
     #[tokio::test]
@@ -4308,7 +5795,10 @@ rules:
                 ExportMode::Strict,
                 Some(&template),
                 "mihomo",
-                &HashMap::new(),
+                &ExportNodeMetadata {
+                    countries: &HashMap::new(),
+                    risks: &HashMap::new(),
+                },
                 2,
                 3,
             )
@@ -4828,6 +6318,10 @@ rules:
             enabled: true,
             expires_at: None,
             status: "active".to_string(),
+            include_rules: true,
+            portal_enabled: false,
+            portal_slug: None,
+            portal_access_code_set: false,
             node_group_ids: vec![10],
             node_ids: vec![1, 2],
             nodes,
@@ -4840,7 +6334,10 @@ rules:
             ExportMode::Strict,
             None,
             "mihomo",
-            &HashMap::new(),
+            &ExportNodeMetadata {
+                countries: &HashMap::new(),
+                risks: &HashMap::new(),
+            },
             2,
             3,
         )
@@ -4893,6 +6390,10 @@ rules:
             enabled: true,
             expires_at: None,
             status: "active".to_string(),
+            include_rules: true,
+            portal_enabled: false,
+            portal_slug: None,
+            portal_access_code_set: false,
             node_group_ids: Vec::new(),
             node_ids: vec![1],
             nodes: vec![node],
@@ -5068,6 +6569,133 @@ proxy-groups:
     }
 
     #[test]
+    fn rebuilds_reserved_fraud_groups_even_for_single_country_node() {
+        let mut root = serde_yaml::from_str::<Value>(
+            r#"
+proxy-groups:
+  - name: 代理选择
+    type: select
+    proxies: [日本故障转移0欺诈, DIRECT]
+  - name: 日本故障转移0欺诈
+    type: select
+    proxies: [UNTRUSTED]
+"#,
+        )
+        .unwrap()
+        .as_mapping()
+        .unwrap()
+        .clone();
+        let countries = HashMap::from([
+            (1_i64, "JP".to_string()),
+            (2_i64, "DE".to_string()),
+            (3_i64, "KR".to_string()),
+            (4_i64, "TR".to_string()),
+        ]);
+        let proxy_names = HashMap::from([
+            (1_i64, "JP-01".to_string()),
+            (2_i64, "DE-01".to_string()),
+            (3_i64, "KR-01".to_string()),
+            (4_i64, "TR-01".to_string()),
+            (5_i64, "GLOBAL-RESIDENTIAL".to_string()),
+        ]);
+        let mut global_residential = risk_record(5, "low", 5);
+        let mut global_traits = serde_json::from_str::<NodeRiskTraits>(
+            global_residential.risk_traits_json.as_deref().unwrap(),
+        )
+        .unwrap();
+        global_traits.conflicts.push("usage_type".to_string());
+        global_residential.risk_traits_json = Some(serde_json::to_string(&global_traits).unwrap());
+        let risks = HashMap::from([
+            (1_i64, risk_record(1, "zero", 0)),
+            (2_i64, risk_record(2, "low", 12)),
+            (3_i64, risk_record(3, "zero", 0)),
+            (4_i64, risk_record(4, "low", 12)),
+            (5_i64, global_residential),
+        ]);
+
+        ensure_mihomo_fraud_groups(&mut root, &countries, &risks, &proxy_names);
+        let yaml = serde_yaml::to_string(&root).unwrap();
+        assert!(yaml.contains("name: 0欺诈"));
+        assert!(yaml.contains("name: 低欺诈"));
+        assert!(yaml.contains("name: 手动选择住宅网络"));
+        assert!(yaml.contains("name: 日本故障转移0欺诈"));
+        assert!(yaml.contains("name: 德国故障转移低欺诈"));
+        assert!(yaml.contains("name: 韩国故障转移0欺诈"));
+        assert!(yaml.contains("name: 土耳其故障转移低欺诈"));
+        assert!(yaml.contains("JP-01"));
+        assert!(yaml.contains("DE-01"));
+        assert!(yaml.contains("KR-01"));
+        assert!(yaml.contains("TR-01"));
+        assert!(!yaml.contains("UNTRUSTED"));
+        let residential = root
+            .get(Value::String("proxy-groups".to_string()))
+            .and_then(Value::as_sequence)
+            .unwrap()
+            .iter()
+            .filter_map(Value::as_mapping)
+            .find(|group| {
+                group
+                    .get(Value::String("name".to_string()))
+                    .and_then(Value::as_str)
+                    == Some("手动选择住宅网络")
+            })
+            .unwrap();
+        assert_eq!(
+            residential
+                .get(Value::String("type".to_string()))
+                .and_then(Value::as_str),
+            Some("select")
+        );
+        assert!(
+            residential
+                .get(Value::String("proxies".to_string()))
+                .and_then(Value::as_sequence)
+                .is_some_and(
+                    |proxies| proxies.contains(&Value::String("GLOBAL-RESIDENTIAL".to_string()))
+                )
+        );
+    }
+
+    #[test]
+    fn excludes_unsafe_or_incomplete_nodes_from_strict_fraud_groups() {
+        let mut root = Mapping::new();
+        let proxy_names = HashMap::from([
+            (1_i64, "SAFE".to_string()),
+            (2_i64, "VPN".to_string()),
+            (3_i64, "UNKNOWN".to_string()),
+            (4_i64, "HIGH-ISP".to_string()),
+        ]);
+        let mut safe = risk_record(1, "zero", 0);
+        let mut vpn = risk_record(2, "zero", 0);
+        let mut vpn_traits =
+            serde_json::from_str::<NodeRiskTraits>(vpn.risk_traits_json.as_deref().unwrap())
+                .unwrap();
+        vpn_traits.is_vpn = Some(true);
+        vpn.risk_traits_json = Some(serde_json::to_string(&vpn_traits).unwrap());
+        let mut unknown = risk_record(3, "zero", 0);
+        unknown.risk_traits_json = None;
+        let mut high_isp = risk_record(4, "zero", 0);
+        high_isp.scamalytics_isp_risk_score = Some(10);
+        safe.country_code = Some("JP".to_string());
+        let risks = HashMap::from([(1, safe), (2, vpn), (3, unknown), (4, high_isp)]);
+
+        ensure_mihomo_fraud_groups(&mut root, &HashMap::new(), &risks, &proxy_names);
+        let yaml = serde_yaml::to_string(&root).unwrap();
+        assert!(yaml.contains("SAFE"));
+        assert!(!yaml.contains("VPN"));
+        assert!(!yaml.contains("UNKNOWN"));
+        assert!(!yaml.contains("HIGH-ISP"));
+    }
+
+    #[test]
+    fn localizes_dynamic_mihomo_country_group_names() {
+        assert_eq!(mihomo_country_label("KR"), "韩国");
+        assert_eq!(mihomo_country_label("tr"), "土耳其");
+        assert_eq!(mihomo_country_label(" DE "), "德国");
+        assert_eq!(mihomo_country_label("ZZ"), "未知地区");
+    }
+
+    #[test]
     fn honors_configured_country_group_thresholds() {
         let mut root = serde_yaml::from_str::<Value>(
             r#"
@@ -5169,6 +6797,120 @@ rules:
     }
 
     #[test]
+    fn existing_builtin_network_defaults_are_fixed_without_touching_custom_templates() {
+        for (kind, name, source) in [
+            (
+                "clash",
+                BUILTIN_CLASH_TEMPLATE_NAME,
+                crate::services::template_seed_service::CLASH_TEMPLATE,
+            ),
+            (
+                "mihomo",
+                BUILTIN_MIHOMO_TEMPLATE_NAME,
+                crate::services::template_seed_service::MIHOMO_TEMPLATE,
+            ),
+        ] {
+            let mut template = sample_template(kind, source);
+            template.name = name.into();
+            // Simulate a stored pre-fix record rather than relying on new seed data.
+            let mut stored: Value = serde_yaml::from_str(source).unwrap();
+            stored["dns"] = serde_yaml::from_str("nameserver: [192.0.2.1]").unwrap();
+            template.content = serde_yaml::to_string(&stored).unwrap();
+            let root = super::parse_yaml_template(Some(&template), kind).unwrap();
+            assert_eq!(root.get("ipv6"), Some(&Value::Bool(false)));
+            assert_ne!(root.get("dns"), Some(&stored["dns"]));
+            let rules = root.get("rules").unwrap().as_sequence().unwrap();
+            assert!(
+                rules
+                    .iter()
+                    .any(|rule| rule.as_str() == Some("DOMAIN-SUFFIX,cn,DIRECT"))
+            );
+            if kind == "mihomo" {
+                let dns = root.get("dns").unwrap();
+                assert_eq!(
+                    dns["direct-nameserver-follow-policy"].as_bool(),
+                    Some(false)
+                );
+                assert_eq!(dns["direct-nameserver"][0].as_str(), Some("223.5.5.5"));
+                assert!(
+                    rules
+                        .iter()
+                        .any(|rule| rule.as_str() == Some("RULE-SET,cn_ip,DIRECT"))
+                );
+                assert!(
+                    !rules
+                        .iter()
+                        .any(|rule| rule.as_str() == Some("RULE-SET,cn_ip,DIRECT,no-resolve"))
+                );
+            } else {
+                for provider in root
+                    .get("rule-providers")
+                    .unwrap()
+                    .as_mapping()
+                    .unwrap()
+                    .values()
+                {
+                    assert_eq!(provider["format"].as_str(), Some("text"));
+                }
+            }
+            template.is_builtin = 0;
+            let custom = super::parse_yaml_template(Some(&template), kind).unwrap();
+            assert_eq!(Value::Mapping(custom), stored);
+        }
+    }
+
+    #[tokio::test]
+    #[ignore = "generates synthetic exports for manual core validation"]
+    async fn generate_routing_smoke_exports() {
+        let directory = std::path::Path::new("../output/routing-smoke");
+        std::fs::create_dir_all(directory).unwrap();
+        for (kind, name, content) in [
+            (
+                "clash",
+                BUILTIN_CLASH_TEMPLATE_NAME,
+                crate::services::template_seed_service::CLASH_TEMPLATE,
+            ),
+            (
+                "mihomo",
+                BUILTIN_MIHOMO_TEMPLATE_NAME,
+                crate::services::template_seed_service::MIHOMO_TEMPLATE,
+            ),
+        ] {
+            let mut template = sample_template(kind, content);
+            template.name = name.into();
+            let body = response_body(
+                export_mihomo(
+                    sample_shadowsocks_subscription(kind),
+                    ExportMode::Strict,
+                    Some(&template),
+                    kind,
+                    &ExportNodeMetadata {
+                        countries: &HashMap::new(),
+                        risks: &HashMap::new(),
+                    },
+                    2,
+                    3,
+                )
+                .unwrap(),
+            )
+            .await;
+            let nodes_only = super::nodes_only_export(&body, "mihomo").unwrap();
+            let parsed: Value = serde_yaml::from_str(&nodes_only).unwrap();
+            let expected_group = if kind == "clash" {
+                "节点选择"
+            } else {
+                "代理选择"
+            };
+            assert_eq!(
+                parsed["rules"],
+                serde_yaml::to_value(vec![format!("MATCH,{expected_group}")]).unwrap()
+            );
+            std::fs::write(directory.join(format!("{kind}-nodes.yaml")), nodes_only).unwrap();
+            std::fs::write(directory.join(format!("{kind}.yaml")), body).unwrap();
+        }
+    }
+
+    #[test]
     fn built_in_mihomo_template_prefers_manual_and_has_common_site_rules() {
         let template = crate::services::template_seed_service::MIHOMO_TEMPLATE;
         let parsed = serde_yaml::from_str::<Value>(template).unwrap();
@@ -5229,7 +6971,22 @@ rules:
                 Some("https://dns.alidns.com/dns-query" | "https://doh.pub/dns-query")
             )
         }));
-        assert!(template.contains("    - rule-set:private_domain\n    - \"+.lan\""));
+        let fake_ip_filter = dns
+            .get("fake-ip-filter")
+            .and_then(Value::as_sequence)
+            .unwrap();
+        for domain in [
+            "rule-set:private_domain",
+            "rule-set:cn_domain",
+            "+.cn",
+            "+.lan",
+        ] {
+            assert!(
+                fake_ip_filter
+                    .iter()
+                    .any(|value| value.as_str() == Some(domain))
+            );
+        }
         assert!(template.contains(
             "      - 手动选择\n      - 自动选择\n      - 故障转移\n      - 负载均衡\n      - DIRECT"
         ));

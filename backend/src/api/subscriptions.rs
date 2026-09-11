@@ -1,20 +1,44 @@
 use axum::{
     Json,
-    extract::{Path, Query, State},
+    extract::{ConnectInfo, Path, Query, State},
     http::HeaderMap,
     response::IntoResponse,
 };
+use std::net::SocketAddr;
 
 use crate::{
     api::exports::ExportQuery,
     dto::subscriptions::{
         CreateSubscriptionRequest, RenewSubscriptionRequest, SubscriptionListQuery,
-        SubscriptionListResponse, SubscriptionResponse, UpdateSubscriptionRequest,
+        SubscriptionListResponse, SubscriptionPortalResponse, SubscriptionResponse,
+        UnlockSubscriptionPortalRequest, UpdateSubscriptionRequest,
     },
     errors::AppError,
     services::{export_service, subscription_service},
     state::AppState,
 };
+
+pub async fn unlock_portal(
+    State(state): State<AppState>,
+    ConnectInfo(peer_addr): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    Path(portal_slug): Path<String>,
+    Json(payload): Json<UnlockSubscriptionPortalRequest>,
+) -> Result<Json<SubscriptionPortalResponse>, AppError> {
+    let rate_limit_ip = crate::services::auth_service::request_rate_limit_ip(
+        &headers,
+        Some(peer_addr.ip()),
+        state.config.security.trust_proxy_headers,
+    );
+    let response = subscription_service::unlock_subscription_portal(
+        &state,
+        &portal_slug,
+        &rate_limit_ip,
+        &payload.access_code,
+    )
+    .await?;
+    Ok(Json(response))
+}
 
 pub async fn list(
     State(state): State<AppState>,

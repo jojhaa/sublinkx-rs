@@ -13,6 +13,10 @@ pub struct NewSubscriptionRecord<'a> {
     pub group_id: Option<i64>,
     pub enabled: i64,
     pub expires_at: Option<&'a str>,
+    pub include_rules: i64,
+    pub portal_enabled: i64,
+    pub portal_slug: Option<&'a str>,
+    pub portal_access_code_hash: Option<&'a str>,
     pub created_at: &'a str,
     pub updated_at: &'a str,
 }
@@ -26,6 +30,10 @@ pub struct UpdateSubscriptionRecord<'a> {
     pub group_id: Option<i64>,
     pub enabled: i64,
     pub expires_at: Option<&'a str>,
+    pub include_rules: i64,
+    pub portal_enabled: i64,
+    pub portal_slug: Option<&'a str>,
+    pub portal_access_code_hash: Option<&'a str>,
     pub updated_at: &'a str,
 }
 
@@ -47,7 +55,7 @@ pub async fn list_page(
     offset: i64,
 ) -> Result<Vec<SubscriptionRecord>, sqlx::Error> {
     let mut query = DbQueryBuilder::new(
-        "SELECT id, name, token, description, default_client, template_id, group_id, enabled + 0 AS enabled, expires_at, created_at, updated_at FROM subscriptions WHERE 1 = 1",
+        "SELECT id, name, token, description, default_client, template_id, group_id, enabled + 0 AS enabled, expires_at, include_rules + 0 AS include_rules, portal_enabled + 0 AS portal_enabled, portal_slug, portal_access_code_hash, created_at, updated_at FROM subscriptions WHERE 1 = 1",
     );
     push_group_filter(&mut query, group_id, ungrouped);
     query.push(" ORDER BY id DESC LIMIT ");
@@ -69,7 +77,7 @@ fn push_group_filter(query: &mut DbQueryBuilder<'_>, group_id: Option<i64>, ungr
 pub async fn find_by_id(pool: &DbPool, id: i64) -> Result<Option<SubscriptionRecord>, sqlx::Error> {
     query_as::<SubscriptionRecord>(
         r#"
-        SELECT id, name, token, description, default_client, template_id, group_id, enabled + 0 AS enabled, expires_at, created_at, updated_at
+        SELECT id, name, token, description, default_client, template_id, group_id, enabled + 0 AS enabled, expires_at, include_rules + 0 AS include_rules, portal_enabled + 0 AS portal_enabled, portal_slug, portal_access_code_hash, created_at, updated_at
         FROM subscriptions
         WHERE id = ?
         "#,
@@ -85,7 +93,7 @@ pub async fn find_by_name(
 ) -> Result<Option<SubscriptionRecord>, sqlx::Error> {
     query_as::<SubscriptionRecord>(
         r#"
-        SELECT id, name, token, description, default_client, template_id, group_id, enabled + 0 AS enabled, expires_at, created_at, updated_at
+        SELECT id, name, token, description, default_client, template_id, group_id, enabled + 0 AS enabled, expires_at, include_rules + 0 AS include_rules, portal_enabled + 0 AS portal_enabled, portal_slug, portal_access_code_hash, created_at, updated_at
         FROM subscriptions
         WHERE name = ?
         "#,
@@ -101,12 +109,28 @@ pub async fn find_by_token(
 ) -> Result<Option<SubscriptionRecord>, sqlx::Error> {
     query_as::<SubscriptionRecord>(
         r#"
-        SELECT id, name, token, description, default_client, template_id, group_id, enabled + 0 AS enabled, expires_at, created_at, updated_at
+        SELECT id, name, token, description, default_client, template_id, group_id, enabled + 0 AS enabled, expires_at, include_rules + 0 AS include_rules, portal_enabled + 0 AS portal_enabled, portal_slug, portal_access_code_hash, created_at, updated_at
         FROM subscriptions
         WHERE token = ?
         "#,
     )
     .bind(token)
+    .fetch_optional(pool)
+    .await
+}
+
+pub async fn find_by_portal_slug(
+    pool: &DbPool,
+    portal_slug: &str,
+) -> Result<Option<SubscriptionRecord>, sqlx::Error> {
+    query_as::<SubscriptionRecord>(
+        r#"
+        SELECT id, name, token, description, default_client, template_id, group_id, enabled + 0 AS enabled, expires_at, include_rules + 0 AS include_rules, portal_enabled + 0 AS portal_enabled, portal_slug, portal_access_code_hash, created_at, updated_at
+        FROM subscriptions
+        WHERE portal_slug = ?
+        "#,
+    )
+    .bind(portal_slug)
     .fetch_optional(pool)
     .await
 }
@@ -122,8 +146,9 @@ pub async fn insert_with_nodes(
     query(
         r#"
         INSERT INTO subscriptions (
-            name, token, description, default_client, template_id, group_id, enabled, expires_at, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            name, token, description, default_client, template_id, group_id, enabled, expires_at,
+            include_rules, portal_enabled, portal_slug, portal_access_code_hash, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         "#,
     )
     .bind(item.name)
@@ -134,6 +159,10 @@ pub async fn insert_with_nodes(
     .bind(item.group_id)
     .bind(item.enabled)
     .bind(item.expires_at)
+    .bind(item.include_rules)
+    .bind(item.portal_enabled)
+    .bind(item.portal_slug)
+    .bind(item.portal_access_code_hash)
     .bind(item.created_at)
     .bind(item.updated_at)
     .execute(&mut *tx)
@@ -141,7 +170,7 @@ pub async fn insert_with_nodes(
 
     let record = query_as::<SubscriptionRecord>(
         r#"
-        SELECT id, name, token, description, default_client, template_id, group_id, enabled + 0 AS enabled, expires_at, created_at, updated_at
+        SELECT id, name, token, description, default_client, template_id, group_id, enabled + 0 AS enabled, expires_at, include_rules + 0 AS include_rules, portal_enabled + 0 AS portal_enabled, portal_slug, portal_access_code_hash, created_at, updated_at
         FROM subscriptions
         WHERE token = ?
         "#,
@@ -174,6 +203,10 @@ pub async fn update(
             group_id = ?,
             enabled = ?,
             expires_at = ?,
+            include_rules = ?,
+            portal_enabled = ?,
+            portal_slug = ?,
+            portal_access_code_hash = ?,
             updated_at = ?
         WHERE id = ?
         "#,
@@ -186,6 +219,10 @@ pub async fn update(
     .bind(item.group_id)
     .bind(item.enabled)
     .bind(item.expires_at)
+    .bind(item.include_rules)
+    .bind(item.portal_enabled)
+    .bind(item.portal_slug)
+    .bind(item.portal_access_code_hash)
     .bind(item.updated_at)
     .bind(id)
     .execute(pool)
@@ -214,6 +251,10 @@ pub async fn update_with_nodes(
             group_id = ?,
             enabled = ?,
             expires_at = ?,
+            include_rules = ?,
+            portal_enabled = ?,
+            portal_slug = ?,
+            portal_access_code_hash = ?,
             updated_at = ?
         WHERE id = ?
         "#,
@@ -226,6 +267,10 @@ pub async fn update_with_nodes(
     .bind(item.group_id)
     .bind(item.enabled)
     .bind(item.expires_at)
+    .bind(item.include_rules)
+    .bind(item.portal_enabled)
+    .bind(item.portal_slug)
+    .bind(item.portal_access_code_hash)
     .bind(item.updated_at)
     .bind(id)
     .execute(&mut *tx)
@@ -236,7 +281,7 @@ pub async fn update_with_nodes(
 
     let record = query_as::<SubscriptionRecord>(
         r#"
-        SELECT id, name, token, description, default_client, template_id, group_id, enabled + 0 AS enabled, expires_at, created_at, updated_at
+        SELECT id, name, token, description, default_client, template_id, group_id, enabled + 0 AS enabled, expires_at, include_rules + 0 AS include_rules, portal_enabled + 0 AS portal_enabled, portal_slug, portal_access_code_hash, created_at, updated_at
         FROM subscriptions
         WHERE id = ?
         "#,
@@ -474,6 +519,10 @@ mod tests {
                 group_id: None,
                 enabled: 1,
                 expires_at: None,
+                include_rules: 1,
+                portal_enabled: 0,
+                portal_slug: None,
+                portal_access_code_hash: None,
                 created_at: now,
                 updated_at: now,
             },
@@ -482,6 +531,41 @@ mod tests {
         )
         .await
         .expect("subscription should insert");
+
+        assert_eq!(record.include_rules, 1);
+        let updated = super::update_with_nodes(
+            &pool,
+            record.id,
+            &super::UpdateSubscriptionRecord {
+                name: &record.name,
+                token: &record.token,
+                description: &record.description,
+                default_client: record.default_client.as_deref(),
+                template_id: record.template_id,
+                group_id: record.group_id,
+                enabled: record.enabled,
+                expires_at: record.expires_at.as_deref(),
+                include_rules: 0,
+                portal_enabled: record.portal_enabled,
+                portal_slug: record.portal_slug.as_deref(),
+                portal_access_code_hash: record.portal_access_code_hash.as_deref(),
+                updated_at: now,
+            },
+            &[],
+            &[node_group_id],
+        )
+        .await
+        .unwrap();
+        assert_eq!(updated.include_rules, 0);
+        assert_eq!(updated.token, record.token);
+        assert_eq!(
+            super::find_by_token(&pool, &record.token)
+                .await
+                .unwrap()
+                .unwrap()
+                .include_rules,
+            0
+        );
 
         let followed_groups = list_subscription_node_groups(&pool, record.id)
             .await
@@ -493,6 +577,7 @@ mod tests {
             .await
             .expect("subscription page should load");
         assert_eq!(page.len(), 1);
+        assert_eq!(page[0].include_rules, 0);
         assert_eq!(count_filtered(&pool, None, false).await.unwrap(), 1);
         assert_eq!(
             list_subscription_node_groups_batch(&pool, &[record.id])

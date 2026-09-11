@@ -22,6 +22,8 @@ pub struct UpdateSettingsRequest {
     #[serde(default)]
     pub country_detection_interval_minutes: Option<i64>,
     #[serde(default)]
+    pub risk_enforcement_enabled: Option<bool>,
+    #[serde(default)]
     pub connectivity_default_target: Option<String>,
     #[serde(default)]
     pub connectivity_default_rounds: Option<i64>,

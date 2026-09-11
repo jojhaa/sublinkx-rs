@@ -1,6 +1,6 @@
 # 客户端目标注册表与模板预设
 
-更新日期：2026-05-29
+更新日期：2026-09-02
 
 本文档把 `sub-web-modify` 中的客户端列表整理为 `sublinkx-rs` 原生架构规划。
 
@@ -31,6 +31,8 @@
 | `xray` | Xray、V2Ray、v2rayN、v2rayNG 的 URI bundle，也可作为临时 Shadowrocket 桥接输出 |
 | `mihomo` | Mihomo、Clash、Clash Verge Rev、Stash 兼容路径的 YAML profile |
 | `surge` | Surge 风格 INI profile |
+| `quanx` | Quantumult X 完整 INI profile、策略组与本地规则 |
+| `shadowrocket-profile` | Shadowrocket 完整配置、策略组与规则 |
 | `sing-box` | sing-box JSON profile |
 | `not_implemented` | 已知 target，但暂时没有安全的原生导出器 |
 
@@ -46,10 +48,11 @@
 | Surge4/5 | `surge&ver=4` | `surge` | 已实现 |
 | Sing-Box | `singbox` | `sing-box` | 已实现 |
 | V2Ray | `v2ray` | `xray` | 已作为 URI bundle 实现 |
-| ShadowRocket | `shadowrocket` | `shadowrocket` | 先作为 Xray URI 桥接实现 |
+| ShadowRocket URI | `shadowrocket` | `shadowrocket` | 兼容 Xray URI Bundle，保留旧链接行为 |
+| ShadowRocket 完整配置 | - | `shadowrocket-profile` | 已实现；必须从配置入口导入，不能作为 Subscribe 节点订阅添加；需真实 iOS 客户端继续验收 |
 | Surge3 | `surge&ver=3` | `surge3` | 规划中 |
 | Surge2 | `surge&ver=2` | `surge2` | 规划中 |
-| Quantumult X | `quanx` | `quanx` | 规划中 |
+| Quantumult X | `quanx` | `quanx` | 已实现完整配置、风险策略组和基础规则；必须从配置文件页面导入，服务器资源入口不会安装策略组 |
 | Quantumult | `quan` | `quan` | 规划中 |
 | Loon | `loon` | `loon` | 规划中 |
 | Surfboard | `surfboard` | `surfboard` | 规划中 |
@@ -75,12 +78,15 @@
 - `xray`
 - `surge`
 - `sing-box`
+- `quanx`
+- `shadowrocket-profile`
+
+Quantumult X 与 Shadowrocket 完整配置对外使用无查询参数路径：`/s/{token}/profile/quanx` 和 `/s/{token}/profile/shadowrocket-profile`。旧 `?target=` 形式继续兼容，但客户端安装入口不再依赖查询参数。
 
 规划中的模板类型：
 
 - `surge2`
 - `surge3`
-- `quanx`
 - `quan`
 - `loon`
 - `surfboard`

@@ -5,6 +5,8 @@ use crate::{
     utils::time::now_rfc3339,
 };
 
+use super::export_service::QUANX_DEFAULT_TEMPLATE;
+
 struct DefaultTemplate {
     name: &'static str,
     kind: &'static str,
@@ -24,7 +26,17 @@ dns:
   ipv6: false
   listen: 0.0.0.0:1053
   enhanced-mode: fake-ip
+  fake-ip-filter:
+    - "+.lan"
+    - "+.local"
+    - "+.cn"
+    - localhost
+  default-nameserver:
+    - 223.5.5.5
+    - 119.29.29.29
   nameserver:
+    - 223.5.5.5
+    - 119.29.29.29
     - https://223.5.5.5/dns-query
     - https://doh.pub/dns-query
 proxy-groups:
@@ -191,6 +203,7 @@ pub(crate) const MIHOMO_TEMPLATE: &str = r#"mixed-port: 7890
 allow-lan: true
 mode: rule
 log-level: info
+ipv6: false
 unified-delay: true
 tcp-concurrent: true
 profile:
@@ -207,6 +220,8 @@ dns:
   enhanced-mode: fake-ip
   fake-ip-filter:
     - rule-set:private_domain
+    - rule-set:cn_domain
+    - "+.cn"
     - "+.lan"
     - "+.local"
     - localhost
@@ -230,8 +245,11 @@ dns:
       - https://dns.alidns.com/dns-query
       - https://doh.pub/dns-query
     "rule-set:cn_domain":
-      - https://dns.alidns.com/dns-query
-      - https://doh.pub/dns-query
+      - 223.5.5.5
+      - 119.29.29.29
+    "+.cn":
+      - 223.5.5.5
+      - 119.29.29.29
     "rule-set:geolocation-not-cn":
       - https://1.1.1.1/dns-query#代理选择
       - https://8.8.8.8/dns-query#代理选择
@@ -240,9 +258,11 @@ dns:
     - https://doh.pub/dns-query
   respect-rules: false
   direct-nameserver:
+    - 223.5.5.5
+    - 119.29.29.29
     - https://dns.alidns.com/dns-query
     - https://doh.pub/dns-query
-  direct-nameserver-follow-policy: true
+  direct-nameserver-follow-policy: false
 proxy-groups:
   - name: 代理选择
     type: select
@@ -576,21 +596,19 @@ const XRAY_TEMPLATE: &str = r#"# Xray / V2Ray URI bundle
 # This target exports one URI per line. Template content is kept as operator notes.
 "#;
 
-const QUANX_TEMPLATE: &str = r#"[general]
-server_check_url = https://www.gstatic.com/generate_204
-geo_location_checker = http://ip-api.com/json/?lang=zh-CN, https://raw.githubusercontent.com/KOP-XIAO/QuantumultX/master/Scripts/IP_API.js
+const SHADOWROCKET_PROFILE_TEMPLATE: &str = r#"[General]
+loglevel = notify
 
-[server_remote]
+[Proxy]
 
-[policy]
-static=节点选择, 自动选择, direct, img-url=https://raw.githubusercontent.com/Koolson/Qure/master/IconSet/Color/Proxy.png
-url-latency-benchmark=自动选择, server-tag-regex=.*, check-interval=600, tolerance=0, alive-checking=false, img-url=https://raw.githubusercontent.com/Koolson/Qure/master/IconSet/Color/Auto.png
+[Proxy Group]
+代理选择 = select, 手动选择, 自动选择, direct
+手动选择 = select
+自动选择 = url-test, url=https://cp.cloudflare.com/generate_204, interval=600, tolerance=0
 
-[filter_remote]
-
-[rewrite_remote]
-
-[task_local]
+[Rule]
+GEOIP,CN,DIRECT
+FINAL,代理选择
 "#;
 
 const QUAN_TEMPLATE: &str = r#"[SERVER]
@@ -725,7 +743,12 @@ const DEFAULT_TEMPLATES: &[DefaultTemplate] = &[
     DefaultTemplate {
         name: "Built-in Quantumult X Base",
         kind: "quanx",
-        content: QUANX_TEMPLATE,
+        content: QUANX_DEFAULT_TEMPLATE,
+    },
+    DefaultTemplate {
+        name: "Built-in Shadowrocket Profile",
+        kind: "shadowrocket-profile",
+        content: SHADOWROCKET_PROFILE_TEMPLATE,
     },
     DefaultTemplate {
         name: "Built-in Quantumult Base",

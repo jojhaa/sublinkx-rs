@@ -11,6 +11,12 @@ const router = createRouter({
       meta: { public: true },
     },
     {
+      path: '/portal/:portalSlug',
+      name: 'subscriptionPortal',
+      component: () => import('../views/SubscriptionPortalView.vue'),
+      meta: { public: true },
+    },
+    {
       path: '/change-credentials',
       name: 'changeCredentials',
       component: () => import('../views/ChangeCredentialsView.vue'),
@@ -76,7 +82,7 @@ router.beforeEach(async (to) => {
     return { name: 'login', query: { redirect: to.fullPath } }
   }
 
-  if (auth.token && !auth.user && to.name !== 'login') {
+  if (!to.meta.public && auth.token && !auth.user && to.name !== 'login') {
     try {
       await auth.fetchMe()
     } catch {
@@ -85,11 +91,11 @@ router.beforeEach(async (to) => {
     }
   }
 
-  if (auth.token && auth.user?.must_change_credentials && to.name !== 'changeCredentials') {
+  if (!to.meta.public && auth.token && auth.user?.must_change_credentials && to.name !== 'changeCredentials') {
     return { name: 'changeCredentials' }
   }
 
-  if (auth.token && !auth.user?.must_change_credentials && to.name === 'changeCredentials') {
+  if (!to.meta.public && auth.token && !auth.user?.must_change_credentials && to.name === 'changeCredentials') {
     return { name: 'dashboard' }
   }
 

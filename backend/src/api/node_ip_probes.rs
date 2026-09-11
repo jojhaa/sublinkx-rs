@@ -8,8 +8,9 @@ use axum::{
 
 use crate::{
     dto::node_ip_probes::{
-        NodeIpIntelligenceStatusResponse, NodeIpProbeListResponse, NodeIpProbeRequest,
-        NodeIpProbeResponse, RefreshNodeIpIntelligenceRequest, RefreshNodeIpIntelligenceResponse,
+        BatchNodeRiskScoreRequest, BatchNodeRiskScoreResponse, NodeIpIntelligenceStatusResponse,
+        NodeIpProbeListResponse, NodeIpProbeRequest, NodeIpProbeResponse,
+        RefreshNodeIpIntelligenceRequest, RefreshNodeIpIntelligenceResponse,
         UpdateNodeIpCountryRequest,
     },
     errors::AppError,
@@ -76,6 +77,17 @@ pub async fn refresh_intelligence(
     node_service::require_auth(&state, &headers).await?;
     Ok(Json(
         node_ip_probe_service::refresh_intelligence(&state, payload).await?,
+    ))
+}
+
+pub async fn query_risk_scores(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<BatchNodeRiskScoreRequest>,
+) -> Result<Json<BatchNodeRiskScoreResponse>, AppError> {
+    node_service::require_auth(&state, &headers).await?;
+    Ok(Json(
+        node_ip_probe_service::query_risk_scores(&state, payload).await?,
     ))
 }
 

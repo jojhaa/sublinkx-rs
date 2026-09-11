@@ -14,6 +14,7 @@ pub struct AppSettingsView {
     pub ip_probe_after_upstream_import: bool,
     pub country_detection_auto_enabled: bool,
     pub country_detection_interval_minutes: i64,
+    pub risk_enforcement_enabled: bool,
     pub connectivity_default_target: String,
     pub connectivity_default_rounds: i64,
     pub connectivity_sync_last_latency: bool,

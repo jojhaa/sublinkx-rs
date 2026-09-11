@@ -94,7 +94,8 @@
 - `surge` -> `surge`
 - `nekobox` -> `sing_box_outbound_bundle`
 - `hiddify` -> `sing_box_outbound_bundle`
-- `shadowrocket` -> 先走 `surge` 或 `apple_compat` 桥接路径，后续再做专用优化
+- `shadowrocket` -> 保留兼容 URI Bundle；需要策略组与规则时显式使用 `shadowrocket-profile`
+- `quanx` -> Quantumult X 完整配置，节点写入 `[server_local]` 并生成风险策略组
 
 ### 3. Strict 与 best-effort 导出
 

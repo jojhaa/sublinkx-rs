@@ -361,6 +361,22 @@ const SUBSCRIPTIONS_COLUMNS: &[ColumnSpec] = &[
         kind: ValueKind::OptionalText,
     },
     ColumnSpec {
+        name: "include_rules",
+        kind: ValueKind::Integer,
+    },
+    ColumnSpec {
+        name: "portal_enabled",
+        kind: ValueKind::Integer,
+    },
+    ColumnSpec {
+        name: "portal_slug",
+        kind: ValueKind::OptionalText,
+    },
+    ColumnSpec {
+        name: "portal_access_code_hash",
+        kind: ValueKind::OptionalText,
+    },
+    ColumnSpec {
         name: "created_at",
         kind: ValueKind::Text,
     },
@@ -547,6 +563,10 @@ const NODE_IP_PROBES_COLUMNS: &[ColumnSpec] = &[
         kind: ValueKind::OptionalInteger,
     },
     ColumnSpec {
+        name: "exit_ip_revision",
+        kind: ValueKind::Integer,
+    },
+    ColumnSpec {
         name: "country_code",
         kind: ValueKind::OptionalText,
     },
@@ -565,6 +585,42 @@ const NODE_IP_PROBES_COLUMNS: &[ColumnSpec] = &[
     ColumnSpec {
         name: "intelligence_message",
         kind: ValueKind::OptionalText,
+    },
+    ColumnSpec {
+        name: "risk_ip",
+        kind: ValueKind::OptionalText,
+    },
+    ColumnSpec {
+        name: "risk_status",
+        kind: ValueKind::OptionalText,
+    },
+    ColumnSpec {
+        name: "scamalytics_fraud_score",
+        kind: ValueKind::OptionalInteger,
+    },
+    ColumnSpec {
+        name: "scamalytics_isp_risk_score",
+        kind: ValueKind::OptionalInteger,
+    },
+    ColumnSpec {
+        name: "risk_checked_at",
+        kind: ValueKind::OptionalText,
+    },
+    ColumnSpec {
+        name: "risk_expires_at_unix_ms",
+        kind: ValueKind::OptionalInteger,
+    },
+    ColumnSpec {
+        name: "risk_message",
+        kind: ValueKind::OptionalText,
+    },
+    ColumnSpec {
+        name: "risk_traits_json",
+        kind: ValueKind::OptionalText,
+    },
+    ColumnSpec {
+        name: "risk_traits_expires_at_unix_ms",
+        kind: ValueKind::OptionalInteger,
     },
     ColumnSpec {
         name: "message",

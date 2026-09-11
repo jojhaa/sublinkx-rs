@@ -13,6 +13,7 @@ export interface AppSettings {
   ip_probe_after_upstream_import: boolean
   country_detection_auto_enabled: boolean
   country_detection_interval_minutes: number
+  risk_enforcement_enabled: boolean
   connectivity_default_target: 'system_default' | 'cloudflare_204' | 'google_204'
   connectivity_default_rounds: 1 | 3 | 5
   connectivity_sync_last_latency: boolean

@@ -7,11 +7,15 @@ export interface SubscriptionItem {
   token: string
   description: string
   default_client: string | null
+  include_rules: boolean
   template_id: number | null
   group_id: number | null
   enabled: boolean
   expires_at: string | null
   status: 'active' | 'disabled' | 'expired'
+  portal_enabled: boolean
+  portal_slug: string | null
+  portal_access_code_set: boolean
   node_group_ids: number[]
   node_ids: number[]
   nodes?: NodeItem[]
@@ -41,12 +45,39 @@ export interface SubscriptionPayload {
   name: string
   description?: string
   default_client?: string | null
+  include_rules?: boolean
   template_id?: number | null
   group_id?: number | null
   enabled?: boolean
   expires_at?: string | null
+  portal_enabled?: boolean
+  portal_access_code?: string
   node_group_ids?: number[]
   node_ids: number[]
+}
+
+export interface SubscriptionPortalLink {
+  target: string
+  label: string
+  path: string
+  full_profile: boolean
+}
+
+export interface SubscriptionPortalData {
+  include_rules: boolean
+  name: string
+  description: string
+  expires_at: string | null
+  default_client: string | null
+  links: SubscriptionPortalLink[]
+}
+
+export async function unlockSubscriptionPortal(portalSlug: string, accessCode: string) {
+  const { data } = await apiClient.post<{ code: string; data: SubscriptionPortalData }>(
+    `/api/public/v1/subscription-portals/${encodeURIComponent(portalSlug)}/unlock`,
+    { access_code: accessCode },
+  )
+  return data
 }
 
 export async function listSubscriptions(params: SubscriptionListParams = {}) {

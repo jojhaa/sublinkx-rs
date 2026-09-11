@@ -3,7 +3,11 @@ use std::time::{Duration, Instant};
 use tokio::time::sleep;
 use tracing::{info, warn};
 
-use crate::{repository::node_repo, state::AppState};
+use crate::{
+    repository::{node_ip_probe_repo, node_repo},
+    state::AppState,
+    utils::time::now_rfc3339,
+};
 
 use super::{node_ip_probe_service, settings_service};
 
@@ -52,9 +56,6 @@ pub fn spawn_after_upstream_import(state: AppState, source_ref: String) {
                 return;
             }
         };
-        if !settings.ip_probe_after_upstream_import {
-            return;
-        }
         let ids = match node_repo::list_enabled_ids_by_upstream_source_ref(&state.db, &source_ref)
             .await
         {
@@ -64,6 +65,23 @@ pub fn spawn_after_upstream_import(state: AppState, source_ref: String) {
                 return;
             }
         };
+        match node_ip_probe_repo::invalidate_risk_for_node_ids(&state.db, &ids, &now_rfc3339())
+            .await
+        {
+            Ok(changed) if changed > 0 => state.clear_public_export_cache().await,
+            Ok(_) => {}
+            Err(error) => {
+                warn!(error = %error, "failed to invalidate imported node risk state");
+                return;
+            }
+        }
+        if !settings.ip_probe_after_upstream_import {
+            info!(
+                invalidated = ids.len(),
+                "upstream import risk state invalidated; automatic IP probing is disabled"
+            );
+            return;
+        }
         let queued = state.enqueue_background_ip_probes(ids).await;
         info!(
             queued,

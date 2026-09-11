@@ -1,6 +1,6 @@
 # 客户端兼容矩阵
 
-更新日期：2026-05-29
+更新日期：2026-09-02
 
 本文档用于规划 `sublinkx-rs` 需要优先适配的主流代理客户端。新系统不应只保留旧版 `clash / surge / v2ray` 输出，而应该按“客户端家族”设计导出器和兼容策略。
 
@@ -12,6 +12,8 @@
 - Xray / v2rayN 家族 URI 订阅
 - sing-box outbound 配置
 - Surge 家族配置
+- Quantumult X 完整配置
+- Shadowrocket 完整配置
 
 后端架构需要具备：
 
@@ -37,7 +39,7 @@
 
 3. Surge 家族
    - Surge
-   - Shadowrocket 可在部分场景通过 Surge 风格输出兼容
+   - Shadowrocket 兼容 URI Bundle 与独立完整配置
 
 4. sing-box 家族
    - NekoBox for Android
@@ -46,7 +48,7 @@
 
 ### Tier 2：核心稳定后继续适配
 
-- Shadowrocket 专用输出
+- Shadowrocket 真实设备导入与协议兼容验收
 - 支持 rule-set 的 sing-box profile
 - GUI.for.SingBox 兼容验证
 - Hiddify 专用配置优化
@@ -71,6 +73,8 @@
 - `surge`
 - `xray_uri_bundle`
 - `sing_box_outbound_bundle`
+- `quanx`
+- `shadowrocket-profile`
 
 推荐公开访问形式：
 
@@ -78,6 +82,16 @@
 - `/s/{token}?target=surge`
 - `/s/{token}?target=xray`
 - `/s/{token}?target=sing-box`
+- `/s/{token}/profile/quanx`
+- `/s/{token}/profile/shadowrocket-profile`
+
+### 节点订阅与完整配置
+
+节点订阅入口只负责向客户端节点池添加或更新服务器，不能替换客户端当前配置，因此不会安装策略组和规则。完整配置必须走客户端的配置文件导入入口：
+
+- Quantumult X：下载 `/s/{token}/profile/quanx` 返回的 `.conf`，然后从配置文件页面导入。不要把该地址添加为服务器资源，否则 `[policy]` 会被忽略。`[server_local]` 节点必须使用 `协议=主机:端口`，VLESS Vision 使用 `vless-flow`，`tag` 保持为节点行最后一个字段。QX 当前不支持 Hysteria2，完整配置会在兼容模式下跳过这类节点并通过 `X-SublinkX-Filtered-Count` 响应头报告数量。
+- Shadowrocket：使用 `shadowrocket://config/add/{原始 HTTP(S) 完整配置地址}` 安装 `/s/{token}/profile/shadowrocket-profile`，不要对整个配置地址执行百分号编码；专用路径不携带查询参数，避免客户端丢失导出目标。安装后在“配置”页选中新配置并点击“使用配置”，首页“全局路由”选择“配置”；从当前配置的 `ⓘ` 进入“代理分组”切换节点。若浏览器未唤起客户端，可在“配置”页通过右上角 `+` 下载配置地址。不要在首页把完整配置地址作为 `Subscribe` 节点订阅添加。
+- 管理后台必须把“节点订阅”和“完整配置”显示为不同操作，不能只提供含义模糊的“复制链接”。
 
 后续可增加客户端别名：
 
@@ -158,6 +172,9 @@
 - [Stash Docs](https://stash.wiki/)
 - [Stash App Store page](https://apps.apple.com/us/app/stash/id1596063349?l=zh-CN&l=zh-Hans-CN%3Fplatform%3Diphone)
 - [Shadowrocket App Store page](https://apps.apple.com/us/app/shadowrocket/id932747118?l=en-us)
+- [Quantumult X official configuration sample](https://github.com/crossutility/Quantumult-X/blob/master/sample.conf)
+- [Quantumult X official URL scheme](https://github.com/crossutility/Quantumult-X/blob/master/url-scheme.md)
+- [Shadowrocket URL schemes](https://github.com/LOWERTOP/Shadowrocket/wiki)
 
 相关文档：
 
